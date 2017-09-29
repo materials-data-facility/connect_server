@@ -70,13 +70,11 @@ def convert(input_path, metadata=None, verbose=False):
     
     #                "related_id": ,
     
-                    # data links: {
-                    
-                        #"globus_endpoint": ,
-                        #"http_host": ,
+                    "dataset": {
+                        "globus_endpoint": "82f1b5c6-6e9b-11e5-ba47-22000b92c6ec",
     
-                        #"path": ,
-                        #}
+                        "path": "/published/publication_232/",
+                        },
                     },
     
     #            "mrr": ,
