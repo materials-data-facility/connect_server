@@ -38,7 +38,7 @@ def call_converter(sources, input_path=None, metadata=None, verbose=VERBOSE):
         print("\nALL CONVERTING COMPLETE")
 
 
-def call_ingester(sources, globus_index="mdf", batch_size=100, verbose=VERBOSE):
+def call_ingester(sources, globus_index, batch_size=100, verbose=VERBOSE):
     ingester = import_module(ingester_import)
     try:
         ingester.ingest(sources, globus_index=globus_index, batch_size=batch_size, verbose=verbose)
@@ -47,7 +47,7 @@ def call_ingester(sources, globus_index="mdf", batch_size=100, verbose=VERBOSE):
         print(e.raw_json)
 
 
-def call_ingester_repo(repos, globus_index="mdf", batch_size=100, verbose=VERBOSE):
+def call_ingester_repo(repos, globus_index, batch_size=100, verbose=VERBOSE):
     if type(repos) is not list:
         repos = [repos]
     if verbose:
@@ -90,7 +90,7 @@ if __name__ == "__main__":
             sys.argv.pop(2)
             globus_index = sys.argv.pop(2)
         else:
-            globus_index = "mdf"
+            globus_index = "mdf-test"
 
         if sys.argv[2] == "--batch-size":
             sys.argv.pop(2)
@@ -104,7 +104,7 @@ if __name__ == "__main__":
             sys.argv.pop(2)
             globus_index = sys.argv.pop(2)
         else:
-            globus_index = "mdf"
+            globus_index = "mdf-test"
 
         if sys.argv[2] == "--batch-size":
             sys.argv.pop(2)
