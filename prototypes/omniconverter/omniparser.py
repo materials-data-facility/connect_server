@@ -1,12 +1,11 @@
 import ase.io
 
 
-def omniparse(file_path, data_format=None, try_all=False, info=False):
+def omniparse(file_path, try_all=False, info=False):
     """Parse a data file however possible.
 
     Arguments:
     file_path (str): The path to the data file.
-    data_format (str): The known format of the data file. Default None, indicating not known.
     try_all (bool): If True, will extract data from all parsers as possible.
                     If False, will stop after the first successful parsing.
                     Default False.
@@ -27,7 +26,7 @@ def omniparse(file_path, data_format=None, try_all=False, info=False):
         "failed": []
     }
     for parser in ALL_PARSERS:
-        res = parser(file_path, data_format, stats=True)
+        res = parser(file_path, stats=True)
         # If success, process results
         if res[0]:
             data.update(res[0])
@@ -45,75 +44,73 @@ def omniparse(file_path, data_format=None, try_all=False, info=False):
         return (data, info_dict)
 
 
-def parse_ase(file_path, data_format=None, stats=False):
+def parse_ase(file_path, stats=False):
     """Parser for data in ASE-readable formats.
     If ASE is incapable of reading the file and raises an exception,
     the (first) return dict == {} and total_num == 0 and failure_num == 1.
 
     Arguments:
     file_path (str): Path to the data file.
-    data_format (str): Type of data. Default None, which causes ASE to guess.
     stats (bool): If True, will return a tuple of (results, stats) (see "Returns").
                   If False, just returns the results.
                   Default False.
 
     Returns:
-    dict (if not stats): All of the data ASE could pull out of the file.
+    dict (if not stats): Useful data ASE could pull out of the file.
     tuple of (dict, dict) (if stats): The data ASE parsed, and success/failure numbers.
     """
+    
     ase_template = {
-#       "constraints" : None,               # Pulled later
-#       "all_distances" : None,             # Performance issues
-        "angular_momentum" : None,
-        "atomic_numbers" : None,
-        "cell" : None,
+#        "constraints" : None,              # No get()
+#        "all_distances" : None,
+#        "angular_momentum" : None,
+#        "atomic_numbers" : None,
+#        "cell" : None,
         "cell_lengths_and_angles" : None,
-        "celldisp" : None,
-        "center_of_mass" : None,
-        "charges" : None,
+#        "celldisp" : None,
+#        "center_of_mass" : None,
+#        "charges" : None,
         "chemical_formula" : None,
-        "chemical_symbols" : None,
-        "dipole_moment" : None,
-        "forces" : None,
-#       "forces_raw" : None,                # Pulled later
-        "initial_charges" : None,
-        "initial_magnetic_moments" : None,
-        "kinetic_energy" : None,
-        "magnetic_moment" : None,
-        "magnetic_moments" : None,
-        "masses" : None,
-        "momenta" : None,
-        "moments_of_inertia" : None,
-        "number_of_atoms" : None,
+#        "chemical_symbols" : None,
+#        "dipole_moment" : None,
+#        "forces" : None,
+#        "forces_raw" : None,               # No get()
+#        "initial_charges" : None,
+#        "initial_magnetic_moments" : None,
+#        "kinetic_energy" : None,
+#        "magnetic_moment" : None,
+#        "magnetic_moments" : None,
+#        "masses" : None,
+#        "momenta" : None,
+#        "moments_of_inertia" : None,
+#        "number_of_atoms" : None,
         "pbc" : None,
-        "positions" : None,
-        "potential_energies" : None,
-        "potential_energy" : None,
-#       "potential_energy_raw" : None,      # Pulled later
-        "reciprocal_cell" : None,
-        "scaled_positions" : None,
-        "stress" : None,
-        "stresses" : None,
-        "tags" : None,
+#        "positions" : None,
+#        "potential_energies" : None,
+#        "potential_energy" : None,
+#        "potential_energy_raw" : None,     # No get()
+#        "reciprocal_cell" : None,
+#        "scaled_positions" : None,
+#        "stress" : None,
+#        "stresses" : None,
+#        "tags" : None,
         "temperature" : None,
-        "total_energy" : None,
-        "velocities" : None,
+#        "total_energy" : None,
+#        "velocities" : None,
         "volume" : None,
+#        "filetype": None,                  # No get()
+#        "num_frames": None,                # No get()
+#        "num_atoms": None                  # No get()
         }
     total_count = 0
     failures = []
     success_count = 0
     none_count = 0
 
-#####################################TODO: REMOVE
-    ase_template = {
-        "pbc": None,
-        "chemical_formula": None
-        }
 
     # Read the file and process it if the reading succeeds
     try:
-        result = ase.io.read(file_path, format=data_format)
+        result = ase.io.read(file_path, index=slice(None))
     except Exception as e:
         failures.append(repr(e))
         # none_count - len(failures) should be 0
@@ -121,6 +118,7 @@ def parse_ase(file_path, data_format=None, stats=False):
         ase_dict = {}
     else:
         ase_dict = ase_template.copy()
+        # Data with easy .get() functions
         for key in ase_dict.keys():
             total_count += 1
             try:
@@ -131,26 +129,13 @@ def parse_ase(file_path, data_format=None, stats=False):
                 failures.append(repr(e))
                 ase_dict[key] = None
 
-        # Populate fields that don't have a get_X() function in the right form
-        total_count += 1
-        ase_dict["constraints"] = result.constraints #Should always exist, even if empty
-        success_count += 1
-        
-        total_count += 1
-        try:
-            ase_dict["forces_raw"] = result.get_forces(apply_constraint=False)
-            success_count += 1
-        except Exception as e:
-            failures.append(repr(e))
-            ase_dict["forces_raw"] = None
-        
-        total_count += 1
-        try:
-            ase_dict["potential_energy_raw"] = result.get_potential_energy(apply_constraint=False)
-            success_count += 1
-        except Exception as e:
-            failures.append(repr(e))
-            ase_dict["potential_energy_raw"] = None
+        # Data without a .get()
+        ase_dict["filetype"] = ase.io.formats.filetype(file_path)
+        if type(result) is list:
+            ase_dict["num_frames"] = len(result)
+        else:
+            ase_dict["num_atoms"] = len(result)
+
 
         # Fix up the extracted data
         none_keys = []
