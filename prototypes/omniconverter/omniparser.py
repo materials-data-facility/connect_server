@@ -110,7 +110,7 @@ def parse_ase(file_path, stats=False):
 
     # Read the file and process it if the reading succeeds
     try:
-        result = ase.io.read(file_path, index=slice(None))
+        result = ase.io.read(file_path)
     except Exception as e:
         failures.append(repr(e))
         # none_count - len(failures) should be 0
@@ -131,10 +131,11 @@ def parse_ase(file_path, stats=False):
 
         # Data without a .get()
         ase_dict["filetype"] = ase.io.formats.filetype(file_path)
-        if type(result) is list:
-            ase_dict["num_frames"] = len(result)
-        else:
-            ase_dict["num_atoms"] = len(result)
+        ase_dict["num_atoms"] = len(result)
+#        if type(result) is list:
+#            ase_dict["num_frames"] = len(result)
+#        else:
+#            ase_dict["num_atoms"] = len(result)
 
 
         # Fix up the extracted data
