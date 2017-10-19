@@ -88,7 +88,7 @@ if __name__ == "__main__":
     elif sys.argv[1].strip(" -").lower() in ingest:
         if sys.argv[2] == "--index" or sys.argv[2] == "--globus-index":
             sys.argv.pop(2)
-            globus_index = sys.argv.pop(2)
+            globus_index = sys.argv.pop(2).lower().strip()
         else:
             globus_index = "mdf-test"
 

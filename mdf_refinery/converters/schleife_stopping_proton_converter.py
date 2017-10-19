@@ -201,11 +201,17 @@ def convert(input_path, metadata=None, verbose=False):
             with open(file_path, 'w') as f:
                 f.write(f_data)
         try:
-            record = parse_ase(file_path=file_path)
+            record = parse_ase(file_path=file_path, data_format="qbox")
         except Exception as e:
-            # Many files will not be ASE-readable
-            errors.append(file_path)
-            continue
+            try:
+                record = parse_ase(file_path=file_path, data_format="cube")
+            except Exception as e:
+                try:
+                    record = parse_ase(file_path=file_path)
+                except Exception as e:
+                    # Many files will not be ASE-readable
+                    errors.append(file_path)
+                    continue
         # Fields can be:
         #    REQ (Required, must be present)
         #    RCM (Recommended, should be present if possible)
