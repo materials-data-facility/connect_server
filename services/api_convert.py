@@ -50,7 +50,7 @@ def begin_convert(metadata):
     backup_tid = None
     user_tid = None
     local_path = os.path.join(app.config["LOCAL_PATH"], metadata["mdf_status_id"]) + "/"
-    os.mkdir(local_path)
+    os.makedirs(local_path, exist_ok=True)
 
     # Download data locally
     if metadata.get("zip"):
@@ -59,7 +59,7 @@ def begin_convert(metadata):
         res = requests.get(metadata["zip"])
         with open(zip_path, 'wb') as out:
             out.write(res.content)
-        zipfile.ZipFile(zip_path).extractall(local_path)
+        zipfile.ZipFile(zip_path).extractall()#local_path)
         os.remove(zip_path) #TODO: Should the .zip be removed?
         local_success = True
 
@@ -94,17 +94,17 @@ def begin_convert(metadata):
 
     # Trigger omniconverter
     try:
-        feedstock = omniconvert(local_path, metadata, feedstock_path=None)
+        feedstock_results = omniconvert(local_path, metadata, feedstock_path=None)
     except Exception as e:
         #TODO: Update status - indexing failed
         raise
-    #TODO: Update status - indexing success
+    num_records = feedstock_results["records_processed"]
+    num_rec_failed = feedstock_results["num_failures"]
+    feedstock = feedstock_results["feedstock"]
+    #TODO: Update status - indexing success, give numbers success/fail
 
     # Pass feedstock to /ingest
-    requests.post(app.config["INGEST_URL"], data=)
-
-
-
+#    requests.post(app.config["INGEST_URL"], data=feedstock)
 
     # Remove local data
     # TODO: Remove data after transfer success
@@ -112,8 +112,7 @@ def begin_convert(metadata):
     # TODO: Log backup_tid and user_tid with status DB
     return json.dumps({
         "success": success,
-        "transfer_id_mdf": backup_tid,
-        "transfer_id_user": user_tid
+        #TODO: Remove dev result
+        "feedstock": feedstock
         })
-
 

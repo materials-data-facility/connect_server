@@ -6,8 +6,7 @@ from tqdm import tqdm
 
 from mdf_forge import toolbox
 from mdf_refinery import validator
-
-from omniparser import omniparse
+from mdf_refinery.omniparser import omniparse
 
 
 def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
@@ -23,11 +22,14 @@ def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
     verbose (bool): If True, will print status messages. Default False.
 
     Returns:
-    None (if feedstock_path is not None)
-    dict (if feedstock_path is None): The feedstock.
+    dict: records_processed (int): Number of successful file conversions.
+          num_failures (int): Number of failed file conversions.
+          failed_files (list of str): File paths that failed.
+          feedstock (list of dict or None): If feedstock_path is None, the feedstock.
+                                    Otherwise, None.
 
     Outputs:
-    Uses the Validator to output feedstock into the appropriate directory.
+    If feedstock_file is not None, writes the feedstock to the feedstock_file path.
     """
     if verbose:
         print("Begin converting")
@@ -74,13 +76,6 @@ def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
                     feedstock_file.write("\n")
                 else:
                     all_feedstock.append(record_metadata)
-
-
-                val = dataset_validator.write_record(record_metadata)
-                if not val["success"]:
-                    if not dataset_validator.cancel_validation()["success"]:
-                        print("Error cancelling validation. The partial feedstock may not be removed.")
-                    raise ValueError(val["message"] + "\n" + val.get("details", ""))
                 success_count += 1
             else:
                 failures.append(path)
@@ -90,7 +85,8 @@ def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
 
     return {
         "records_processed": success_count,
-        "files_failed": len(failures),
-        "failed_files": failures
+        "num_failures": len(failures),
+        "failed_files": failures,
+        "feedstock": all_feedstock
         }
 
