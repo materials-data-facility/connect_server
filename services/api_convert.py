@@ -50,6 +50,7 @@ def begin_convert(metadata):
     backup_tid = None
     user_tid = None
     local_path = os.path.join(app.config["LOCAL_PATH"], metadata["mdf_status_id"]) + "/"
+    backup_path = os.path.join(app.config["BACKUP_PATH"], metadata["mdf_status_id"]) + "/"
     os.makedirs(local_path, exist_ok=True) #TODO: exist not okay when status is real
 
     # Download data locally
@@ -71,8 +72,6 @@ def begin_convert(metadata):
         # Transfer locally
         user_tid = toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"], [(user_path, local_path)], timeout=0)
         local_success = True
-        #TODO: Delete this
-        return {"success": "yup"}
 
     elif metadata.get("files"):
         # TODO: Implement this
@@ -87,7 +86,7 @@ def begin_convert(metadata):
         raise IOError("No data downloaded")
 
     # Backup data
-    backup_tid = toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"], [(local_path, app.config["BACKUP_PATH"])], timeout=0)
+    backup_tid = toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"], [(local_path, backup_path)], timeout=0)
     #TODO: Update status - backup success
 
     # Trigger omniconverter
@@ -109,7 +108,7 @@ def begin_convert(metadata):
 #    shutil.rmtree(local_path)
     # TODO: Log backup_tid and user_tid with status DB
     return json.dumps({
-        "success": success,
+        "success": True,
         #TODO: Remove dev result
         "feedstock": feedstock
         })

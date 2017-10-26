@@ -1,9 +1,10 @@
+import os
 import json
 
 import jsonschema
 
-DATASET_SCHEMA = "dataset.schema"
-RECORD_SCHEMA = "record.schema"
+DATASET_SCHEMA = os.path.join(os.path.dirname(__file__), "dataset.schema")
+RECORD_SCHEMA = os.path.join(os.path.dirname(__file__), "record.schema")
 
     
 def validate_dataset(ds_md):
