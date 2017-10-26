@@ -50,7 +50,7 @@ def begin_convert(metadata):
     backup_tid = None
     user_tid = None
     local_path = os.path.join(app.config["LOCAL_PATH"], metadata["mdf_status_id"]) + "/"
-    os.makedirs(local_path, exist_ok=True)
+    os.makedirs(local_path, exist_ok=True) #TODO: exist not okay when status is real
 
     # Download data locally
     if metadata.get("zip"):
@@ -64,17 +64,15 @@ def begin_convert(metadata):
         local_success = True
 
     elif metadata.get("globus"):
-        #TODO: test globus
-        raise NotImplementedError("Prototyping .zip download only")
+        # Parse out EP and path
+        # Right now, path assumed to be a directory
         user_ep, user_path = metadata["globus"].split("/", 1)
-        user_path = "/" + user_path
-        if user_path.endswith("/"):
-            remote_path = app.config["BACKUP_PATH"]
-        else:
-            local_path = os.path.join(local_path, metadata["mdf_status_id"] + ".file")
-            remote_path = os.path.join(app.config["BACKUP_PATH"], metadata["mdf_status_id"] + ".file")
+        user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
+        # Transfer locally
         user_tid = toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"], [(user_path, local_path)], timeout=0)
         local_success = True
+        #TODO: Delete this
+        return {"success": "yup"}
 
     elif metadata.get("files"):
         # TODO: Implement this
