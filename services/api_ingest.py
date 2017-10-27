@@ -1,3 +1,4 @@
+import os
 import json
 from threading import Thread
 
@@ -14,30 +15,30 @@ app.config.from_pyfile("api.conf")
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
-    if not request.files.get("file"):
+    # Check that file exists and is valid
+    feedstock = request.files.get("file")
+    if not feedstock:
         return {
             "success": False,
             "error": "No feedstock file uploaded"
             }
-    feedstock = request.get_json(force=True, silent=True)
-    if not feedstock:
+    elif not feedstock.filename.endswith(".json"):
         return {
             "success": False,
-            "error": "POST data empty or not JSON"
+            "error": "Feedstock file must be JSON"
             }
-    # Separate dataset from records
-    dataset = feedstock[0]
-    records = feedstock[1:]
     # Mint/update status ID
-    if not dataset.get("mdf_status_id"):
+    if not request.form.get("mdf_status_id"):
         status_id = str(ObjectId())
-        dataset["mdf_status_id"] = status_id
         #TODO: Register status ID
     else:
         #TODO: Check that status exists (must not be set by user)
         #TODO: Update status - ingest request recieved
-        status_id = dataset["mdf_status_id"]
-    ingester = Thread(target=begin_ingest, name="ingester_thread", args=(dataset, records))
+        status_id = request.form.get("mdf_status_id")
+    # Save file
+    feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
+    feedstock.save(feed_path)
+    ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path, status_id))
     ingester.start()
     return {
         "success": True,
@@ -45,32 +46,52 @@ def accept_ingest():
         }
 
 
-def begin_ingest(dataset, records):
+def begin_ingest(base_feed_path, status_id):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["search_ingest"]
+        "services": ["search_ingest"],
+        "index": app.config["INGEST_INDEX"]
         }
-    search_client = toolbox.confidential_login(creds)["search_client"]
+    search_client = toolbox.confidential_login(creds)["search_ingest"]
+    final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
 
     # Finalize feedstock
-    final_feedstock = []
-    dataset_result = validator.validate_dataset(dataset, finalize=True)
-    if not dataset_result["success"]:
-        # TODO: Update status - dataset validation failed
-        return dataset_result
-    final_feedstock.append(dataset_result["valid"])
-    for rc in records:
-        rc_result = validator.validate_record(rc, finalize=True)
-        if not rc_result["success"]:
-            #TODO: Update status - record validation failed
-            return rc_result
-        final_feedstock.append(rc_result["valid"])
+    with open(base_feed_path) as base_stock, open(final_feed_path, 'w') as final_stock:
+        # Finalize dataset entry
+        dataset_result = validator.validate_dataset(json.loads(base_stock.readline()), finalize=True)
+        if not dataset_result["success"]:
+            # TODO: Update status - dataset validation failed
+            return dataset_result
+        json.dump(dataset_result["valid"], final_stock)
+        final_stock.write("\n")
+
+        # Finalize records
+        for rc in base_stock:
+            record = json.loads(rc)
+            record_result = validator.validate_record(record, finalize=True)
+            if not record_result["success"]:
+                #TODO: Update status - record validation failed
+                return record_result
+            json.dump(record_result["valid"], final_stock)
+            final_stock.write("\n")
     #TODO: Update status - validation passed
 
-    #TODO: Ingest finalized feedstock
-
+    # Ingest finalized feedstock
+    try:
+        ingester.ingest(search_client, final_feed_path)
+    except Exception as e:
+        #TODO: Update status - ingest failed
+        return {
+            "success": False,
+            "error": repr(e)
+            }
+    #TODO: Update status - ingest successful, processing complete
+    return {
+        "success": True,
+        "status_id": status_id
+        }
 

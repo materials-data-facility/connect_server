@@ -46,11 +46,12 @@ def begin_convert(metadata):
         }
     mdf_transfer_client = toolbox.confidential_login(creds)["transfer"]
 
+    status_id = metadata["mdf_status_id"]
     local_success = False
     backup_tid = None
     user_tid = None
-    local_path = os.path.join(app.config["LOCAL_PATH"], metadata["mdf_status_id"]) + "/"
-    backup_path = os.path.join(app.config["BACKUP_PATH"], metadata["mdf_status_id"]) + "/"
+    local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
+    backup_path = os.path.join(app.config["BACKUP_PATH"], status_id) + "/"
     os.makedirs(local_path, exist_ok=True) #TODO: exist not okay when status is real
 
     # Download data locally
@@ -90,18 +91,19 @@ def begin_convert(metadata):
     #TODO: Update status - backup success
 
     # Trigger omniconverter
+    feedstock_path = os.path.join(app.config("FEEDSTOCK_PATH"), status_id + "_basic.json")
     try:
-        feedstock_results = omniconvert(local_path, metadata, feedstock_path=None)
+        feedstock_results = omniconvert(local_path, metadata, feedstock_path=feedstock_path)
     except Exception as e:
         #TODO: Update status - indexing failed
         raise
     num_records = feedstock_results["records_processed"]
     num_rec_failed = feedstock_results["num_failures"]
-    feedstock = feedstock_results["feedstock"]
     #TODO: Update status - indexing success, give numbers success/fail
 
     # Pass feedstock to /ingest
-#    requests.post(app.config["INGEST_URL"], data=feedstock)
+    with open(feedstock_path) as stock:
+        requests.post(app.config["INGEST_URL"], data={"status_id":status_id}, files={'file': stock})
 
     # Remove local data
     # TODO: Remove data after transfer success

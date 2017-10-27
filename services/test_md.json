@@ -1,1 +1,1 @@
-{"dc": {"title": "Test Dataset"}, "mdf": {"source_name": "test_ds"}, "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/testing_publication/moc_files/", "mdf_status_id": "12345"}
+{"dc": {"title": "Test Dataset"}, "mdf": {"source_name": "test_ds", "acl": ["public"], "links": {"landing_page": "http://example.com"}}, "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/testing_publication/moc_files/", "mdf_status_id": "12345"}

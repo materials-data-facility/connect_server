@@ -28,7 +28,7 @@ def validate_dataset(ds_md, finalize=False):
     # If finalizing, load final additions to schema
     if finalize:
         with open(os.path.join(SCHEMA_DIR, "final_dataset.schema")) as final_schema_file:
-            schema = deep_merge(schema, json.load(final_schema_file)
+            schema = deep_merge(schema, json.load(final_schema_file))
 
     # Add validator fields
     ds_md["metadata_version"] = "0.5.0"
@@ -75,7 +75,7 @@ def validate_record(rc_md, finalize=False):
     # If finalizing, load final additions to schema
     if finalize:
         with open(os.path.join(SCHEMA_DIR, "final_record.schema")) as final_schema_file:
-            schema = deep_merge(schema, json.load(final_schema_file)
+            schema = deep_merge(schema, json.load(final_schema_file))
 
     # Add validator fields
     rc_md["metadata_version"] = "0.5.0"
