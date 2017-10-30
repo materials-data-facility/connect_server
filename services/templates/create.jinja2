@@ -1,0 +1,65 @@
+{%extends "base.jinja2"%}
+
+{%block title%}Share{%endblock%}
+
+{%block body%}
+{%include "header.jinja2"%}
+
+<div class="container">
+<form class="form-horizontal" method="POST" action="/create">
+<fieldset>
+
+<h2> Describe the Dataset </h2>
+
+<!-- Text input-->
+<div class="form-group">
+  <label class="col-md-4 control-label" for="textinput">Title</label>  
+  <div class="col-md-5">
+  <input id="title" name="title" type="text" placeholder="Dataset title" class="form-control input-md" required="">
+    
+  </div>
+</div>
+
+<!-- Text input-->
+<div class="form-group">
+  <label class="col-md-4 control-label" for="authors">Authors</label>  
+  <div class="col-md-5">
+  <input id="authors" name="authors" type="text" placeholder="Last, first; last2, first2" class="form-control input-md" required="">
+    
+  </div>
+</div>
+
+<h2> Specify the Data Location</h2>
+
+
+<ul class="nav nav-pills">
+  <li class="active"><a data-toggle="pill" href="#globus-pane">Globus</a></li>
+  <li><a data-toggle="pill" href="#github-pane">Github</a></li>
+  <li><a data-toggle="pill" href="#google-pane">Google Drive</a></li>
+</ul>
+
+<div class="tab-content">
+  <div id="globus-pane" class="tab-pane fade in active">
+    Eventually this will be a link to the Globus picker...
+    <input id="globus" name="globus" type="text" placeholder="Globus endpoint and path" class="form-control input-md">
+  </div>
+  <div id="github-pane" class="tab-pane fade">
+    <input id="zip" name="zip" type="text" placeholder="Link to Github repository" class="form-control input-md">
+  </div>
+  <div id="google-pane" class="tab-pane fade">
+    <input id="authors" name="authors" type="text" placeholder="Link to Google Drive folder" class="form-control input-md" >
+  </div>
+</div>
+
+<!-- Button -->
+  <label class="col-md-4 control-label" for="Go"></label>
+  <div class="col-md-6">
+    <button id="Go" name="Go" class="btn btn-primary btn-lg">Go</button>
+  </div>
+</fieldset>
+</form>
+</div>
+
+
+{%endblock%}
+

@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='mdf_refinery',
-    version='0.1.0',
+    version='0.0.1',
     packages=find_packages(),
     description='Materials Data Facility python package',
     install_requires=[
@@ -21,4 +21,10 @@ setup(
     ],
     package_data={'mdf_refinery': ['schemas/*.schema']}
 )
+
+from mdf_refinery import config
+os.makedirs(config.MDF_PATH, exist_ok=True)
+os.makedirs(config.PATH_DATASETS, exist_ok=True)
+os.makedirs(config.PATH_FEEDSTOCK, exist_ok=True)
+os.makedirs(config.PATH_CREDENTIALS, exist_ok=True)
 

@@ -115,3 +115,11 @@ def begin_convert(metadata):
         "feedstock": feedstock
         })
 
+
+def start():
+    app.run()
+
+
+if __name__ == "__main__":
+    start()
+

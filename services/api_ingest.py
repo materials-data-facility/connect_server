@@ -95,3 +95,11 @@ def begin_ingest(base_feed_path, status_id):
         "status_id": status_id
         }
 
+
+def start():
+    app.run()
+
+
+if __name__ == "__main__":
+    start()
+
