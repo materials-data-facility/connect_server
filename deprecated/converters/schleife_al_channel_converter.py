@@ -257,7 +257,7 @@ def convert(input_path, metadata=None, verbose=False):
 #                        "http_host": ,
 
                         # REQ string: The full path to the data file on the host
-                        "path": os.path.join("/Schleife/", file_data["no_root_path"]),
+                        "path": os.path.join("/Schleife/", file_data["no_root_path"], file_data["filename"]),
 
                     },
 
