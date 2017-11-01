@@ -6,7 +6,7 @@ from threading import Thread
 
 import requests
 from bson import ObjectId
-from flask import request
+from flask import jsonify, request
 
 from mdf_forge import toolbox
 from mdf_refinery import ingester, omniconverter, validator
@@ -19,19 +19,20 @@ def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
     metadata = request.get_json(force=True, silent=True)
     if not metadata:
-        return {
+        return jsonify({
             "success": False,
             "error": "POST data empty or not JSON"
-            }
+            })
     status_id = str(ObjectId())
     # TODO: Register status ID
     metadata["mdf_status_id"] = status_id
-    converter = Thread(target=begin_convert, name="converter_thread", args=(metadata,))
-    converter.start()
-    return {
-        "success": True,
-        "status_id": status_id
-        }
+#    converter = Thread(target=begin_convert, name="converter_thread", args=(metadata,))
+#    converter.start()
+#    return jsonify({
+#        "success": True,
+#        "status_id": status_id
+#        })
+    return jsonify(begin_convert(metadata))
 
 
 def begin_convert(metadata):
@@ -90,7 +91,7 @@ def begin_convert(metadata):
     #TODO: Update status - backup success
 
     # Trigger omniconverter
-    feedstock_path = os.path.join(app.config("FEEDSTOCK_PATH"), status_id + "_basic.json")
+    feedstock_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_basic.json")
     try:
         feedstock_results = omniconverter.omniconvert(local_path,
                                 metadata, feedstock_path=feedstock_path)
@@ -109,7 +110,7 @@ def begin_convert(metadata):
     # TODO: Remove data after transfer success
 #    shutil.rmtree(local_path)
     # TODO: Log backup_tid and user_tid with status DB
-    return json.dumps({
+    return jsonify({
         "success": True,
         #TODO: Remove dev result
         "feedstock": feedstock
@@ -122,15 +123,15 @@ def accept_ingest():
     # Check that file exists and is valid
     feedstock = request.files.get("file")
     if not feedstock:
-        return {
+        return jsonify({
             "success": False,
             "error": "No feedstock file uploaded"
-            }
+            })
     elif not feedstock.filename.endswith(".json"):
-        return {
+        return jsonify({
             "success": False,
             "error": "Feedstock file must be JSON"
-            }
+            })
     # Mint/update status ID
     if not request.form.get("mdf_status_id"):
         status_id = str(ObjectId())
@@ -144,10 +145,10 @@ def accept_ingest():
     feedstock.save(feed_path)
     ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path, status_id))
     ingester.start()
-    return {
+    return jsonify({
         "success": True,
         "status_id": status_id
-        }
+        })
 
 
 def begin_ingest(base_feed_path, status_id):
@@ -169,7 +170,7 @@ def begin_ingest(base_feed_path, status_id):
         dataset_result = validator.validate_dataset(json.loads(base_stock.readline()), finalize=True)
         if not dataset_result["success"]:
             # TODO: Update status - dataset validation failed
-            return dataset_result
+            return jsonify(dataset_result)
         json.dump(dataset_result["valid"], final_stock)
         final_stock.write("\n")
 
@@ -179,7 +180,7 @@ def begin_ingest(base_feed_path, status_id):
             record_result = validator.validate_record(record, finalize=True)
             if not record_result["success"]:
                 #TODO: Update status - record validation failed
-                return record_result
+                return jsonify(record_result)
             json.dump(record_result["valid"], final_stock)
             final_stock.write("\n")
     #TODO: Update status - validation passed
@@ -189,17 +190,18 @@ def begin_ingest(base_feed_path, status_id):
         ingester.ingest(search_client, final_feed_path)
     except Exception as e:
         #TODO: Update status - ingest failed
-        return {
+        return jsonify({
             "success": False,
             "error": repr(e)
-            }
+            })
     #TODO: Update status - ingest successful, processing complete
-    return {
+    return jsonify({
         "success": True,
         "status_id": status_id
-        }
+        })
 
 
 @app.route("/status", methods=["GET", "POST"])
 def status():
-    return {"success": False, "message": "Not implemented yet, try again later"}
+    return jsonify({"success": False, "message": "Not implemented yet, try again later"})
+
