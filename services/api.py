@@ -1,15 +1,15 @@
+import json
 import os
 import shutil
-import json
-import zipfile
 from threading import Thread
+import zipfile
 
-import requests
 from bson import ObjectId
 from flask import jsonify, request
-
 from mdf_forge import toolbox
 from mdf_refinery import ingester, omniconverter, validator
+import requests
+from werkzeug.utils import secure_filename
 
 from services import app
 
@@ -26,16 +26,15 @@ def accept_convert():
     status_id = str(ObjectId())
     # TODO: Register status ID
     metadata["mdf_status_id"] = status_id
-#    converter = Thread(target=begin_convert, name="converter_thread", args=(metadata,))
-#    converter.start()
-#    return jsonify({
-#        "success": True,
-#        "status_id": status_id
-#        })
-    return jsonify(begin_convert(metadata))
+    converter = Thread(target=begin_convert, name="converter_thread", args=(metadata, status_id))
+    converter.start()
+    return jsonify({
+        "success": True,
+        "status_id": status_id
+        })
 
 
-def begin_convert(metadata):
+def begin_convert(metadata, status_id):
     """Pull, back up, and convert metadata."""
     # Will need transfer client for backups
     creds = {
@@ -110,24 +109,24 @@ def begin_convert(metadata):
     # TODO: Remove data after transfer success
 #    shutil.rmtree(local_path)
     # TODO: Log backup_tid and user_tid with status DB
-    return jsonify({
+    return {
         "success": True,
-        #TODO: Remove dev result
-        "feedstock": feedstock
-        })
+        "status_id": status_id
+        }
 
 
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
     # Check that file exists and is valid
-    feedstock = request.files.get("file")
-    if not feedstock:
+    try:
+        feedstock = request.files["file"]
+    except KeyError:
         return jsonify({
             "success": False,
             "error": "No feedstock file uploaded"
             })
-    elif not feedstock.filename.endswith(".json"):
+    if not feedstock.filename.endswith(".json"):
         return jsonify({
             "success": False,
             "error": "Feedstock file must be JSON"
@@ -165,7 +164,7 @@ def begin_ingest(base_feed_path, status_id):
     final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
 
     # Finalize feedstock
-    with open(base_feed_path) as base_stock, open(final_feed_path, 'w') as final_stock:
+    with open(base_feed_path, 'r') as base_stock, open(final_feed_path, 'w') as final_stock:
         # Finalize dataset entry
         dataset_result = validator.validate_dataset(json.loads(base_stock.readline()), finalize=True)
         if not dataset_result["success"]:
@@ -195,10 +194,11 @@ def begin_ingest(base_feed_path, status_id):
             "error": repr(e)
             })
     #TODO: Update status - ingest successful, processing complete
-    return jsonify({
+    print("DEBUG: Ingest success") #TODO: Remove this
+    return {
         "success": True,
         "status_id": status_id
-        })
+        }
 
 
 @app.route("/status", methods=["GET", "POST"])
