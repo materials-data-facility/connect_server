@@ -41,9 +41,11 @@ def begin_convert(metadata, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer"]
+        "services": ["transfer", "publish"]
         }
-    mdf_transfer_client = toolbox.confidential_login(creds)["transfer"]
+    clients = toolbox.confidential_login(creds)
+    mdf_transfer_client = clients["transfer"]
+    globus_publish_client = clients["publish"]
 
     status_id = metadata["mdf_status_id"]
     local_success = False
@@ -105,9 +107,38 @@ def begin_convert(metadata, status_id):
     with open(feedstock_path) as stock:
         requests.post(app.config["INGEST_URL"], data={"status_id":status_id}, files={'file': stock})
 
+
+    # Pass data to additional integrations
+
+    # Globus Publish
+    if metadata.get("globus_publish"):
+        # Submit metadata
+        try:
+            pub_md = metadata["globus_publish"]
+            md_result = globus_publish_client.push_metadata(pub_md["collection"], pub_md)
+            pub_ep = md_result['globus.shared_endpoint.name']
+            pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
+            submission_id = md_result["id"]
+        except Exception as e:
+            #TODO: Update status - not Published due to bad metadata
+            raise
+        # Transfer data
+        try:
+            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], pub_endpoint, [(local_path, pub_path)], timeout=0)
+        except Exception as e:
+            #TODO: Update status - not Published due to failed Transfer
+            raise
+        # Complete submission
+        try:
+            fin_res = globus_publish_client.complete_submission(submission_id)
+        except Exception as e:
+            #TODO: Update status - not Published due to Publish error
+            raise
+        #TODO: Update status - Publish success
+
+
     # Remove local data
-    # TODO: Remove data after transfer success
-#    shutil.rmtree(local_path)
+    shutil.rmtree(local_path)
     # TODO: Log backup_tid and user_tid with status DB
     return {
         "success": True,
