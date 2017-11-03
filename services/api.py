@@ -225,7 +225,6 @@ def begin_ingest(base_feed_path, status_id):
             "error": repr(e)
             })
     #TODO: Update status - ingest successful, processing complete
-    print("DEBUG: Ingest success") #TODO: Remove this
     return {
         "success": True,
         "status_id": status_id
