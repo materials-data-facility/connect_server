@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from tqdm import tqdm
 
-from mdf_forge import toolbox
+from mdf_toolbox import toolbox
 from mdf_refinery import validator
 from mdf_refinery.omniparser import omniparse
 

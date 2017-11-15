@@ -8,7 +8,7 @@ from elasticsearch import Elasticsearch
 from elasticsearch.exceptions import RequestError
 from elasticsearch import helpers
 
-from mdf_forge.toolbox import format_gmeta
+from mdf_toolbox.toolbox import format_gmeta
 from mdf_refinery.config import get_path
 
 PATH_FEEDSTOCK = get_path("feedstock")

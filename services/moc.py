@@ -7,7 +7,7 @@ from flask import (Flask, flash, redirect, render_template, request,
                    session, url_for)
 import requests
 
-from mdf_forge import toolbox
+from mdf_toolbox import toolbox
 
 
 app = Flask(__name__)

@@ -4,7 +4,7 @@ from queue import Empty
 
 from globus_sdk import GlobusAPIError
 
-from mdf_forge.toolbox import format_gmeta
+from mdf_toolbox import toolbox
 
 
 NUM_SUBMITTERS = 5
@@ -44,17 +44,17 @@ def queue_ingests(ingest_queue, feedstocks, batch_size):
         list_ingestables = []
         with open(stock, 'r') as feedstock:
             for json_record in feedstock:
-                record = format_gmeta(json.loads(json_record))
+                record = toolbox.format_gmeta(json.loads(json_record))
                 list_ingestables.append(record)
 
                 if batch_size > 0 and len(list_ingestables) >= batch_size:
-                    full_ingest = format_gmeta(list_ingestables)
+                    full_ingest = toolbox.format_gmeta(list_ingestables)
                     ingest_queue.put(json.dumps(full_ingest))
                     list_ingestables.clear()
 
         # Check for partial batch to ingest
         if list_ingestables:
-            full_ingest = format_gmeta(list_ingestables)
+            full_ingest = toolbox.format_gmeta(list_ingestables)
             ingest_queue.put(json.dumps(full_ingest))
             list_ingestables.clear()
 
