@@ -37,7 +37,7 @@ def convert(input_path, metadata=None, verbose=False):
             "mdf": {
 
                 # REQ string: The title of the dataset
-                "title": "Schleife 256 Al",
+                "title": "H Projectile in Al: Random Trajectories",
 
                 # REQ list of strings: The UUIDs allowed to view this metadata, or 'public'
                 "acl": ["public"],
@@ -215,7 +215,7 @@ def convert(input_path, metadata=None, verbose=False):
             "mdf": {
 
                 # REQ string: The title of the record
-                "title": "Schleife 256 Al - " + record["chemical_formula"],
+                "title": "H Projectile in Al: Random Trajectories - " + record["chemical_formula"],
 
                 # RCM list of strings: The UUIDs allowed to view this metadata, or 'public' (defaults to the dataset ACL)
                 "acl": ["public"],

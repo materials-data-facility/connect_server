@@ -37,7 +37,7 @@ def convert(input_path, metadata=None, verbose=False):
             "mdf": {
 
                 # REQ string: The title of the dataset
-                "title": "Schleife Stopping Proton Si Channel",
+                "title": "H Projectile in Si: Channel Trajectories",
 
                 # REQ list of strings: The UUIDs allowed to view this metadata, or 'public'
                 "acl": ["public"],
@@ -222,7 +222,7 @@ def convert(input_path, metadata=None, verbose=False):
             "mdf": {
 
                 # REQ string: The title of the record
-                "title": "Schleife Si Proton Stopping - " + record["chemical_formula"],
+                "title": "H Projectile in Si: Channel Trajectories - " + record["chemical_formula"],
 
                 # RCM list of strings: The UUIDs allowed to view this metadata, or 'public' (defaults to the dataset ACL)
                 "acl": ["public"],
