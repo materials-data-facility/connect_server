@@ -1,6 +1,6 @@
 {
 "$schema": "http://json-schema.org/draft-04/schema#",
-"title": "MDF Final Dataset",
+"title": "MDF Dataset",
 "description": "Schema for dataset entry in MDF.",
 "dc": {
     "additionalProperties": false,
@@ -595,136 +595,53 @@
         "resourceType"
     ]
 },
-"mdf": {
+"file_bags": {
     "type": "object",
-    "description": "Administrative metadata.",
+    "description": "BDBags containing the dataset's files.",
     "properties": {
-        "source_name": {
+        "all": {
             "type": "string",
-            "description": "A unique program-friendly name for the dataset."
+            "description": "The bag of all dataset files."
         },
-        "mdf_id": {
+        "indexed": {
             "type": "string",
-            "description": "The BSON ID of the entry."
+            "description": "The bag of indexed dataset files."
         },
-        "scroll_id": {
-            "type": "integer",
-            "description": "A number to enable aggregating (via simulated scrolling) in Forge."
-        },
-        "parent_id": {
-            "type": "string",
-            "description": "The BSON ID of the entry's parent."
-        },
-        "acl": {
+        "deprecated": {
             "type": "array",
-            "description": "The IDs of users or groups allowed to view this entry (or [\"public\"]).",
+            "description": "Bags containing old versions of the dataset.",
             "items": {
-                "type": "string",
-                "description": "A single Globus User or Globus Group UUID."
-            }
-        },
-        "landing_page": {
-            "type": "uri",
-            "description": "The human-friendly website for the data."
-        },
-        "ingest_date": {
-            "type": "date-time",
-            "description": "The RFC 3339 date of ingest."
-        },
-        "resource_type": {
-            "type": "string",
-            "description": "The type of entry.",
-            "oneOf": [
-                {"pattern": "^dataset$"},
-                {"pattern": "^record$"},
-                {"pattern": "^collection$"}
-            ]
-        }
-    },
-    "additionalProperties": false,
-    "required": [
-        "source_name",
-        "mdf_id",
-        "acl",
-        "landing_page",
-        "ingest_date"
-    ]
-},
-"files": {
-    "type": "object",
-    "description": "Data files and their metadata.",
-    "items": {
-        "properties": {
-            "globus_endpoint": {
-                "type": "string",
-                "description": "The Globus Endpoint ID and path to the data."
-            },
-            "url": {
-                "type": "uri",
-                "description": "The URL to the data."
-            },
-            "data_type": {
-                "type": "string",
-                "description": "The type of data in this file."
-            },
-            "mime_type": {
-                "type": "string",
-                "description": "The MIME type of the file."
-            },
-            "length": {
-                "type": "integer",
-                "description": "The size of the file in bytes."
-            },
-            "filename": {
-                "type": "string",
-                "description": "The file's name."
-            },
-            "md5": {
-                "type": "string",
-                "description": "The MD5 has of the file."
-            },
-            "sha1": {
-                "type": "string",
-                "description": "The SHA1 hash of the file."
-            },
-            "sha256": {
-                "type": "string",
-                "description": "The SHA256 hash of the file."
-            },
-            "sha512": {
-                "type": "string",
-                "description": "The SHA512 hash of the file."
-            }
-        },
-        "additionalProperties": false,
-        "required": []
-    }
-},
-"material": {
-    "type": "object",
-    "description": "Materials Science metadata.",
-    "properties": {
-        "composition": {
-            "type": "string",
-            "description": "The empirical formula for the data studied."
-        },
-        "elements": {
-            "type": "array",
-            "description": "The elements of the empirical formula.",
-            "items": {
-                "type": "string",
-                "description": "A single element abbreviation."
+                "properties": {
+                    "all": {
+                        "type": "string",
+                        "description": "The bag of all dataset files."
+                    },
+                    "indexed": {
+                        "type": "string",
+                        "description": "The bag of indexed dataset files."
+                    }
+                },
+                "additionalProperties": false,
+                "required": ["indexed"]
             }
         }
     },
     "additionalProperties": false,
-    "required": []
+    "required": ["indexed"]
 },
 "publications": {
     "type": "array",
     "description": "A list of publications associated with the dataset.",
     "items": {
-        "$ref": "#/dc"
+        "oneOf": [{
+            "type": "string"
+        },
+        {
+            "type": "object",
+            "properties": {
+                "$ref": "#/dc"
+            }
+        }]
     }
 },
 "mrr": {
@@ -770,8 +687,8 @@
 "required": [
     "dc",
     "mdf",
-    "files",
+    "file_bags",
     "publications",
-    "material"
+    "mrr"
 ]
 }
