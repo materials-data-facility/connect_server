@@ -48,10 +48,12 @@ def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
     all_feedstock = None
     with open(feedstock_path or os.devnull, 'w') as feedstock_file:
         # Handle dataset entry
-        dataset_result = validator.validate_dataset(ds_md)
-        if not dataset_result["success"]:
-            raise ValueError(dataset_result["error"])
-        dataset_metadata = dataset_result["valid"]
+        #TODO: Re-enable after Validator is functional
+        dataset_metadata = ds_md
+#        dataset_result = validator.validate_dataset(ds_md)
+#        if not dataset_result["success"]:
+#            raise ValueError(dataset_result["error"])
+#        dataset_metadata = dataset_result["valid"]
         if feedstock_path:
             json.dump(dataset_metadata, feedstock_file)
             feedstock_file.write("\n")
@@ -67,10 +69,12 @@ def omniconvert(input_path, all_metadata, feedstock_path, verbose=False):
             res, info = omniparse(path, info=True)
             if res:
                 rc_md[info["parser"]] = res
-                record_result = validator.validate_record(rc_md)
-                if not record_result["success"]:
-                    raise ValueError(record_result["error"])
-                record_metadata = record_result["valid"]
+                #TODO: Re-enable
+                record_metadata = rc_md
+#                record_result = validator.validate_record(rc_md)
+#                if not record_result["success"]:
+#                    raise ValueError(record_result["error"])
+#                record_metadata = record_result["valid"]
                 if feedstock_path:
                     json.dump(record_metadata, feedstock_file)
                     feedstock_file.write("\n")

@@ -1,3 +1,4 @@
+crossrefapi
 globus-sdk>=1.1.1
 requests>=2.18.1
 tqdm>=4.14.0

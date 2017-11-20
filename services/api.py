@@ -25,6 +25,7 @@ def accept_convert():
             })
     status_id = str(ObjectId())
     # TODO: Register status ID
+    print("DEBUG: Status ID created")
     metadata["mdf_status_id"] = status_id
     converter = Thread(target=begin_convert, name="converter_thread", args=(metadata, status_id))
     converter.start()
@@ -86,10 +87,12 @@ def begin_convert(metadata, status_id):
     #TODO: Update status - download success/failure
     if not local_success:
         raise IOError("No data downloaded")
+    print("DEBUG: Download success")
 
     # Backup data
     backup_tid = toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"], [(local_path, backup_path)], timeout=0)
     #TODO: Update status - backup success
+    print("DEBUG: Backup success")
 
     # Trigger omniconverter
     feedstock_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_basic.json")
@@ -102,6 +105,7 @@ def begin_convert(metadata, status_id):
     num_records = feedstock_results["records_processed"]
     num_rec_failed = feedstock_results["num_failures"]
     #TODO: Update status - indexing success, give numbers success/fail
+    print("DEBUG: Indexing success\nSuccess:", num_records, "\nFail:", num_rec_failed)
 
     # Pass feedstock to /ingest
     with open(feedstock_path) as stock:
@@ -135,6 +139,7 @@ def begin_convert(metadata, status_id):
             #TODO: Update status - not Published due to Publish error
             raise
         #TODO: Update status - Publish success
+        print("DEBUG: Publish success")
 
 
     # Remove local data
@@ -166,10 +171,12 @@ def accept_ingest():
     if not request.form.get("mdf_status_id"):
         status_id = str(ObjectId())
         #TODO: Register status ID
+        print("DEBUG: New status ID created")
     else:
         #TODO: Check that status exists (must not be set by user)
         #TODO: Update status - ingest request recieved
         status_id = request.form.get("mdf_status_id")
+        print("DEBUG: Current status ID read")
     # Save file
     feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
     feedstock.save(feed_path)
@@ -214,6 +221,7 @@ def begin_ingest(base_feed_path, status_id):
             json.dump(record_result["valid"], final_stock)
             final_stock.write("\n")
     #TODO: Update status - validation passed
+    print("DEBUG: Validation passed")
 
     # Ingest finalized feedstock
     try:
@@ -225,6 +233,7 @@ def begin_ingest(base_feed_path, status_id):
             "error": repr(e)
             })
     #TODO: Update status - ingest successful, processing complete
+    print("DEBUG: Ingest success, processing complete")
     return {
         "success": True,
         "status_id": status_id

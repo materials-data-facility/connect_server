@@ -597,7 +597,7 @@
 },
 "file_bags": {
     "type": "object",
-    "description": "BDBags containing the dataset's files.",
+    "description": "BDBags containing the dataset files.",
     "properties": {
         "all": {
             "type": "string",
