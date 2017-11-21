@@ -9,7 +9,8 @@ setup(
     description='Materials Data Facility python package',
     install_requires=[
         "mdf_forge>=0.4.4",
-        "mdf_toolbox>0.1.0",
+        "mdf_toolbox>=0.1.0",
+        "crossrefapi>=1.2.0",
         "globus-sdk>=1.1.1",
         "requests>=2.18.1",
         "tqdm>=4.14.0",

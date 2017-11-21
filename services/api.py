@@ -115,7 +115,8 @@ def begin_convert(metadata, status_id):
     # Pass data to additional integrations
 
     # Globus Publish
-    if metadata.get("globus_publish"):
+    #TODO: Enable after Publish API is fixed
+    if False: #metadata.get("globus_publish"):
         # Submit metadata
         try:
             pub_md = metadata["globus_publish"]
@@ -204,24 +205,29 @@ def begin_ingest(base_feed_path, status_id):
     # Finalize feedstock
     with open(base_feed_path, 'r') as base_stock, open(final_feed_path, 'w') as final_stock:
         # Finalize dataset entry
-        dataset_result = validator.validate_dataset(json.loads(base_stock.readline()), finalize=True)
-        if not dataset_result["success"]:
+        #TODO: Remove after Validator is finished
+        json.dump(json.loads(base_stock.readline()), final_stock)
+#        dataset_result = validator.validate_dataset(json.loads(base_stock.readline()),
+#                                                     finalize=True)
+#        if not dataset_result["success"]:
             # TODO: Update status - dataset validation failed
-            return jsonify(dataset_result)
-        json.dump(dataset_result["valid"], final_stock)
+#            return jsonify(dataset_result)
+#        json.dump(dataset_result["valid"], final_stock)
         final_stock.write("\n")
 
         # Finalize records
         for rc in base_stock:
             record = json.loads(rc)
-            record_result = validator.validate_record(record, finalize=True)
-            if not record_result["success"]:
+            #TODO: Remove after Validator finished
+            json.dump(record, final_stock)
+#            record_result = validator.validate_record(record, finalize=True)
+#            if not record_result["success"]:
                 #TODO: Update status - record validation failed
-                return jsonify(record_result)
-            json.dump(record_result["valid"], final_stock)
+#                return jsonify(record_result)
+#            json.dump(record_result["valid"], final_stock)
             final_stock.write("\n")
     #TODO: Update status - validation passed
-    print("DEBUG: Validation passed")
+    print("DEBUG: Validation 'passed'")
 
     # Ingest finalized feedstock
     try:

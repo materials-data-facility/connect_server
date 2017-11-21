@@ -3,9 +3,11 @@
 "title": "MDF Record",
 "description": "Schema for record entry in MDF.",
 "files": {
-    "type": "object",
+    "type": "array",
     "description": "Data files and their metadata.",
     "items": {
+        "type": "object",
+        "description": "Data file metadata.",
         "properties": {
             "globus_endpoint": {
                 "type": "string",
