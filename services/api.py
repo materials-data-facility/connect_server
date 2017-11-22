@@ -37,7 +37,7 @@ def accept_convert():
 
 def begin_convert(metadata, status_id):
     """Pull, back up, and convert metadata."""
-    # Will need transfer client for backups
+    # Setup
     creds = {
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
@@ -48,6 +48,102 @@ def begin_convert(metadata, status_id):
     mdf_transfer_client = clients["transfer"]
     globus_publish_client = clients["publish"]
 
+    status_id = metadata["mdf_status_id"]
+
+    # Download data locally, back up on MDF resources
+    dl_res = download_and_backup(mdf_transfer_client, metadata)
+    if dl_res["success"]:
+        local_path = dl_res["local_path"]
+    else:
+        raise IOError("No data downloaded")
+    #TODO: Update status - data downloaded
+    print("Data downloaded")
+
+    #TODO: Update status - MDF conversion started
+    print("MDF conversion started")
+    feedstock_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_basic.json")
+    try:
+        feedstock_results = omniconverter.omniconvert(local_path,
+                                metadata, feedstock_path=feedstock_path)
+    except Exception as e:
+        #TODO: Update status - indexing failed
+        raise
+    num_records = feedstock_results["records_processed"]
+    num_rec_failed = feedstock_results["num_failures"]
+    #TODO: Update status - indexing success, give numbers success/fail
+    print("DEBUG: Indexing success\nSuccess:", num_records, "\nFail:", num_rec_failed)
+    # Attempt Citrine conversion flow
+    records = []
+    try:
+        # Create new Citrine dataset
+        #TODO
+        citrine_ds_id = 0
+
+        # Trigger conversion
+        pifs, ignored = generate_pifs(local_path, includes=[], excludes=[])
+
+        # Process PIFs
+        pifs, pif_urls = get_uuids(pifs, citrine_ds_id)
+
+        # Get MDF records
+        records = pif_to_feedstock(pifs)
+
+        # Enrich PIFs
+        pifs = enrich_pifs(pifs, REPLACE_PATH_HOST, metadata)
+    except Exception as e:
+        #TODO: Update status - Citrine parsing failed
+        records = []
+
+
+        
+
+    # Pass feedstock to /ingest
+    with open(feedstock_path) as stock:
+        requests.post(app.config["INGEST_URL"], data={"status_id":status_id}, files={'file': stock})
+
+
+    # Pass data to additional integrations
+
+    # Globus Publish
+    #TODO: Enable after Publish API is fixed
+    if False: #metadata.get("globus_publish"):
+        # Submit metadata
+        try:
+            pub_md = metadata["globus_publish"]
+            md_result = globus_publish_client.push_metadata(pub_md["collection"], pub_md)
+            pub_ep = md_result['globus.shared_endpoint.name']
+            pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
+            submission_id = md_result["id"]
+        except Exception as e:
+            #TODO: Update status - not Published due to bad metadata
+            raise
+        # Transfer data
+        try:
+            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], pub_endpoint, [(local_path, pub_path)], timeout=0)
+        except Exception as e:
+            #TODO: Update status - not Published due to failed Transfer
+            raise
+        # Complete submission
+        try:
+            fin_res = globus_publish_client.complete_submission(submission_id)
+        except Exception as e:
+            #TODO: Update status - not Published due to Publish error
+            raise
+        #TODO: Update status - Publish success
+        print("DEBUG: Publish success")
+
+
+    # Remove local data
+    shutil.rmtree(local_path)
+    # TODO: Log backup_tid and user_tid with status DB
+    return {
+        "success": True,
+        "status_id": status_id
+        }
+
+
+def download_and_backup(mdf_transfer_client, metadata):
+    """Download remote data, backup"""
     status_id = metadata["mdf_status_id"]
     local_success = False
     backup_tid = None
@@ -94,61 +190,9 @@ def begin_convert(metadata, status_id):
     #TODO: Update status - backup success
     print("DEBUG: Backup success")
 
-    # Trigger omniconverter
-    feedstock_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_basic.json")
-    try:
-        feedstock_results = omniconverter.omniconvert(local_path,
-                                metadata, feedstock_path=feedstock_path)
-    except Exception as e:
-        #TODO: Update status - indexing failed
-        raise
-    num_records = feedstock_results["records_processed"]
-    num_rec_failed = feedstock_results["num_failures"]
-    #TODO: Update status - indexing success, give numbers success/fail
-    print("DEBUG: Indexing success\nSuccess:", num_records, "\nFail:", num_rec_failed)
-
-    # Pass feedstock to /ingest
-    with open(feedstock_path) as stock:
-        requests.post(app.config["INGEST_URL"], data={"status_id":status_id}, files={'file': stock})
-
-
-    # Pass data to additional integrations
-
-    # Globus Publish
-    #TODO: Enable after Publish API is fixed
-    if False: #metadata.get("globus_publish"):
-        # Submit metadata
-        try:
-            pub_md = metadata["globus_publish"]
-            md_result = globus_publish_client.push_metadata(pub_md["collection"], pub_md)
-            pub_ep = md_result['globus.shared_endpoint.name']
-            pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-            submission_id = md_result["id"]
-        except Exception as e:
-            #TODO: Update status - not Published due to bad metadata
-            raise
-        # Transfer data
-        try:
-            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], pub_endpoint, [(local_path, pub_path)], timeout=0)
-        except Exception as e:
-            #TODO: Update status - not Published due to failed Transfer
-            raise
-        # Complete submission
-        try:
-            fin_res = globus_publish_client.complete_submission(submission_id)
-        except Exception as e:
-            #TODO: Update status - not Published due to Publish error
-            raise
-        #TODO: Update status - Publish success
-        print("DEBUG: Publish success")
-
-
-    # Remove local data
-    shutil.rmtree(local_path)
-    # TODO: Log backup_tid and user_tid with status DB
     return {
         "success": True,
-        "status_id": status_id
+        "local_path": local_path
         }
 
 
