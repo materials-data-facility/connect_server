@@ -72,6 +72,7 @@ def begin_convert(metadata, status_id):
     num_rec_failed = feedstock_results["num_failures"]
     #TODO: Update status - indexing success, give numbers success/fail
     print("DEBUG: Indexing success\nSuccess:", num_records, "\nFail:", num_rec_failed)
+
     # Attempt Citrine conversion flow
     records = []
     try:
