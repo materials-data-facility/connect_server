@@ -2,29 +2,27 @@ import ase.io
 from mdf_toolbox import toolbox
 
 
-def omniparse(data_file, parser_tags=[], info=False):
+# List of parsers as tuple(function, [tags])
+ALL_PARSERS = [
+    {
+        "parser": parse_ase,
+        "tags": ["ase", "dft", "simulation"],
+        "block": "material"
+    }
+]
+
+
+def omniparse(data_file, parser_tags=None):
     """Parse a data file however possible.
 
     Arguments:
     data_file (file object): The data file.
     parser_tags (list of str): Run parsers with these tags.
                                Default [], which runs all parsers.
-    info (bool): If True, will return a tuple of (results, info) (see "Returns").
-                 If False, will just return results.
-                 Default False.
 
     Returns:
-    dict (if not info): The metadata parsed from the file. Will be empty if file could not be parsed.
-    tuple of (dict, dict) (if info): The metadata, and a dict of parsing information.
+    dict: The metadata parsed from the file. Will be empty if no selected parser can parse data.
     """
-    # List of parsers as tuple(function, [tags])
-    ALL_PARSERS = [
-        {
-            "parser": parse_ase,
-            "tags": ["ase", "dft", "simulation"],
-            "block": "material"
-        }
-    ]
     record = {}
     # Check all parsers
     for parser_dict in ALL_PARSERS:
@@ -39,16 +37,15 @@ def omniparse(data_file, parser_tags=[], info=False):
                 record[parser_dict["block"]] = toolbox.dict_merge(
                                                 record[parser_dict["block"]],
                                                 parser_res)
-    return data
+    return record
 
 
 def parse_ase(data_file):
     """Parser for data in ASE-readable formats.
-    If ASE is incapable of reading the file and raises an exception,
-    the (first) return dict == {} and total_num == 0 and failure_num == 1.
+    If ASE is incapable of reading the file, an exception will be raised.
 
     Arguments:
-    file_path (str): Path to the data file.
+    data_file (file object or str): Data file, or path to the data file.
 
     Returns:
     dict: Useful data ASE could pull out of the file.

@@ -1,17 +1,33 @@
 import json
 import os
+import re
 import shutil
+import tempfile
 from threading import Thread
 import zipfile
 
 from bson import ObjectId
 from flask import jsonify, request
+import magic
 from mdf_toolbox import toolbox
-from mdf_refinery import ingester, omniconverter, validator
+from mdf_refinery import ingester, omniparser, validator
 import requests
 from werkzeug.utils import secure_filename
 
 from services import app
+
+KEY_FILES = {
+    "dft": {
+        "exact": ["outcar"],
+        "extension": [],
+        "regex": []
+    }
+}
+KEY_FILES["all"] = {
+    "exact": [tag["exact"] for tag in KEY_FILES.values(),
+    "extension": [tag["extension"] for tag in KEY_FILES.values(),
+    "regex": [tag["regex"] for tag in KEY_FILES.values()
+}
 
 
 @app.route('/convert', methods=["POST"])
@@ -50,57 +66,120 @@ def begin_convert(metadata, status_id):
 
     status_id = metadata["mdf_status_id"]
 
+
     # Download data locally, back up on MDF resources
     dl_res = download_and_backup(mdf_transfer_client, metadata)
     if dl_res["success"]:
         local_path = dl_res["local_path"]
+        backup_path = dl_res["backup_path"]
     else:
         raise IOError("No data downloaded")
     #TODO: Update status - data downloaded
-    print("Data downloaded")
-
-    #TODO: Update status - MDF conversion started
-    print("MDF conversion started")
-    feedstock_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_basic.json")
-    try:
-        feedstock_results = omniconverter.omniconvert(local_path,
-                                metadata, feedstock_path=feedstock_path)
-    except Exception as e:
-        #TODO: Update status - indexing failed
-        raise
-    num_records = feedstock_results["records_processed"]
-    num_rec_failed = feedstock_results["num_failures"]
-    #TODO: Update status - indexing success, give numbers success/fail
-    print("DEBUG: Indexing success\nSuccess:", num_records, "\nFail:", num_rec_failed)
-
-    # Attempt Citrine conversion flow
-    records = []
-    try:
-        # Create new Citrine dataset
-        #TODO
-        citrine_ds_id = 0
-
-        # Trigger conversion
-        pifs, ignored = generate_pifs(local_path, includes=[], excludes=[])
-
-        # Process PIFs
-        pifs, pif_urls = get_uuids(pifs, citrine_ds_id)
-
-        # Get MDF records
-        records = pif_to_feedstock(pifs)
-
-        # Enrich PIFs
-        pifs = enrich_pifs(pifs, REPLACE_PATH_HOST, metadata)
-    except Exception as e:
-        #TODO: Update status - Citrine parsing failed
-        records = []
+    print("DEBUG: Data downloaded")
 
 
-        
+    print("DEBUG: Conversions started")
+    #TODO: Stream data into files instead of holding feedstock in memory
+    feedstock = []
+    pifs = []
+    #TODO: Parse tags
+    tags = []
+    key_info = get_key_matches(tags or None)
+    # List of all files, for bag
+    all_files = []
+    #TODO: Create Citrine dataset
+    citrine_ds_id = 0
+    for path, dirs, files in os.walk(local_path):
+        # Determine if dir or file is single entity
+        # Dir is record
+        if count_key_files(files, key_info) == 1:
+            dir_file_md = []
+            mdf_record = {}
+            # Process all files into one record
+            for filename in files:
+                # Get file metadata
+                file_md = get_file_metadata(filename=filename,
+                                            path=path.replace(local_path, backup_path))
+                # Save file metadata
+                all_files.append(file_md)
+                dir_file_md.append(file_md)
+                with open(os.path.join(path, filename)) as data_file:
+                    # MDF parsing
+                    mdf_res = omniparser.omniparse(data_file)
+                    data_file.seek(0)
+
+                    mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
+
+            '''
+            # Citrine parsing
+            cit_pifs, = generate_pifs(path),
+                                     includes=[], excludes=[])
+            cit_pifs, = get_uuids(cit_pifs, citrine_ds_id)
+            # Get MDF feedstock from PIFs
+            cit_res = pif_to_feedstock(cit_pifs)
+            #TODO: enrich links, dc md
+            cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
+            '''
+            cit_res = {}
+
+            # Merge results
+            mdf_record = toolbox.dict_merge(mdf_record, cit_res)
+
+            # If data was parsed, save record
+            if mdf_record:
+                mdf_record = toolbox.dict_merge(mdf_record,
+                                                {"files": dir_file_md})
+                feedstock.append(mdf_record)
+                #TODO: Upload PIF
+
+        # File is record
+        else:
+            for filename in files:
+                # Get file metadata
+                file_md = get_file_metadata(filename=filename,
+                                            path=path.replace(local_path, backup_path))
+                # Save file metadata
+                all_files.append(file_md)
+                with open(os.path.join(path, filename)) as data_file:
+                    # MDF parsing
+                    mdf_res = omniparser.omniparse(data_file)
+                    data_file.seek(0)
+
+                    '''
+                    # Citrine parsing
+                    cit_pifs, = generate_pifs(os.path.join(path, filename),
+                                             includes=[], excludes=[])
+                    cit_pifs, = get_uuids(cit_pifs, citrine_ds_id)
+                    # Get MDF feedstock from PIFs
+                    cit_res = pif_to_feedstock(cit_pifs)
+                    #TODO: enrich links, dc md
+                    cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
+                    '''
+                    cit_res = {}
+
+                    # Merge results
+                    mdf_record = toolbox.dict_merge(mdf_res, cit_res)
+
+                    # If data was parsed, save record
+                    if mdf_record:
+                        mdf_record = toolbox.dict_merge(mdf_record, 
+                                                        {"files": [file_md]})
+                        feedstock.append(mdf_record)
+                        #TODO: Upload PIF
+
+    #TODO: Update status - indexing success
+    print("DEBUG: Indexing success")
+
 
     # Pass feedstock to /ingest
-    with open(feedstock_path) as stock:
-        requests.post(app.config["INGEST_URL"], data={"status_id":status_id}, files={'file': stock})
+    with tempfile.TemporaryFile() as stock:
+        ingest_res = requests.post(app.config["INGEST_URL"],
+                      data={"status_id":status_id},
+                      files={'file': stock})
+        if not ingest_res.get_json().get("success"):
+            #TODO: Update status? Ingest failed
+            #TODO: Fail everything, delete Citrine dataset, etc.
+            raise ValueError("In convert - Ingest failed")
 
 
     # Pass data to additional integrations
@@ -120,7 +199,8 @@ def begin_convert(metadata, status_id):
             raise
         # Transfer data
         try:
-            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], pub_endpoint, [(local_path, pub_path)], timeout=0)
+            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"],
+                                   pub_endpoint, [(local_path, pub_path)], timeout=0)
         except Exception as e:
             #TODO: Update status - not Published due to failed Transfer
             raise
@@ -136,7 +216,6 @@ def begin_convert(metadata, status_id):
 
     # Remove local data
     shutil.rmtree(local_path)
-    # TODO: Log backup_tid and user_tid with status DB
     return {
         "success": True,
         "status_id": status_id
@@ -170,7 +249,8 @@ def download_and_backup(mdf_transfer_client, metadata):
         user_ep, user_path = metadata["globus"].split("/", 1)
         user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
         # Transfer locally
-        user_tid = toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"], [(user_path, local_path)], timeout=0)
+        user_tid = toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
+                                          [(user_path, local_path)], timeout=0)
         local_success = True
 
     elif metadata.get("files"):
@@ -187,14 +267,53 @@ def download_and_backup(mdf_transfer_client, metadata):
     print("DEBUG: Download success")
 
     # Backup data
-    backup_tid = toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"], [(local_path, backup_path)], timeout=0)
+    backup_tid = toolbox.quick_transfer(mdf_transfer_client,
+                                        app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                                        [(local_path, backup_path)], timeout=0)
     #TODO: Update status - backup success
     print("DEBUG: Backup success")
 
     return {
         "success": True,
-        "local_path": local_path
+        "local_path": local_path,
+        "backup_path": backup_path
         }
+
+
+def get_key_matches(tags=None):
+    return {
+        "exact_keys": [val["exact"].lower()
+                       for tag, val in KEY_FILES 
+                       if (not tags or tag in tags)],
+        "extension_keys": [val["extension"].lower()
+                           for tag, val in KEY_FILES
+                           if (not tags or tag in tags)],
+        "regex_keys": [re.compile(val["regex"])
+                       for tag, val in KEY_FILES
+                       if (not tags or tag in tags)]
+    }
+
+
+def count_key_files(files, key_info):
+    return len([f for f in files 
+                if (f.lower() in key_info["exact_keys"]
+                    or any([f.lower().endswith(ext) for ext in key_info["extension_keys"]])
+                    or any([rx.match(f) for rx in key_info["regex_keys"]]))])
+
+
+def get_file_metadata(file_path, backup_path):
+    with open(file_path, "rb") as f:
+        md = {
+            "globus_endpoint": app.config["BACKUP_EP"] + backup_path,
+            "data_type": magic.from_file(file_path),
+            "mime_type": magic.from_file(file_path, mime=True),
+            "url": app.config["BACKUP_HOST"] + backup_path,
+            "length": os.path.getsize(file_path),
+            "filename": os.path.basename(file_path),
+            "sha512": sha512(f.read()).hexdigest()
+        }
+    return md
+
 
 
 @app.route("/ingest", methods=["POST"])
