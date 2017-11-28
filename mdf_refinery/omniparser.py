@@ -2,14 +2,7 @@ import ase.io
 from mdf_toolbox import toolbox
 
 
-# List of parsers as tuple(function, [tags])
-ALL_PARSERS = [
-    {
-        "parser": parse_ase,
-        "tags": ["ase", "dft", "simulation"],
-        "block": "material"
-    }
-]
+# List of parsers at bottom
 
 
 def omniparse(data_file, parser_tags=None):
@@ -158,4 +151,14 @@ def parse_ase(data_file):
         raise ValueError("All data None")
 
     return ase_dict
+
+
+# List of parsers as tuple(function, [tags])
+ALL_PARSERS = [
+    {
+        "parser": parse_ase,
+        "tags": ["ase", "dft", "simulation"],
+        "block": "material"
+    }
+]
 

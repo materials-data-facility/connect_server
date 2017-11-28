@@ -1,3 +1,4 @@
+from hashlib import sha512
 import json
 import os
 import re
@@ -22,11 +23,6 @@ KEY_FILES = {
         "extension": [],
         "regex": []
     }
-}
-KEY_FILES["all"] = {
-    "exact": [tag["exact"] for tag in KEY_FILES.values(),
-    "extension": [tag["extension"] for tag in KEY_FILES.values(),
-    "regex": [tag["regex"] for tag in KEY_FILES.values()
 }
 
 
@@ -58,11 +54,11 @@ def begin_convert(metadata, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer", "publish"]
+        "services": ["transfer"]#, "publish"]
         }
     clients = toolbox.confidential_login(creds)
     mdf_transfer_client = clients["transfer"]
-    globus_publish_client = clients["publish"]
+#    globus_publish_client = clients["publish"]
 
     status_id = metadata["mdf_status_id"]
 
@@ -79,16 +75,22 @@ def begin_convert(metadata, status_id):
 
 
     print("DEBUG: Conversions started")
+    #TODO: Parse out dataset entry
+    mdf_dataset = metadata
+
     #TODO: Stream data into files instead of holding feedstock in memory
-    feedstock = []
-    pifs = []
+    feedstock = [mdf_dataset]
+
     #TODO: Parse tags
     tags = []
     key_info = get_key_matches(tags or None)
+
     # List of all files, for bag
     all_files = []
+
     #TODO: Create Citrine dataset
     citrine_ds_id = 0
+
     for path, dirs, files in os.walk(local_path):
         # Determine if dir or file is single entity
         # Dir is record
@@ -98,8 +100,8 @@ def begin_convert(metadata, status_id):
             # Process all files into one record
             for filename in files:
                 # Get file metadata
-                file_md = get_file_metadata(filename=filename,
-                                            path=path.replace(local_path, backup_path))
+                file_md = get_file_metadata(file_path=os.path.join(path, filename),
+                                            backup_path=os.path.join(backup_path, path, filename))
                 # Save file metadata
                 all_files.append(file_md)
                 dir_file_md.append(file_md)
@@ -136,8 +138,8 @@ def begin_convert(metadata, status_id):
         else:
             for filename in files:
                 # Get file metadata
-                file_md = get_file_metadata(filename=filename,
-                                            path=path.replace(local_path, backup_path))
+                file_md = get_file_metadata(file_path=os.path.join(path, filename),
+                                            backup_path=os.path.join(backup_path, path, filename))
                 # Save file metadata
                 all_files.append(file_md)
                 with open(os.path.join(path, filename)) as data_file:
@@ -172,20 +174,25 @@ def begin_convert(metadata, status_id):
 
 
     # Pass feedstock to /ingest
-    with tempfile.TemporaryFile() as stock:
+    with tempfile.TemporaryFile(mode="w+") as stock:
+        for entry in feedstock:
+            json.dump(entry, stock)
+            stock.write("\n")
+        stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
                       data={"status_id":status_id},
                       files={'file': stock})
-        if not ingest_res.get_json().get("success"):
-            #TODO: Update status? Ingest failed
-            #TODO: Fail everything, delete Citrine dataset, etc.
-            raise ValueError("In convert - Ingest failed")
+    if not ingest_res.json().get("success"):
+        #TODO: Update status? Ingest failed
+        #TODO: Fail everything, delete Citrine dataset, etc.
+        raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
 
 
     # Pass data to additional integrations
 
     # Globus Publish
     #TODO: Enable after Publish API is fixed
+    #       And after datapublication is a service in globus_sdk
     if False: #metadata.get("globus_publish"):
         # Submit metadata
         try:
@@ -281,16 +288,21 @@ def download_and_backup(mdf_transfer_client, metadata):
 
 
 def get_key_matches(tags=None):
+    exa = []
+    ext = []
+    rex = []
+    for tag, val in KEY_FILES.items():
+        if not tags or tag in tags:
+            for key in val.get("exact", []):
+                exa.append(key.lower())
+            for key in val.get("extension", []):
+                ext.append(key.lower())
+            for key in val.get("regex", []):
+                rex.append(key)
     return {
-        "exact_keys": [val["exact"].lower()
-                       for tag, val in KEY_FILES 
-                       if (not tags or tag in tags)],
-        "extension_keys": [val["extension"].lower()
-                           for tag, val in KEY_FILES
-                           if (not tags or tag in tags)],
-        "regex_keys": [re.compile(val["regex"])
-                       for tag, val in KEY_FILES
-                       if (not tags or tag in tags)]
+        "exact_keys": exa,
+        "extension_keys": ext,
+        "regex_keys": rex
     }
 
 
@@ -326,11 +338,6 @@ def accept_ingest():
         return jsonify({
             "success": False,
             "error": "No feedstock file uploaded"
-            })
-    if not feedstock.filename.endswith(".json"):
-        return jsonify({
-            "success": False,
-            "error": "Feedstock file must be JSON"
             })
     # Mint/update status ID
     if not request.form.get("mdf_status_id"):
