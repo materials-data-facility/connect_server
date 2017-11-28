@@ -1,4 +1,3 @@
-import os
 from setuptools import setup, find_packages
 
 
@@ -24,4 +23,3 @@ setup(
     ],
     package_data={'mdf_refinery': ['schemas/*.schema']}
 )
-

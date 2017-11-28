@@ -9,6 +9,7 @@ from mdf_toolbox import toolbox
 
 NUM_SUBMITTERS = 5
 
+
 def ingest(ingest_client, feedstocks, batch_size=100):
     """Ingests feedstock from file.
 
@@ -25,9 +26,12 @@ def ingest(ingest_client, feedstocks, batch_size=100):
     killswitch = multiprocessing.Value('i', 0)
 
     # One reader
-    reader = multiprocessing.Process(target=queue_ingests, args=(ingest_queue, feedstocks, batch_size))
+    reader = multiprocessing.Process(target=queue_ingests,
+                                     args=(ingest_queue, feedstocks, batch_size))
     # As many submitters as is feasible
-    submitters = [multiprocessing.Process(target=process_ingests, args=(ingest_queue, ingest_client, killswitch)) for i in range(NUM_SUBMITTERS)]
+    submitters = [multiprocessing.Process(target=process_ingests,
+                                          args=(ingest_queue, ingest_client, killswitch))
+                  for i in range(NUM_SUBMITTERS)]
     reader.start()
     [s.start() for s in submitters]
 
@@ -75,4 +79,3 @@ def process_ingests(ingest_queue, ingest_client, killswitch):
             print("\nA Globus API Error has occurred. Details:\n", e.raw_json, "\n")
             continue
         ingest_queue.task_done()
-

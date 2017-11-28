@@ -22,7 +22,7 @@ def omniparse(data_file, parser_tags=None):
         # If tags match (or no tags specified)
         if not parser_tags or any([tag in parser_tags for tag in parser_dict["tags"]]):
             try:
-                parser_res = parser(data_file, stats=True)
+                parser_res = parser_dict["parser"](data_file, stats=True)
             # Exception indicates no data parsed
             except Exception as e:
                 pass
@@ -43,48 +43,48 @@ def parse_ase(data_file):
     Returns:
     dict: Useful data ASE could pull out of the file.
     """
-    
+
     ase_template = {
-#        "constraints" : None,              # No get()
-#        "all_distances" : None,
-#        "angular_momentum" : None,
-#        "atomic_numbers" : None,
-#        "cell" : None,
-        "cell_lengths_and_angles" : None,
-#        "celldisp" : None,
-#        "center_of_mass" : None,
-#        "charges" : None,
-        "chemical_formula" : None,
-#        "chemical_symbols" : None,
-#        "dipole_moment" : None,
-#        "forces" : None,
-#        "forces_raw" : None,               # No get()
-#        "initial_charges" : None,
-#        "initial_magnetic_moments" : None,
-#        "kinetic_energy" : None,
-#        "magnetic_moment" : None,
-#        "magnetic_moments" : None,
-#        "masses" : None,
-#        "momenta" : None,
-#        "moments_of_inertia" : None,
-#        "number_of_atoms" : None,
-        "pbc" : None,
-#        "positions" : None,
-#        "potential_energies" : None,
-#        "potential_energy" : None,
-#        "potential_energy_raw" : None,     # No get()
-#        "reciprocal_cell" : None,
-#        "scaled_positions" : None,
-#        "stress" : None,
-#        "stresses" : None,
-#        "tags" : None,
-        "temperature" : None,
-#        "total_energy" : None,
-#        "velocities" : None,
-        "volume" : None,
-#        "filetype": None,                  # No get()
-#        "num_frames": None,                # No get()
-#        "num_atoms": None                  # No get()
+        # "constraints": None,              # No get()
+        # "all_distances": None,
+        # "angular_momentum": None,
+        # "atomic_numbers": None,
+        # "cell": None,
+        "cell_lengths_and_angles": None,
+        # "celldisp": None,
+        # "center_of_mass": None,
+        # "charges": None,
+        "chemical_formula": None,
+        # "chemical_symbols": None,
+        # "dipole_moment": None,
+        # "forces": None,
+        # "forces_raw": None,               # No get()
+        # "initial_charges": None,
+        # "initial_magnetic_moments": None,
+        # "kinetic_energy": None,
+        # "magnetic_moment": None,
+        # "magnetic_moments": None,
+        # "masses": None,
+        # "momenta": None,
+        # "moments_of_inertia": None,
+        # "number_of_atoms": None,
+        "pbc": None,
+        # "positions": None,
+        # "potential_energies": None,
+        # "potential_energy": None,
+        # "potential_energy_raw": None,     # No get()
+        # "reciprocal_cell": None,
+        # "scaled_positions": None,
+        # "stress": None,
+        # "stresses": None,
+        # "tags": None,
+        "temperature": None,
+        # "total_energy": None,
+        # "velocities": None,
+        "volume": None,
+        # "filetype": None,                  # No get()
+        # "num_frames": None,                # No get()
+        # "num_atoms": None                  # No get()
         }
 
     # Read the file and process it if the reading succeeds
@@ -103,7 +103,7 @@ def parse_ase(data_file):
 
     # Data without a .get()
     try:
-        ase_dict["filetype"] = ase.io.formats.filetype(file_path)
+        ase_dict["filetype"] = ase.io.formats.filetype(data_file)
     except Exception as e:
         pass
     try:
@@ -114,7 +114,6 @@ def parse_ase(data_file):
 #            ase_dict["num_frames"] = len(result)
 #        else:
 #            ase_dict["num_atoms"] = len(result)
-
 
     # Fix up the extracted data
     none_keys = []
@@ -161,4 +160,3 @@ ALL_PARSERS = [
         "block": "material"
     }
 ]
-

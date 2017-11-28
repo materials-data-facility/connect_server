@@ -10,7 +10,7 @@ import jsonschema
 
 class Validator:
     """Validates MDF feedstock.
-    
+
     Flow:
         start_dataset(dataset_metadata)
         (check if returned success)
@@ -31,7 +31,6 @@ class Validator:
             self.__schema_dir = schema_path
         else:
             self.__schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-
 
     def __make_source_name(self, title):
         """Make a source_name out of a title."""
@@ -63,7 +62,6 @@ class Validator:
 
         return source_name
 
-
     def start_dataset(self, ds_md):
         """Validate a dataset against the MDF schema.
 
@@ -90,7 +88,6 @@ class Validator:
         with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
             schema["mdf"] = json.load(mdf_file)
 
-
         # Add any missing blocks
         # Correct type errors
         if not ds_md.get("dc") or not isinstance(ds_md["dc"], dict):
@@ -107,7 +104,7 @@ class Validator:
         # Add fields
         if self.__finalize:
             # Finalization fields are computed
-            #TODO: dc?
+            # TODO: dc?
 
             # BLOCK: mdf
             # mdf_id
@@ -130,7 +127,7 @@ class Validator:
             # source_name
             if not ds_md["mdf"].get("source_name"):
                 try:
-                    ds_md_["mdf"]["source_name"] = self.__make_source_name(
+                    ds_md["mdf"]["source_name"] = self.__make_source_name(
                                                     ds_md["dc"]["titles"][0]["title"])
                 except (KeyError, ValueError):
                     # DC title is required, ds_md will fail validation
@@ -160,7 +157,7 @@ class Validator:
                         new_pubs.append(pub_md)
                     # Maintain DOI if not found
                     else:
-                        new_pubs.append({"doi":doi})
+                        new_pubs.append({"doi": doi})
                 # If is dict, assume is metadata
                 elif isinstance(doi, dict):
                     new_pubs.append(doi)
@@ -173,7 +170,7 @@ class Validator:
 
         else:
             # Add placeholder data instead
-            #TODO: dc?
+            # TODO: dc?
 
             # BLOCK: mdf
             # mdf_id
@@ -194,7 +191,7 @@ class Validator:
             # source_name
             if not ds_md["mdf"].get("source_name"):
                 try:
-                    ds_md_["mdf"]["source_name"] = self.__make_source_name(
+                    ds_md["mdf"]["source_name"] = self.__make_source_name(
                                                     ds_md["dc"]["titles"][0]["title"])
                 except (KeyError, ValueError):
                     # DC title is required, ds_md will fail validation
@@ -208,7 +205,6 @@ class Validator:
             # version
             if not ds_md["mdf"].get("version"):
                 ds_md["mdf"]["version"] = 1
-
 
         # Validate against schema
         try:
@@ -230,7 +226,6 @@ class Validator:
         return {
             "success": True
             }
-
 
     def add_record(self, rc_md):
         """Validate a record against the MDF schema.
@@ -317,12 +312,13 @@ class Validator:
                 composition = rc_md["material"]["composition"].replace("and", "")
                 # Currently deprecated
 #                for element in DICT_OF_ALL_ELEMENTS.keys():
-#                    composition = re.sub("(?i)"+element, DICT_OF_ALL_ELEMENTS[element], composition)
+#                    composition = re.sub("(?i)"+element,
+#                                         DICT_OF_ALL_ELEMENTS[element], composition)
                 str_of_elem = ""
                 for char in list(composition):
-                    if char.isupper(): # Start of new element symbol
+                    if char.isupper():  # Start of new element symbol
                         str_of_elem += " " + char
-                    elif char.islower(): # Continuation of symbol
+                    elif char.islower():  # Continuation of symbol
                         str_of_elem += char
                     # Anything else is not an element (numbers, whitespace, etc.)
 
@@ -371,7 +367,6 @@ class Validator:
             if not rc_md["mdf"].get("version"):
                 rc_md["mdf"]["version"] = self.__dataset["mdf"]["version"]
 
-
         # Validate against schema
         try:
             jsonschema.validate(rc_md, schema)
@@ -391,7 +386,6 @@ class Validator:
             "success": True
             }
 
-
     def get_finished_dataset(self):
         """Retrieve finished dataset, in a generator."""
         if not self.__dataset:
@@ -400,7 +394,7 @@ class Validator:
             raise ValueError("Dataset already finished")
 
         # Add data into dataset entry
-        #TODO: Make bags, mint minid
+        # TODO: Make bags, mint minid
 
         self.__indexed_files = []
 
@@ -416,7 +410,6 @@ class Validator:
         self.__dataset = None
         return
 
-
     def status(self):
         if self.__finished:
             if self.__dataset:
@@ -428,5 +421,3 @@ class Validator:
                 return "Dataset started and still accepting records."
             else:
                 return "Dataset not started."
-
-

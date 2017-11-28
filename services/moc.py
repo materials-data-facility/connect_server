@@ -1,13 +1,9 @@
-import os
-import shutil
-import json
 from functools import wraps
 
 from flask import (Flask, flash, redirect, render_template, request,
                    session, url_for)
+import globus_sdk
 import requests
-
-from mdf_toolbox import toolbox
 
 
 app = Flask(__name__)
@@ -40,6 +36,7 @@ def authenticated(fn):
 def home():
     """Home page - play with it if you must!"""
     return render_template('home.jinja2')
+
 
 @app.route('/create', methods=['GET', 'POST'])
 @authenticated
@@ -171,4 +168,3 @@ def start():
 
 if __name__ == "__main__":
     start()
-
