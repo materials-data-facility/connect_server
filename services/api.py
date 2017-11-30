@@ -8,6 +8,7 @@ from threading import Thread
 import zipfile
 
 from bson import ObjectId
+from citrination_client import CitrinationClient
 from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
@@ -19,9 +20,9 @@ from services import app
 
 KEY_FILES = {
     "dft": {
-        "exact": ["outcar"],
+        "exact": [],
         "extension": [],
-        "regex": []
+        "regex": ["outcar"]
     }
 }
 
@@ -87,7 +88,11 @@ def begin_convert(metadata, status_id):
     all_files = []
 
     # TODO: Create Citrine dataset
-    citrine_ds_id = 0
+    cit_client = CitrinationClient(app.config["CITRINATION_API_KEY"])
+    # TODO: name=dc.title, desc=dc.desc
+    cit_ds = cit_client.create_data_set(share=0).json()
+    cit_ds_id = cit_ds["id"]
+    print("DEBUG: Citrine dataset ID:", cit_ds_id)
 
     for path, dirs, files in os.walk(local_path):
         # Determine if dir or file is single entity
@@ -112,7 +117,7 @@ def begin_convert(metadata, status_id):
 
             '''
             # Citrine parsing
-            cit_pifs, = generate_pifs(path),
+            cit_pifs, = generate_pifs(path,
                                      includes=[], excludes=[])
             cit_pifs, = get_uuids(cit_pifs, citrine_ds_id)
             # Get MDF feedstock from PIFs
@@ -120,7 +125,14 @@ def begin_convert(metadata, status_id):
             # TODO: enrich links, dc md
             cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
             '''
-            cit_res = {}
+            cit_pifs = [
+                {"System": {}}
+            ]
+            cit_res = {
+                "material": {
+                    "citrine": "pif"
+                }
+            }
 
             # Merge results
             mdf_record = toolbox.dict_merge(mdf_record, cit_res)
@@ -130,7 +142,12 @@ def begin_convert(metadata, status_id):
                 mdf_record = toolbox.dict_merge(mdf_record,
                                                 {"files": dir_file_md})
                 feedstock.append(mdf_record)
-                # TODO: Upload PIF
+
+                for pif in cit_pifs:
+                    with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                        json.dump(pif, pif_file)
+                        cit_client.upload(cit_ds_id, pif_file.name)
+                        # TODO: Check that file was uploaded successfully
 
         # File is record
         else:
@@ -155,6 +172,7 @@ def begin_convert(metadata, status_id):
                     # TODO: enrich links, dc md
                     cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
                     '''
+                    cit_pifs = {}
                     cit_res = {}
 
                     # Merge results
@@ -165,7 +183,13 @@ def begin_convert(metadata, status_id):
                         mdf_record = toolbox.dict_merge(mdf_record,
                                                         {"files": [file_md]})
                         feedstock.append(mdf_record)
-                        # TODO: Upload PIF
+
+                    for pif in cit_pifs:
+                        with tempfile.NamedTemporaryFile() as pif_file:
+                            json.dump(pif, pif_file)
+                            cit_up_res = cit_client.upload(cit_ds_id, pif_file.name)
+                            # TODO: Check that file was uploaded successfully
+                            print("DEBUG: Citrination upload result:", cit_up_res)
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")
@@ -184,11 +208,14 @@ def begin_convert(metadata, status_id):
         # TODO: Fail everything, delete Citrine dataset, etc.
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
 
+    # Finalize Citrine dataset
+    # TODO: 0->1 to turn on real dataset ingest
+    cit_client.update_data_set(cit_ds_id, share=0)
+
     # Pass data to additional integrations
 
     # Globus Publish
     # TODO: Enable after Publish API is fixed
-    #       And after datapublication is a service in globus_sdk
     if False:  # metadata.get("globus_publish"):
         # Submit metadata
         try:
