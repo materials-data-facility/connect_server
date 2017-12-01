@@ -13,6 +13,12 @@ from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
 from mdf_refinery import ingester, omniparser, validator
+from pif_ingestor.manager import IngesterManager
+from pypif.pif import dump as pif_dump
+from pypif_sdk.util import citrination as cit_utils
+from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
+from pypif_sdk.interop.datacite import add_datacite as add_dc
+
 import requests
 from werkzeug.utils import secure_filename
 
@@ -22,7 +28,7 @@ KEY_FILES = {
     "dft": {
         "exact": [],
         "extension": [],
-        "regex": ["outcar"]
+        "regex": ["OUTCAR"]
     }
 }
 
@@ -87,19 +93,22 @@ def begin_convert(metadata, status_id):
     # List of all files, for bag
     all_files = []
 
-    # TODO: Create Citrine dataset
+    cit_manager = IngesterManager()
     cit_client = CitrinationClient(app.config["CITRINATION_API_KEY"])
-    # TODO: name=dc.title, desc=dc.desc
-    cit_ds = cit_client.create_data_set(share=0).json()
+    cit_ds = cit_client.create_data_set(
+                    name=mdf_dataset.get("dc", {}).get("title", "Untitled"),
+                    description=mdf_dataset.get("dc", {}).get("description", ""),
+                    share=0).json()
     cit_ds_id = cit_ds["id"]
     print("DEBUG: Citrine dataset ID:", cit_ds_id)
 
-    for path, dirs, files in os.walk(local_path):
+    for path, dirs, files in os.walk(os.path.abspath(local_path)):
         # Determine if dir or file is single entity
         # Dir is record
         if count_key_files(files, key_info) == 1:
             dir_file_md = []
             mdf_record = {}
+            cit_res = {}
             # Process all files into one record
             for filename in files:
                 # Get file metadata
@@ -115,24 +124,42 @@ def begin_convert(metadata, status_id):
 
                     mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
 
-            '''
             # Citrine parsing
-            cit_pifs, = generate_pifs(path,
-                                     includes=[], excludes=[])
-            cit_pifs, = get_uuids(cit_pifs, citrine_ds_id)
-            # Get MDF feedstock from PIFs
-            cit_res = pif_to_feedstock(cit_pifs)
-            # TODO: enrich links, dc md
-            cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
-            '''
-            cit_pifs = [
-                {"System": {}}
-            ]
-            cit_res = {
-                "material": {
-                    "citrine": "pif"
-                }
-            }
+            print("DEBUG: path:", path)
+            cit_pifs = cit_manager.run_extensions([os.path.abspath(path)],
+                                                  include=None, exclude=[],
+                                                  args={"quality_report":False})
+            if not isinstance(cit_pifs, list):
+                cit_pifs = [cit_pifs]
+            # Continue processing only if PIF was extracted
+            cit_full = []
+            if len(cit_pifs) > 0:
+                # Add UIDs to PIFs
+                cit_pifs = cit_utils.set_uids(cit_pifs)
+                for pif in cit_pifs:
+                    # Get PIF URL
+                    pif_land_page = {
+                                        "mdf": {
+                                            "landing_page": cit_utils.get_url(pif, cit_ds_id),
+                                            # TODO: Remove after gmetaformat updated
+                                            "links": {
+                                                "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                            },
+                                            "acl": ["public"],
+                                            "source_name": mdf_dataset["mdf"]["source_name"]
+                                        }
+                                    }
+                    # Get MDF feedstock from PIFs and add PIF URL
+                    cit_feed = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
+                    cit_res = toolbox.dict_merge(cit_res, cit_feed)
+                    # Add DataCite metadata to PIFs
+                    pif = add_dc(pif, mdf_dataset["dc"])
+
+                    cit_full.append(pif)
+
+            else:
+                # TODO: Send failed filetype to Citrine
+                pass
 
             # Merge results
             mdf_record = toolbox.dict_merge(mdf_record, cit_res)
@@ -143,11 +170,15 @@ def begin_convert(metadata, status_id):
                                                 {"files": dir_file_md})
                 feedstock.append(mdf_record)
 
-                for pif in cit_pifs:
+                for one_pif in cit_full:
                     with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
-                        json.dump(pif, pif_file)
-                        cit_client.upload(cit_ds_id, pif_file.name)
-                        # TODO: Check that file was uploaded successfully
+                        pif_dump(one_pif, pif_file)
+                        pif_file.seek(0)
+                        up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                        if up_res["success"]:
+                            print("DEBUG: Citrine upload success")
+                        else:
+                            print("DEBUG: Citrine upload failure, error", up_res.get("status"))
 
         # File is record
         else:
@@ -162,17 +193,34 @@ def begin_convert(metadata, status_id):
                     mdf_res = omniparser.omniparse(data_file)
                     data_file.seek(0)
 
-                    '''
-                    # Citrine parsing
-                    cit_pifs, = generate_pifs(os.path.join(path, filename),
-                                             includes=[], excludes=[])
-                    cit_pifs, = get_uuids(cit_pifs, citrine_ds_id)
-                    # Get MDF feedstock from PIFs
-                    cit_res = pif_to_feedstock(cit_pifs)
-                    # TODO: enrich links, dc md
-                    cit_pifs = enrich_pifs(cit_pifs, links, dc_metadata)
-                    '''
-                    cit_pifs = {}
+                # Citrine parsing
+                cit_pifs = cit_manager.run_extensions(os.path.abspath(os.path.join(path, 
+                                                                                   filename)),
+                                                      include=None, exclude=[])
+                if not isinstance(cit_pifs, list):
+                    cit_pifs = [cit_pifs]
+                # Continue processing only if PIF was extracted
+                cit_full = []
+                if len(cit_pifs) > 0:
+                    # Add UIDs to PIFs
+                    cit_pifs = cit_utils.set_uids(cit_pifs)
+                    for pif in cit_pifs:
+                        # Get PIF URL
+                        pif_land_page = {
+                                            "mdf": {
+                                                "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                            }
+                                        }
+                        # Get MDF feedstock from PIFs and add PIF URL
+                        cit_feed = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
+                        cit_res = toolbox.dict_merge(cit_res, cit_feed)
+                        # Add DataCite metadata to PIFs
+                        pif = add_dc(pif, mdf_dataset["dc"])
+
+                        cit_full.append(pif)
+
+                else:
+                    # TODO: Send failed filetype to Citrine
                     cit_res = {}
 
                     # Merge results
@@ -184,12 +232,16 @@ def begin_convert(metadata, status_id):
                                                         {"files": [file_md]})
                         feedstock.append(mdf_record)
 
-                    for pif in cit_pifs:
-                        with tempfile.NamedTemporaryFile() as pif_file:
-                            json.dump(pif, pif_file)
-                            cit_up_res = cit_client.upload(cit_ds_id, pif_file.name)
-                            # TODO: Check that file was uploaded successfully
-                            print("DEBUG: Citrination upload result:", cit_up_res)
+                        for one_pif in cit_full:
+                            with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                                pif_dump(one_pif, pif_file)
+                                pif_file.seek(0)
+                                up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                                if up_res["success"]:
+                                    print("DEBUG: Citrine upload success")
+                                else:
+                                    print("DEBUG: Citrine upload failure, error",
+                                          up_res.get("status"))
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")
@@ -209,8 +261,8 @@ def begin_convert(metadata, status_id):
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
 
     # Finalize Citrine dataset
-    # TODO: 0->1 to turn on real dataset ingest
-    cit_client.update_data_set(cit_ds_id, share=0)
+    # TODO: Turn on public dataset ingest
+    #cit_client.update_data_set(cit_ds_id, share=1)
 
     # Pass data to additional integrations
 
