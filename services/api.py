@@ -128,7 +128,7 @@ def begin_convert(metadata, status_id):
             print("DEBUG: path:", path)
             cit_pifs = cit_manager.run_extensions([os.path.abspath(path)],
                                                   include=None, exclude=[],
-                                                  args={"quality_report":False})
+                                                  args={"quality_report": False})
             if not isinstance(cit_pifs, list):
                 cit_pifs = [cit_pifs]
             # Continue processing only if PIF was extracted
@@ -188,16 +188,14 @@ def begin_convert(metadata, status_id):
                                             backup_path=os.path.join(backup_path, path, filename))
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_res = omniparser.omniparse(data_file)
+                    mdf_record = omniparser.omniparse(data_file)
                     data_file.seek(0)
-
-                    mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
 
                 # Citrine parsing
                 print("DEBUG: path:", path)
                 cit_pifs = cit_manager.run_extensions([os.path.abspath(path)],
                                                       include=None, exclude=[],
-                                                      args={"quality_report":False})
+                                                      args={"quality_report": False})
                 if not isinstance(cit_pifs, list):
                     cit_pifs = [cit_pifs]
                 # Continue processing only if PIF was extracted
@@ -212,7 +210,8 @@ def begin_convert(metadata, status_id):
                                                 "landing_page": cit_utils.get_url(pif, cit_ds_id),
                                                 # TODO: Remove after gmetaformat updated
                                                 "links": {
-                                                    "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                                    "landing_page": cit_utils.get_url(
+                                                                        pif, cit_ds_id)
                                                 },
                                                 "acl": ["public"],
                                                 "source_name": mdf_dataset["mdf"]["source_name"]
@@ -229,24 +228,24 @@ def begin_convert(metadata, status_id):
                     # TODO: Send failed filetype to Citrine
                     pass
 
-            # Merge results
-            mdf_record = toolbox.dict_merge(mdf_record, cit_res)
+                # Merge results
+                mdf_record = toolbox.dict_merge(mdf_record, cit_res)
 
-            # If data was parsed, save record
-            if mdf_record:
-                mdf_record = toolbox.dict_merge(mdf_record,
-                                                {"files": dir_file_md})
-                feedstock.append(mdf_record)
+                # If data was parsed, save record
+                if mdf_record:
+                    mdf_record = toolbox.dict_merge(mdf_record,
+                                                    {"files": dir_file_md})
+                    feedstock.append(mdf_record)
 
-                for one_pif in cit_full:
-                    with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
-                        pif_dump(one_pif, pif_file)
-                        pif_file.seek(0)
-                        up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
-                        if up_res["success"]:
-                            print("DEBUG: Citrine upload success")
-                        else:
-                            print("DEBUG: Citrine upload failure, error", up_res.get("status"))
+                    for one_pif in cit_full:
+                        with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                            pif_dump(one_pif, pif_file)
+                            pif_file.seek(0)
+                            up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                            if up_res["success"]:
+                                print("DEBUG: Citrine upload success")
+                            else:
+                                print("DEBUG: Citrine upload failure, error", up_res.get("status"))
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")
@@ -267,7 +266,7 @@ def begin_convert(metadata, status_id):
 
     # Finalize Citrine dataset
     # TODO: Turn on public dataset ingest
-    #cit_client.update_data_set(cit_ds_id, share=1)
+    # cit_client.update_data_set(cit_ds_id, share=1)
 
     # Pass data to additional integrations
 
@@ -436,7 +435,7 @@ def accept_ingest():
         })
 
 
-def begin_ingest(base_feed_path, status_id):
+def begin_ingest(base_stock_path, status_id):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -449,42 +448,41 @@ def begin_ingest(base_feed_path, status_id):
     search_client = toolbox.confidential_login(creds)["search_ingest"]
     final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
 
-    # Finalize feedstock
-    with open(base_feed_path, 'r') as base_stock, open(final_feed_path, 'w') as final_stock:
-        # Finalize dataset entry
-        # TODO: Remove after Validator is finished
-        json.dump(json.loads(base_stock.readline()), final_stock)
-#        dataset_result = validator.validate_dataset(json.loads(base_stock.readline()),
-#                                                     finalize=True)
-#        if not dataset_result["success"]:
-            # TODO: Update status - dataset validation failed
-#            return jsonify(dataset_result)
-#        json.dump(dataset_result["valid"], final_stock)
-        final_stock.write("\n")
+    # Validate feedstock
+    val = validator.Validator()
+    with open(base_stock_path, "r") as base_stock:
+        # Validate dataset entry
+        ds_res = val.start_dataset(json.loads(next(base_stock)))
+        if not ds_res["success"]:
+           # TODO: Update status - dataset validation failed
+            raise Exception("ERROR:" + str(ds_res))
 
-        # Finalize records
+        # Validate records
         for rc in base_stock:
             record = json.loads(rc)
-            # TODO: Remove after Validator finished
-            json.dump(record, final_stock)
-#            record_result = validator.validate_record(record, finalize=True)
-#            if not record_result["success"]:
-                # TODO: Update status - record validation failed
-#                return jsonify(record_result)
-#            json.dump(record_result["valid"], final_stock)
-            final_stock.write("\n")
+            rc_res = val.add_record(record)
+            if not rc_res["success"]:
+               # TODO: Update status - record validation failed
+                raise Exception("ERROR:" + str(rc_res))
+    os.remove(base_stock_path)
+
     # TODO: Update status - validation passed
-    print("DEBUG: Validation 'passed'")
+    print("DEBUG: Validation success")
+    # Write out feedstock
+    with open(final_feed_path, 'w') as final_stock:
+        for entry in val.get_finished_dataset():
+            json.dump(entry, final_stock)
+            final_stock.write("\n")
 
     # Ingest finalized feedstock
     try:
         ingester.ingest(search_client, final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
-        return jsonify({
+        raise Exception("ERROR:" + str({
             "success": False,
             "error": repr(e)
-            })
+            }))
     # TODO: Update status - ingest successful, processing complete
     print("DEBUG: Ingest success, processing complete")
     return {
