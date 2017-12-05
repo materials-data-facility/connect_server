@@ -186,17 +186,18 @@ def begin_convert(metadata, status_id):
                 # Get file metadata
                 file_md = get_file_metadata(file_path=os.path.join(path, filename),
                                             backup_path=os.path.join(backup_path, path, filename))
-                # Save file metadata
-                all_files.append(file_md)
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
                     mdf_res = omniparser.omniparse(data_file)
                     data_file.seek(0)
 
+                    mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
+
                 # Citrine parsing
-                cit_pifs = cit_manager.run_extensions(os.path.abspath(os.path.join(path, 
-                                                                                   filename)),
-                                                      include=None, exclude=[])
+                print("DEBUG: path:", path)
+                cit_pifs = cit_manager.run_extensions([os.path.abspath(path)],
+                                                      include=None, exclude=[],
+                                                      args={"quality_report":False})
                 if not isinstance(cit_pifs, list):
                     cit_pifs = [cit_pifs]
                 # Continue processing only if PIF was extracted
@@ -208,12 +209,17 @@ def begin_convert(metadata, status_id):
                         # Get PIF URL
                         pif_land_page = {
                                             "mdf": {
-                                                "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                                "landing_page": cit_utils.get_url(pif, cit_ds_id),
+                                                # TODO: Remove after gmetaformat updated
+                                                "links": {
+                                                    "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                                },
+                                                "acl": ["public"],
+                                                "source_name": mdf_dataset["mdf"]["source_name"]
                                             }
                                         }
                         # Get MDF feedstock from PIFs and add PIF URL
-                        cit_feed = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
-                        cit_res = toolbox.dict_merge(cit_res, cit_feed)
+                        cit_res = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
                         # Add DataCite metadata to PIFs
                         pif = add_dc(pif, mdf_dataset["dc"])
 
@@ -221,27 +227,26 @@ def begin_convert(metadata, status_id):
 
                 else:
                     # TODO: Send failed filetype to Citrine
-                    cit_res = {}
+                    pass
 
-                    # Merge results
-                    mdf_record = toolbox.dict_merge(mdf_res, cit_res)
+            # Merge results
+            mdf_record = toolbox.dict_merge(mdf_record, cit_res)
 
-                    # If data was parsed, save record
-                    if mdf_record:
-                        mdf_record = toolbox.dict_merge(mdf_record,
-                                                        {"files": [file_md]})
-                        feedstock.append(mdf_record)
+            # If data was parsed, save record
+            if mdf_record:
+                mdf_record = toolbox.dict_merge(mdf_record,
+                                                {"files": dir_file_md})
+                feedstock.append(mdf_record)
 
-                        for one_pif in cit_full:
-                            with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
-                                pif_dump(one_pif, pif_file)
-                                pif_file.seek(0)
-                                up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
-                                if up_res["success"]:
-                                    print("DEBUG: Citrine upload success")
-                                else:
-                                    print("DEBUG: Citrine upload failure, error",
-                                          up_res.get("status"))
+                for one_pif in cit_full:
+                    with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                        pif_dump(one_pif, pif_file)
+                        pif_file.seek(0)
+                        up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                        if up_res["success"]:
+                            print("DEBUG: Citrine upload success")
+                        else:
+                            print("DEBUG: Citrine upload failure, error", up_res.get("status"))
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")

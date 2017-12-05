@@ -19,14 +19,13 @@ class Validator:
             (success check)
         gen = get_finished_dataset()
     """
-    def __init__(self, schema_path=None, mdf_finalize=False):
+    def __init__(self, schema_path=None):
         self.__dataset = None  # Serves as initialized flag
         self.__tempfile = None
         self.__scroll_id = None
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
         self.__indexed_files = []
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
-        self.__finalize = mdf_finalize  # Flag - running for ingester?
         if schema_path:
             self.__schema_dir = schema_path
         else:
@@ -86,125 +85,84 @@ class Validator:
             schema = json.load(schema_file)
         # Load MDF block
         with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
-            schema["mdf"] = json.load(mdf_file)
+            schema["properties"]["mdf"] = json.load(mdf_file)
 
-        # Add any missing blocks
-        # Correct type errors
-        if not ds_md.get("dc") or not isinstance(ds_md["dc"], dict):
-            ds_md["dc"] = {}
+#        if not ds_md.get("dc") or not isinstance(ds_md["dc"], dict):
+#            ds_md["dc"] = {}
         if not ds_md.get("mdf") or not isinstance(ds_md["mdf"], dict):
             ds_md["mdf"] = {}
         if not ds_md.get("file_bags") or not isinstance(ds_md["file_bags"], dict):
             ds_md["file_bags"] = {}
-        if not ds_md.get("publications") or not isinstance(ds_md["dc"], list):
-            ds_md["publications"] = []
-        if not ds_md.get("mrr") or not isinstance(ds_md["mrr"], dict):
-            ds_md["mrr"] = {}
+#        if not ds_md.get("publications") or not isinstance(ds_md["publications"], list):
+#            ds_md["publications"] = []
+#        if not ds_md.get("mrr") or not isinstance(ds_md["mrr"], dict):
+#            ds_md["mrr"] = {}
 
         # Add fields
-        if self.__finalize:
-            # Finalization fields are computed
-            # TODO: dc?
+        # TODO: dc?
 
-            # BLOCK: mdf
-            # mdf_id
-            ds_md["mdf"]["mdf_id"] = str(ObjectId())
+        # BLOCK: mdf
+        # mdf_id
+        ds_md["mdf"]["mdf_id"] = str(ObjectId())
 
-            # scroll_id
-            self.__scroll_id = 0
-            ds_md["mdf"]["scroll_id"] = self.__scroll_id
-            self.__scroll_id += 1
+        # scroll_id
+        self.__scroll_id = 0
+        ds_md["mdf"]["scroll_id"] = self.__scroll_id
+        self.__scroll_id += 1
 
-            # parent_id
-            # Not Implemented
+        # parent_id
+        # Not Implemented
 
-            # ingest_date
-            ds_md["mdf"]["ingest_date"] = self.__ingest_date
+        # ingest_date
+        ds_md["mdf"]["ingest_date"] = self.__ingest_date
 
-            # resource_type
-            ds_md["mdf"]["resource_type"] = "dataset"
+        # resource_type
+        ds_md["mdf"]["resource_type"] = "dataset"
 
-            # source_name
-            if not ds_md["mdf"].get("source_name"):
-                try:
-                    ds_md["mdf"]["source_name"] = self.__make_source_name(
-                                                    ds_md["dc"]["titles"][0]["title"])
-                except (KeyError, ValueError):
-                    # DC title is required, ds_md will fail validation
-                    # Doesn't really matter what this is
-                    ds_md["mdf"]["source_name"] = "unknown"
+        # source_name
+        if not ds_md["mdf"].get("source_name"):
+            try:
+                ds_md["mdf"]["source_name"] = self.__make_source_name(
+                                                ds_md["dc"]["titles"][0]["title"])
+            except (KeyError, ValueError, IndexError):
+                # DC title is required, ds_md will fail validation
+                # Doesn't really matter what this is
+                ds_md["mdf"]["source_name"] = "unknown"
 
-            # acl
-            if not ds_md["mdf"].get("acl"):
-                ds_md["mdf"]["acl"] = ["public"]
+        # acl
+        if not ds_md["mdf"].get("acl"):
+            ds_md["mdf"]["acl"] = ["public"]
 
-            # version
-            if not ds_md["mdf"].get("version"):
-                ds_md["mdf"]["version"] = 1
+        # version
+        if not ds_md["mdf"].get("version"):
+            ds_md["mdf"]["version"] = 1
 
-            # BLOCK: file_bags
-            # None?
+        # BLOCK: file_bags
+        # None?
 
-            # BLOCK: publications
-            new_pubs = []
-            cref = Crossref()
-            for doi in ds_md["publications"]:
-                # If doi refers to a DOI
-                if isinstance(doi, str):
-                    pub_md = cref.doi(doi)
-                    # doi call will return None if not found
-                    if isinstance(pub_md, dict):
-                        new_pubs.append(pub_md)
-                    # Maintain DOI if not found
-                    else:
-                        new_pubs.append({"doi": doi})
-                # If is dict, assume is metadata
-                elif isinstance(doi, dict):
-                    new_pubs.append(doi)
-                # Else, is not appropriate data and is discarded
+        # BLOCK: publications
+        new_pubs = []
+        cref = Crossref()
+        for doi in ds_md.get("publications", []):
+            # If doi refers to a DOI
+            if isinstance(doi, str):
+                pub_md = cref.doi(doi)
+                # doi call will return None if not found
+                if isinstance(pub_md, dict):
+                    new_pubs.append(pub_md)
+                # Maintain DOI if not found
+                else:
+                    new_pubs.append({"doi": doi})
+            # If is dict, assume is metadata
+            elif isinstance(doi, dict):
+                new_pubs.append(doi)
+            # Else, is not appropriate data and is discarded
 
+        if new_pubs:
             ds_md["publications"] = new_pubs
 
-            # BLOCK: mrr
-            # None?
-
-        else:
-            # Add placeholder data instead
-            # TODO: dc?
-
-            # BLOCK: mdf
-            # mdf_id
-            ds_md["mdf"]["mdf_id"] = "-1"
-
-            # scroll_id
-            ds_md["mdf"]["scroll_id"] = -1
-
-            # parent_id
-            # Not Implemented
-
-            # ingest_date
-            ds_md["mdf"]["ingest_date"] = datetime.utcfromtimestamp(0).isoformat("T") + "Z"
-
-            # resource_type
-            ds_md["mdf"]["resource_type"] = "dataset"
-
-            # source_name
-            if not ds_md["mdf"].get("source_name"):
-                try:
-                    ds_md["mdf"]["source_name"] = self.__make_source_name(
-                                                    ds_md["dc"]["titles"][0]["title"])
-                except (KeyError, ValueError):
-                    # DC title is required, ds_md will fail validation
-                    # Doesn't really matter what this is
-                    ds_md["mdf"]["source_name"] = "unknown"
-
-            # acl
-            if not ds_md["mdf"].get("acl"):
-                ds_md["mdf"]["acl"] = ["public"]
-
-            # version
-            if not ds_md["mdf"].get("version"):
-                ds_md["mdf"]["version"] = 1
+        # BLOCK: mrr
+        # None?
 
         # Validate against schema
         try:
@@ -217,9 +175,10 @@ class Validator:
                 }
 
         # Create temporary file for records
-        self.__tempfile = TemporaryFile()
+        self.__tempfile = TemporaryFile(mode="w+")
 
         # Save dataset metadata
+        # Also ensure metadata is JSON-serializable
         self.__dataset = json.loads(json.dumps(ds_md))
 
         # Return results
@@ -256,7 +215,7 @@ class Validator:
             schema = json.load(schema_file)
         # Load MDF block
         with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
-            schema["mdf"] = json.load(mdf_file)
+            schema["properties"]["mdf"] = json.load(mdf_file)
 
         # Add any missing blocks
         if not rc_md.get("mdf"):
@@ -269,103 +228,66 @@ class Validator:
             rc_md["material"] = {}
 
         # Add fields
-        if self.__finalize:
-            # Finalization fields are computed
-            # BLOCK: mdf
-            # source_name
-            rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
+        # BLOCK: mdf
+        # source_name
+        rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
 
-            # mdf_id
-            rc_md["mdf"]["mdf_id"] = str(ObjectId())
+        # mdf_id
+        rc_md["mdf"]["mdf_id"] = str(ObjectId())
 
-            # scroll_id
-            rc_md["mdf"]["scroll_id"] = self.__scroll_id
-            self.__scroll_id += 1
+        # scroll_id
+        rc_md["mdf"]["scroll_id"] = self.__scroll_id
+        self.__scroll_id += 1
 
-            # parent_id
-            rc_md["mdf"]["parent_id"] = self.__dataset["mdf"]["mdf_id"]
+        # parent_id
+        rc_md["mdf"]["parent_id"] = self.__dataset["mdf"]["mdf_id"]
 
-            # ingest_date
-            rc_md["mdf"]["ingest_date"] = self.__ingest_date
+        # ingest_date
+        rc_md["mdf"]["ingest_date"] = self.__ingest_date
 
-            # resource_type
-            rc_md["mdf"]["resource_type"] = "record"
+        # resource_type
+        rc_md["mdf"]["resource_type"] = "record"
 
-            # acl
-            if not rc_md["mdf"].get("acl"):
-                rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
+        # acl
+        if not rc_md["mdf"].get("acl"):
+            rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
 
-            # landing_page
-            if not rc_md["mdf"].get("landing_page"):
-                rc_md["mdf"]["landing_page"] = (self.__dataset["mdf"]["landing_page"]
-                                                + "#"
-                                                + str(rc_md["mdf"]["scroll_id"]))
+        # landing_page
+        if not rc_md["mdf"].get("landing_page"):
+            rc_md["mdf"]["landing_page"] = (self.__dataset["mdf"]["landing_page"]
+                                            + "#"
+                                            + str(rc_md["mdf"]["scroll_id"]))
 
-            # BLOCK: files
-            # Add file data to dataset
-            if rc_md["files"]:
-                self.__indexed_files += rc_md["files"]
+        # BLOCK: files
+        # Add file data to dataset
+        if rc_md["files"]:
+            self.__indexed_files += rc_md["files"]
 
-            # BLOCK: material
-            # elements
-            if rc_md["material"].get("composition"):
-                composition = rc_md["material"]["composition"].replace("and", "")
-                # Currently deprecated
+        # BLOCK: material
+        # elements
+        if rc_md["material"].get("composition"):
+            composition = rc_md["material"]["composition"].replace("and", "")
+            # Currently deprecated
 #                for element in DICT_OF_ALL_ELEMENTS.keys():
 #                    composition = re.sub("(?i)"+element,
 #                                         DICT_OF_ALL_ELEMENTS[element], composition)
-                str_of_elem = ""
-                for char in list(composition):
-                    if char.isupper():  # Start of new element symbol
-                        str_of_elem += " " + char
-                    elif char.islower():  # Continuation of symbol
-                        str_of_elem += char
-                    # Anything else is not an element (numbers, whitespace, etc.)
+            str_of_elem = ""
+            for char in list(composition):
+                if char.isupper():  # Start of new element symbol
+                    str_of_elem += " " + char
+                elif char.islower():  # Continuation of symbol
+                    str_of_elem += char
+                # Anything else is not an element (numbers, whitespace, etc.)
 
-                # Split elements in string (on whitespace), make unique and JSON-serializable
-                list_of_elem = list(set(str_of_elem.split()))
-                # Currently deprecated
-                # If any "element" isn't in the periodic table,
-                # the composition is likely not a chemical formula and should not be parsed
+            # Split elements in string (on whitespace), make unique and JSON-serializable
+            list_of_elem = list(set(str_of_elem.split()))
+            # Currently deprecated
+            # If any "element" isn't in the periodic table,
+            # the composition is likely not a chemical formula and should not be parsed
 #                if all([elem in DICT_OF_ALL_ELEMENTS.values() for elem in list_of_elem]):
 #                    record["elements"] = list_of_elem
 
-                rc_md["material"]["elements"] = list_of_elem
-
-        else:
-            # Add placeholder data instead
-            # BLOCK: mdf
-            # source_name
-            rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
-
-            # mdf_id
-            rc_md["mdf"]["mdf_id"] = "-1"
-
-            # scroll_id
-            rc_md["mdf"]["scroll_id"] = -1
-
-            # parent_id
-            rc_md["mdf"]["parent_id"] = self.__dataset["mdf"]["mdf_id"]
-
-            # ingest_date
-            rc_md["mdf"]["ingest_date"] = datetime.utcfromtimestamp(0).isoformat("T") + "Z"
-
-            # resource_type
-            rc_md["mdf"]["resource_type"] = "record"
-
-            # acl
-            if not rc_md["mdf"].get("acl"):
-                rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
-
-            # landing_page
-            if not rc_md["mdf"].get("landing_page"):
-                rc_md["mdf"]["landing_page"] = (self.__dataset["mdf"]["landing_page"]
-                                                + "#"
-                                                + rc_md["mdf"]["scroll_id"])
-
-            # version
-            if not rc_md["mdf"].get("version"):
-                rc_md["mdf"]["version"] = self.__dataset["mdf"]["version"]
+            rc_md["material"]["elements"] = list_of_elem
 
         # Validate against schema
         try:

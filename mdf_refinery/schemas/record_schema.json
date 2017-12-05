@@ -77,8 +77,7 @@
                 }
             }
         },
-        "additionalProperties": false,
-        "required": []
+        "additionalProperties": true
     }
 },
 "additionalProperties": true,

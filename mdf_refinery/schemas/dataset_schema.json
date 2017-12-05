@@ -3,49 +3,50 @@
 "title": "MDF Dataset",
 "description": "Schema for dataset entry in MDF.",
 "type": "object",
+"definitions": {
+    "doi": {
+        "description": "Digital object identifier.",
+        "type": "string",
+        "pattern": "10\\..+/.+"
+    },
+    "year": {
+        "type": "string"
+    },
+    "language": {
+        "description": "Allowed values are taken from IETF BCP 47, ISO 639-1 language codes.",
+        "type": "string"
+    },
+    "uri": {
+        "description": "For adding future URI validation.",
+        "type": "string"
+    },
+    "nameIdentifiers": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "nameIdentifier": {
+                    "type": "string"
+                },
+                "nameIdentifierScheme": {
+                    "type": "string"
+                },
+                "schemeURI": {
+                    "$ref": "#/definitions/uri"
+                }
+            },
+            "additionalProperties": false,
+            "required": [
+                "nameIdentifier",
+                "nameIdentifierScheme"
+            ]
+        }
+    }
+},
 "properties": {
     "dc": {
         "additionalProperties": false,
-        "definitions": {
-            "doi": {
-                "description": "Digital object identifier.",
-                "type": "string",
-                "pattern": "10\\..+/.+"
-            },
-            "year": {
-                "type": "string"
-            },
-            "language": {
-                "description": "Allowed values are taken from IETF BCP 47, ISO 639-1 language codes.",
-                "type": "string"
-            },
-            "uri": {
-                "description": "For adding future URI validation.",
-                "type": "string"
-            },
-            "nameIdentifiers": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "nameIdentifier": {
-                            "type": "string"
-                        },
-                        "nameIdentifierScheme": {
-                            "type": "string"
-                        },
-                        "schemeURI": {
-                            "$ref": "#/dc/definitions/uri"
-                        }
-                    },
-                    "additionalProperties": false,
-                    "required": [
-                        "nameIdentifier",
-                        "nameIdentifierScheme"
-                    ]
-                }
-            }
-        },
+
         "type": "object",
         "properties": {
             "identifier": {
@@ -53,7 +54,7 @@
                 "type": "object",
                 "properties": {
                     "identifier": {
-                        "$ref": "#/dc/definitions/doi"
+                        "$ref": "#/definitions/doi"
                     },
                     "identifierType": {
                         "enum": [
@@ -75,7 +76,7 @@
                         "type": "string"
                     },
                     "nameIdentifiers": {
-                        "$ref": "#/dc/definitions/nameIdentifiers"
+                        "$ref": "#/definitions/nameIdentifiers"
                     },
                     "affiliations": {
                         "type": "array",
@@ -114,7 +115,7 @@
                             ]
                         },
                         "lang": {
-                            "$ref": "#/dc/definitions/language"
+                            "$ref": "#/definitions/language"
                         }
                     },
                     "additionalProperties": false,
@@ -130,7 +131,7 @@
             },
             "publicationYear": {
                 "description": "Year when the data is made publicly available. If an embargo period has been in effect, use the date when the embargo period ends. In the case of datasets, \"publish\" is understood to mean making the data available on a specific date to the community of researchers. If there is no standard publication year value, use the date that would be preferred from a citation perspective.",
-                "$ref": "#/dc/definitions/year"
+                "$ref": "#/definitions/year"
             },
             "subjects": {
                 "type": "array",
@@ -145,13 +146,13 @@
                             "type": "string"
                         },
                         "schemeURI": {
-                            "$ref": "#/dc/definitions/uri"
+                            "$ref": "#/definitions/uri"
                         },
                         "valueURI": {
-                            "$ref": "#/dc/definitions/uri"
+                            "$ref": "#/definitions/uri"
                         },
                         "lang": {
-                            "$ref": "#/dc/definitions/language"
+                            "$ref": "#/definitions/language"
                         }
                     },
                     "additionalProperties": false,
@@ -193,7 +194,7 @@
                             "type": "string"
                         },
                         "nameIdentifiers": {
-                            "$ref": "#/dc/definitions/nameIdentifiers"
+                            "$ref": "#/definitions/nameIdentifiers"
                         },
                         "affiliations": {
                             "type": "array",
@@ -245,7 +246,7 @@
             },
             "language": {
                 "description": "Primary language of the resource.",
-                "$ref": "#/dc/definitions/language"
+                "$ref": "#/definitions/language"
             },
             "resourceType": {
                 "description": "The type of a resource. You may enter an additional free text description. The format is open, but the preferred format is a single term of some detail so that a pair can be formed with the sub-property.",
@@ -361,7 +362,7 @@
                             "type": "string"
                         },
                         "schemeURI": {
-                            "$ref": "#/dc/definitions/uri"
+                            "$ref": "#/definitions/uri"
                         }
                     },
                     "additionalProperties": false,
@@ -397,7 +398,7 @@
                     "type": "object",
                     "properties": {
                         "rightsURI": {
-                            "$ref": "#/dc/definitions/uri"
+                            "$ref": "#/definitions/uri"
                         },
                         "rights": {
                             "type": "string"
@@ -430,7 +431,7 @@
                             ]
                         },
                         "lang": {
-                            "$ref": "#/dc/definitions/language"
+                            "$ref": "#/definitions/language"
                         }
                     },
                     "additionalProperties": false,
@@ -481,7 +482,7 @@
                                     "type": "string"
                                 },
                                 "awardURI": {
-                                    "$ref": "#/dc/definitions/uri"
+                                    "$ref": "#/definitions/uri"
                                 }
                             },
                             "additionalProperties": false,
@@ -623,27 +624,18 @@
                             "description": "The bag of indexed dataset files."
                         }
                     },
-                    "additionalProperties": false,
-                    "required": ["indexed"]
+                    "additionalProperties": false
                 }
             }
         },
-        "additionalProperties": false,
-        "required": ["indexed"]
+        "additionalProperties": false
     },
     "publications": {
         "type": "array",
         "description": "A list of publications associated with the dataset.",
         "items": {
-            "oneOf": [{
-                "type": "string"
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "$ref": "#/dc"
-                }
-            }]
+            "type": "object",
+            "$ref": "#/dc"
         }
     },
     "mrr": {
@@ -690,8 +682,6 @@
 "required": [
     "dc",
     "mdf",
-    "file_bags",
-    "publications",
-    "mrr"
+    "file_bags"
 ]
 }
