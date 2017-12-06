@@ -93,12 +93,24 @@ def begin_convert(metadata, status_id):
     # List of all files, for bag
     all_files = []
 
+    # Citrination setup
     cit_manager = IngesterManager()
     cit_client = CitrinationClient(app.config["CITRINATION_API_KEY"])
-    cit_ds = cit_client.create_data_set(
-                    name=mdf_dataset.get("dc", {}).get("title", "Untitled"),
-                    description=mdf_dataset.get("dc", {}).get("description", ""),
-                    share=0).json()
+    # Get title and description
+    try:
+        cit_title = mdf_dataset["dc"]["titles"][0]["title"]
+    except (KeyError, IndexError):
+        cit_title = "Untitled"
+    try:
+        cit_desc = " ".join([desc["description"]
+                            for desc in mdf_dataset["dc"]["descriptions"]])
+        if not cit_desc:
+            raise KeyError
+    except (KeyError, IndexError):
+        cit_desc = None
+    cit_ds = cit_client.create_data_set(name=cit_title,
+                                        description=cit_desc,
+                                        share=0).json()
     cit_ds_id = cit_ds["id"]
     print("DEBUG: Citrine dataset ID:", cit_ds_id)
 
@@ -140,13 +152,7 @@ def begin_convert(metadata, status_id):
                     # Get PIF URL
                     pif_land_page = {
                                         "mdf": {
-                                            "landing_page": cit_utils.get_url(pif, cit_ds_id),
-                                            # TODO: Remove after gmetaformat updated
-                                            "links": {
-                                                "landing_page": cit_utils.get_url(pif, cit_ds_id)
-                                            },
-                                            "acl": ["public"],
-                                            "source_name": mdf_dataset["mdf"]["source_name"]
+                                            "landing_page": cit_utils.get_url(pif, cit_ds_id)
                                         }
                                     }
                     # Get MDF feedstock from PIFs and add PIF URL
@@ -207,14 +213,7 @@ def begin_convert(metadata, status_id):
                         # Get PIF URL
                         pif_land_page = {
                                             "mdf": {
-                                                "landing_page": cit_utils.get_url(pif, cit_ds_id),
-                                                # TODO: Remove after gmetaformat updated
-                                                "links": {
-                                                    "landing_page": cit_utils.get_url(
-                                                                        pif, cit_ds_id)
-                                                },
-                                                "acl": ["public"],
-                                                "source_name": mdf_dataset["mdf"]["source_name"]
+                                                "landing_page": cit_utils.get_url(pif, cit_ds_id)
                                             }
                                         }
                         # Get MDF feedstock from PIFs and add PIF URL
