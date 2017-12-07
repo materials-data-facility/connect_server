@@ -124,8 +124,12 @@ def begin_convert(metadata, status_id):
             # Process all files into one record
             for filename in files:
                 # Get file metadata
-                file_md = get_file_metadata(file_path=os.path.join(path, filename),
-                                            backup_path=os.path.join(backup_path, path, filename))
+                file_md = get_file_metadata(
+                                file_path=os.path.join(path, filename),
+                                backup_path=os.path.join(
+                                                backup_path,
+                                                path.replace(os.path.abspath(local_path), ""),
+                                                filename))
                 # Save file metadata
                 all_files.append(file_md)
                 dir_file_md.append(file_md)
@@ -154,7 +158,7 @@ def begin_convert(metadata, status_id):
                                         "mdf": {
                                             "landing_page": cit_utils.get_url(pif, cit_ds_id)
                                         }
-                                    }
+                                    } if cit_ds_id else {}
                     # Get MDF feedstock from PIFs and add PIF URL
                     cit_feed = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
                     cit_res = toolbox.dict_merge(cit_res, cit_feed)
@@ -215,7 +219,7 @@ def begin_convert(metadata, status_id):
                                             "mdf": {
                                                 "landing_page": cit_utils.get_url(pif, cit_ds_id)
                                             }
-                                        }
+                                        } if cit_ds_id else {}
                         # Get MDF feedstock from PIFs and add PIF URL
                         cit_res = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
                         # Add DataCite metadata to PIFs
