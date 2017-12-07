@@ -403,13 +403,14 @@ def get_file_metadata(file_path, backup_path):
 def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     # Submit metadata
     try:
-        pub_md = get_publish_metadata(metadata)
-        md_result = publish_client.push_metadata(pub_md["collection"], pub_md)
+        pub_md = get_publish_metadata(metadata.get("dc", {}))
+        md_result = publish_client.push_metadata(pub_md["collection_id"], pub_md)
         pub_endpoint = md_result['globus.shared_endpoint.name']
         pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
         submission_id = md_result["id"]
     except Exception as e:
         # TODO: Raise exception - not Published due to bad metadata
+        print("DEBUG: Publish push failed")
         raise
     # Transfer data
     try:
@@ -435,8 +436,8 @@ def get_publish_metadata(dc_metadata):
                                for title in dc_metadata.get("titles", [])]),
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": [author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])],
+        "dc.contributor.author": ", ".join([author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])]),
         "collection_id": PUBLISH_COLLECTION,
         "accept_license": True
     }
