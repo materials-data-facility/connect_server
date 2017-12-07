@@ -12,6 +12,9 @@
         "publicationYear": "2017",
         "creators": [{
             "creatorName": "Alice Smith"
+        },
+        {
+            "creatorName": "Carl Carlson"
         }],
         "titles": [{
             "title": "Alloy DB (test)"
@@ -25,5 +28,8 @@
             "resourceTypeGeneral": "Dataset"
         }
     },
-    "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/citrine_mdf_demo/alloy.pbe/BC/"
+    "data": {
+        "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/citrine_mdf_demo/alloy.pbe/BC/"
+    },
+    "services": ["globus_publish"]
 }
