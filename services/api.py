@@ -45,7 +45,6 @@ def accept_convert():
     status_id = str(ObjectId())
     # TODO: Register status ID
     print("DEBUG: Status ID created")
-    metadata["mdf_status_id"] = status_id
     converter = Thread(target=begin_convert, name="converter_thread", args=(metadata, status_id))
     converter.start()
     return jsonify({
@@ -54,7 +53,7 @@ def accept_convert():
         })
 
 
-def begin_convert(metadata, status_id):
+def begin_convert(mdf_dataset, status_id):
     """Pull, back up, and convert metadata."""
     # Setup
     creds = {
@@ -67,8 +66,6 @@ def begin_convert(metadata, status_id):
     mdf_transfer_client = clients["transfer"]
 #    globus_publish_client = clients["publish"]
 
-    status_id = metadata["mdf_status_id"]
-
     # Download data locally, back up on MDF resources
     dl_res = download_and_backup(mdf_transfer_client, metadata)
     if dl_res["success"]:
@@ -80,8 +77,7 @@ def begin_convert(metadata, status_id):
     print("DEBUG: Data downloaded")
 
     print("DEBUG: Conversions started")
-    # TODO: Parse out dataset entry
-    mdf_dataset = metadata
+    add_services = mdf_dataset.pop("services", [])
 
     # TODO: Stream data into files instead of holding feedstock in memory
     feedstock = [mdf_dataset]
@@ -163,7 +159,7 @@ def begin_convert(metadata, status_id):
                     cit_feed = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
                     cit_res = toolbox.dict_merge(cit_res, cit_feed)
                     # Add DataCite metadata to PIFs
-                    pif = add_dc(pif, mdf_dataset["dc"])
+                    pif = add_dc(pif, mdf_dataset.get("dc", {}))
 
                     cit_full.append(pif)
 
@@ -223,7 +219,7 @@ def begin_convert(metadata, status_id):
                         # Get MDF feedstock from PIFs and add PIF URL
                         cit_res = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
                         # Add DataCite metadata to PIFs
-                        pif = add_dc(pif, mdf_dataset["dc"])
+                        pif = add_dc(pif, mdf_dataset.get("dc", {}))
 
                         cit_full.append(pif)
 
@@ -267,18 +263,23 @@ def begin_convert(metadata, status_id):
         # TODO: Fail everything, delete Citrine dataset, etc.
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
 
-    # Finalize Citrine dataset
-    # TODO: Turn on public dataset ingest
-    # cit_client.update_data_set(cit_ds_id, share=1)
+    # Additional service integrations
 
-    # Pass data to additional integrations
+    # Finalize Citrine dataset
+    # TODO: Turn on public dataset ingest (share=1)
+    if "citrine" in add_services:
+        try:
+            cit_client.update_data_set(cit_ds_id, share=0)
+        except Exception as e:
+            # TODO: Update status, notify Citrine - Citrine ds failure
+            print("DEBUG: Citrination dataset not updated")
 
     # Globus Publish
-    # TODO: Enable after Publish API is fixed
-    if False:  # metadata.get("globus_publish"):
+    # TODO: Test after Publish API is fixed
+    if "globus_publish" in add_services:
         # Submit metadata
         try:
-            pub_md = metadata["globus_publish"]
+            pub_md = get_publish_metadata(mdf_dataset)
             md_result = globus_publish_client.push_metadata(pub_md["collection"], pub_md)
             pub_endpoint = md_result['globus.shared_endpoint.name']
             pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
@@ -304,6 +305,7 @@ def begin_convert(metadata, status_id):
 
     # Remove local data
     shutil.rmtree(local_path)
+    # TODO: Update status - everything done
     return {
         "success": True,
         "status_id": status_id
@@ -404,6 +406,11 @@ def get_file_metadata(file_path, backup_path):
             "sha512": sha512(f.read()).hexdigest()
         }
     return md
+
+
+def get_publish_metadata(metadata):
+    # TODO: Translate DataCite into Globus Publish metadata format
+    return metadata
 
 
 @app.route("/ingest", methods=["POST"])
