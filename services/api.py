@@ -1,3 +1,4 @@
+from datetime import date
 from hashlib import sha512
 import json
 import os
@@ -31,6 +32,7 @@ KEY_FILES = {
         "regex": ["OUTCAR"]
     }
 }
+PUBLISH_COLLECTION = 35
 
 
 @app.route('/convert', methods=["POST"])
@@ -60,14 +62,16 @@ def begin_convert(mdf_dataset, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer"]  # , "publish"]
+        "services": ["transfer", "publish"]
         }
     clients = toolbox.confidential_login(creds)
     mdf_transfer_client = clients["transfer"]
-#    globus_publish_client = clients["publish"]
+    globus_publish_client = clients["publish"]
 
     # Download data locally, back up on MDF resources
-    dl_res = download_and_backup(mdf_transfer_client, metadata)
+    dl_res = download_and_backup(mdf_transfer_client,
+                                 mdf_dataset.pop("data", {}),
+                                 status_id)
     if dl_res["success"]:
         local_path = dl_res["local_path"]
         backup_path = dl_res["backup_path"]
@@ -277,31 +281,17 @@ def begin_convert(mdf_dataset, status_id):
     # Globus Publish
     # TODO: Test after Publish API is fixed
     if "globus_publish" in add_services:
-        # Submit metadata
         try:
-            pub_md = get_publish_metadata(mdf_dataset)
-            md_result = globus_publish_client.push_metadata(pub_md["collection"], pub_md)
-            pub_endpoint = md_result['globus.shared_endpoint.name']
-            pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-            submission_id = md_result["id"]
+            fin_res = globus_publish_data(globus_publish_client,
+                                          mdf_transfer_client,
+                                          mdf_dataset,
+                                          local_path)
         except Exception as e:
-            # TODO: Update status - not Published due to bad metadata
-            raise
-        # Transfer data
-        try:
-            toolbox.quick_transfer(mdf_transfer_client, app.config["LOCAL_EP"],
-                                   pub_endpoint, [(local_path, pub_path)], timeout=0)
-        except Exception as e:
-            # TODO: Update status - not Published due to failed Transfer
-            raise
-        # Complete submission
-        try:
-            fin_res = globus_publish_client.complete_submission(submission_id)
-        except Exception as e:
-            # TODO: Update status - not Published due to Publish error
-            raise
-        # TODO: Update status - Publish success
-        print("DEBUG: Publish success")
+            # TODO: Update status - Publish failed
+            print("Publish ERROR:", repr(e))
+        else:
+            # TODO: Update status - Publish success
+            print("DEBUG: Publish success:", fin_res)
 
     # Remove local data
     shutil.rmtree(local_path)
@@ -312,52 +302,54 @@ def begin_convert(mdf_dataset, status_id):
         }
 
 
-def download_and_backup(mdf_transfer_client, metadata):
+def download_and_backup(mdf_transfer_client, data_loc, status_id):
     """Download remote data, backup"""
-    status_id = metadata["mdf_status_id"]
-    local_success = False
     local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], status_id) + "/"
     os.makedirs(local_path, exist_ok=True)  # TODO: exist not okay when status is real
 
     # Download data locally
-    if metadata.get("zip"):
-        # Download and unzip
-        zip_path = os.path.join(local_path, metadata["mdf_status_id"] + ".zip")
-        res = requests.get(metadata["zip"])
-        with open(zip_path, 'wb') as out:
-            out.write(res.content)
-        zipfile.ZipFile(zip_path).extractall()  # local_path)
-        os.remove(zip_path)  # TODO: Should the .zip be removed?
-        local_success = True
+    try:
+        if data_loc.get("globus"):
+            # Parse out EP and path
+            # Right now, path assumed to be a directory
+            user_ep, user_path = data_loc["globus"].split("/", 1)
+            user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
+            # Transfer locally
+            toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
+                                   [(user_path, local_path)], timeout=0)
 
-    elif metadata.get("globus"):
-        # Parse out EP and path
-        # Right now, path assumed to be a directory
-        user_ep, user_path = metadata["globus"].split("/", 1)
-        user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
-        # Transfer locally
-        toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
-                               [(user_path, local_path)], timeout=0)
-        local_success = True
+        elif data_loc.get("zip"):
+            # Download and unzip
+            zip_path = os.path.join(local_path, status_id + ".zip")
+            res = requests.get(data_loc["zip"])
+            with open(zip_path, 'wb') as out:
+                out.write(res.content)
+            zipfile.ZipFile(zip_path).extractall()  # local_path)
+            os.remove(zip_path)  # TODO: Should the .zip be removed?
 
-    elif metadata.get("files"):
-        # TODO: Implement this
-        pass
+        elif data_loc.get("files"):
+            # TODO: Implement this
+            raise NotImplementedError("Files not implemented yet")
 
-    else:
-        # Nothing to do
-        pass
+        else:
+            # Nothing to do
+            raise IOError("Invalid data location: " + str(data_loc))
 
-    # TODO: Update status - download success/failure
-    if not local_success:
-        raise IOError("No data downloaded")
+    except Exception as e:
+        # TODO: Update status - download failure
+        raise
+    # TODO: Update status - download success
     print("DEBUG: Download success")
 
     # Backup data
-    toolbox.quick_transfer(mdf_transfer_client,
-                           app.config["LOCAL_EP"], app.config["BACKUP_EP"],
-                           [(local_path, backup_path)], timeout=0)
+    try:
+        toolbox.quick_transfer(mdf_transfer_client,
+                               app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                               [(local_path, backup_path)], timeout=0)
+    except Exception as e:
+        # TODO: Update status - backup failed
+        raise
     # TODO: Update status - backup success
     print("DEBUG: Backup success")
 
@@ -408,9 +400,47 @@ def get_file_metadata(file_path, backup_path):
     return md
 
 
-def get_publish_metadata(metadata):
-    # TODO: Translate DataCite into Globus Publish metadata format
-    return metadata
+def globus_publish_data(publish_client, transfer_client, metadata, local_path):
+    # Submit metadata
+    try:
+        pub_md = get_publish_metadata(metadata)
+        md_result = publish_client.push_metadata(pub_md["collection"], pub_md)
+        pub_endpoint = md_result['globus.shared_endpoint.name']
+        pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
+        submission_id = md_result["id"]
+    except Exception as e:
+        # TODO: Raise exception - not Published due to bad metadata
+        raise
+    # Transfer data
+    try:
+        toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
+                               pub_endpoint, [(local_path, pub_path)], timeout=0)
+    except Exception as e:
+        # TODO: Raise exception - not Published due to failed Transfer
+        raise
+    # Complete submission
+    try:
+        fin_res = publish_client.complete_submission(submission_id)
+    except Exception as e:
+        # TODO: Raise exception - not Published due to Publish error
+        raise
+    return fin_res
+
+
+def get_publish_metadata(dc_metadata):
+    # TODO: Find full Publish schema for translation
+    # Required fields
+    pub_metadata = {
+        "dc.title": ", ".join([title.get("title", "")
+                               for title in dc_metadata.get("titles", [])]),
+        "dc.date.issued": str(date.today().year),
+        "dc.publisher": "Materials Data Facility",
+        "dc.contributor.author": [author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])],
+        "collection_id": PUBLISH_COLLECTION,
+        "accept_license": True
+    }
+    return pub_metadata
 
 
 @app.route("/ingest", methods=["POST"])
@@ -464,7 +494,7 @@ def begin_ingest(base_stock_path, status_id):
         # Validate dataset entry
         ds_res = val.start_dataset(json.loads(next(base_stock)))
         if not ds_res["success"]:
-           # TODO: Update status - dataset validation failed
+            # TODO: Update status - dataset validation failed
             raise Exception("ERROR:" + str(ds_res))
 
         # Validate records
@@ -472,7 +502,7 @@ def begin_ingest(base_stock_path, status_id):
             record = json.loads(rc)
             rc_res = val.add_record(record)
             if not rc_res["success"]:
-               # TODO: Update status - record validation failed
+                # TODO: Update status - record validation failed
                 raise Exception("ERROR:" + str(rc_res))
     os.remove(base_stock_path)
 
