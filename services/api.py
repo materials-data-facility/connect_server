@@ -75,6 +75,7 @@ def begin_convert(mdf_dataset, status_id):
     if dl_res["success"]:
         local_path = dl_res["local_path"]
         backup_path = dl_res["backup_path"]
+        data_formats = dl_res["formats"]
     else:
         raise IOError("No data downloaded")
     # TODO: Update status - data downloaded
@@ -86,8 +87,7 @@ def begin_convert(mdf_dataset, status_id):
     # TODO: Stream data into files instead of holding feedstock in memory
     feedstock = [mdf_dataset]
 
-    # TODO: Parse tags
-    tags = []
+    tags = [sub["subject"] for sub in mdf_dataset.get("dc", {}).get("subjects", [])]
     key_info = get_key_matches(tags or None)
 
     # List of all files, for bag
@@ -135,7 +135,7 @@ def begin_convert(mdf_dataset, status_id):
                 dir_file_md.append(file_md)
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_res = omniparser.omniparse(data_file)
+                    mdf_res = omniparser.omniparse(data_file, tags, data_formats)
                     data_file.seek(0)
 
                     mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
@@ -198,7 +198,7 @@ def begin_convert(mdf_dataset, status_id):
                                             backup_path=os.path.join(backup_path, path, filename))
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_record = omniparser.omniparse(data_file)
+                    mdf_record = omniparser.omniparse(data_file, tags, data_formats)
                     data_file.seek(0)
 
                 # Citrine parsing
@@ -356,7 +356,8 @@ def download_and_backup(mdf_transfer_client, data_loc, status_id):
     return {
         "success": True,
         "local_path": local_path,
-        "backup_path": backup_path
+        "backup_path": backup_path,
+        "formats": data_loc.get("formats", {})
         }
 
 

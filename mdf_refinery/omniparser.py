@@ -5,24 +5,24 @@ from mdf_toolbox import toolbox
 # List of parsers at bottom
 
 
-def omniparse(data_file, parser_tags=None):
+def omniparse(data_file, special_formats=None):
     """Parse a data file however possible.
 
     Arguments:
     data_file (file object): The data file.
-    parser_tags (list of str): Run parsers with these tags.
-                               Default [], which runs all parsers.
+    special_formats (dict): Run parsers with these parameters.
 
     Returns:
     dict: The metadata parsed from the file. Will be empty if no selected parser can parse data.
     """
+    if special_formats is None:
+        special_formats = {}
     record = {}
     # Check all parsers
-    for parser_dict in ALL_PARSERS:
-        # If tags match (or no tags specified)
-        if not parser_tags or any([tag in parser_tags for tag in parser_dict["tags"]]):
+    for par_name, par_func in ALL_PARSERS.items():
+        if not "exclusive" in special_formats.keys() or par_name in special_formats.keys():
             try:
-                parser_res = parser_dict["parser"](data_file, stats=True)
+                parser_res = par_func(data_file, params=special_formats.get(par_name, None)
             # Exception indicates no data parsed
             except Exception as e:
                 pass
@@ -33,17 +33,17 @@ def omniparse(data_file, parser_tags=None):
     return record
 
 
-def parse_ase(data_file):
+def parse_ase(data_file, **params):
     """Parser for data in ASE-readable formats.
     If ASE is incapable of reading the file, an exception will be raised.
 
     Arguments:
     data_file (file object or str): Data file, or path to the data file.
+    params (any): Ignored.
 
     Returns:
     dict: Useful data ASE could pull out of the file.
     """
-
     ase_template = {
         # "constraints": None,              # No get()
         # "all_distances": None,
@@ -149,14 +149,22 @@ def parse_ase(data_file):
     if not ase_dict:
         raise ValueError("All data None")
 
-    return ase_dict
-
-
-# List of parsers as tuple(function, [tags])
-ALL_PARSERS = [
-    {
-        "parser": parse_ase,
-        "tags": ["ase", "dft", "simulation"],
-        "block": "material"
+    # Return correct block
+    return {
+        "materials": ase_dict
     }
-]
+
+
+def parse_csv(data_file, params=None):
+    """Parse a CSV."""
+    if not params:
+        return {}
+    
+
+
+# Dict of all parsers as parser:function
+ALL_PARSERS = {
+    "ase": parse_ase,
+    "csv": parse_csv,
+    "json": parse_json
+}
