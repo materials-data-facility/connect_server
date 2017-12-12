@@ -135,9 +135,7 @@ def begin_convert(mdf_dataset, status_id):
                 dir_file_md.append(file_md)
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_res = omniparser.omniparse(data_file, tags, data_formats)
-                    data_file.seek(0)
-
+                    mdf_res = omniparser.omniparse(data_file, data_formats)
                     mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
 
             # Citrine parsing
@@ -198,8 +196,7 @@ def begin_convert(mdf_dataset, status_id):
                                             backup_path=os.path.join(backup_path, path, filename))
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_record = omniparser.omniparse(data_file, tags, data_formats)
-                    data_file.seek(0)
+                    mdf_record = omniparser.omniparse(data_file, data_formats)
 
                 # Citrine parsing
                 print("DEBUG: path:", path)
@@ -438,7 +435,7 @@ def get_publish_metadata(dc_metadata):
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": ", ".join([author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])]),
+                                            for author in dc_metadata.get("creators", [])]),
         "collection_id": PUBLISH_COLLECTION,
         "accept_license": True
     }
