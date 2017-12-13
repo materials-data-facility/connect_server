@@ -118,6 +118,8 @@ def begin_convert(mdf_dataset, status_id):
         # Determine if dir or file is single entity
         # Dir is record
         if count_key_files(files, key_info) == 1:
+            # TODO: Handle multi-record files in dir-unit
+            raise NotImplementedError("Dir currently not handled as expected")
             dir_file_md = []
             mdf_record = {}
             cit_res = {}
@@ -196,7 +198,9 @@ def begin_convert(mdf_dataset, status_id):
                                             backup_path=os.path.join(backup_path, path, filename))
                 with open(os.path.join(path, filename)) as data_file:
                     # MDF parsing
-                    mdf_record = omniparser.omniparse(data_file, data_formats)
+                    mdf_res = omniparser.omniparse(data_file, data_formats)
+                if not isinstance(mdf_res, list):
+                    mdf_res = [mdf_res]
 
                 # Citrine parsing
                 print("DEBUG: path:", path)
@@ -208,6 +212,7 @@ def begin_convert(mdf_dataset, status_id):
                 # Continue processing only if PIF was extracted
                 cit_full = []
                 if len(cit_pifs) > 0:
+                    cit_res = []
                     # Add UIDs to PIFs
                     cit_pifs = cit_utils.set_uids(cit_pifs)
                     for pif in cit_pifs:
@@ -218,7 +223,7 @@ def begin_convert(mdf_dataset, status_id):
                                             }
                                         } if cit_ds_id else {}
                         # Get MDF feedstock from PIFs and add PIF URL
-                        cit_res = toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page)
+                        cit_res.append(toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page))
                         # Add DataCite metadata to PIFs
                         pif = add_dc(pif, mdf_dataset.get("dc", {}))
 
@@ -226,26 +231,41 @@ def begin_convert(mdf_dataset, status_id):
 
                 else:
                     # TODO: Send failed filetype to Citrine
-                    pass
+                    cit_res = [{} for i in range(len(mdf_res))]
 
                 # Merge results
-                mdf_record = toolbox.dict_merge(mdf_record, cit_res)
+                # If MDF parser failed to parse anything, add dummy records
+                if len(mdf_res) == 0:
+                    mdf_res = [{} for i in range(len(cit_res))]
 
-                # If data was parsed, save record
-                if mdf_record:
-                    mdf_record = toolbox.dict_merge(mdf_record,
-                                                    {"files": dir_file_md})
-                    feedstock.append(mdf_record)
+                # If each parser parsed the same number of records, merge in order
+                if len(mdf_res) == len(cit_res):
+                    mdf_records = []
+                    for r_mdf, r_cit in zip(mdf_records, cit_res):
+                        mdf_records.append(toolbox.dict_merge(r_mdf, r_cit))
+                # Otherwise, discard Citrine's data (for now)
+                else:
+                    print("DEBUG: Record mismatch:\nMDF parsed", len(mdf_res), "records",
+                          "\nCitrine parsed", len(cit_res), "records"
+                          "\nPIFs discarded")
+                    # TODO: Update status - citrine records discarded
+                    mdf_records = mdf_res
 
-                    for one_pif in cit_full:
-                        with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
-                            pif_dump(one_pif, pif_file)
-                            pif_file.seek(0)
-                            up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
-                            if up_res["success"]:
-                                print("DEBUG: Citrine upload success")
-                            else:
-                                print("DEBUG: Citrine upload failure, error", up_res.get("status"))
+                # Filter out null records, save rest
+                for record in mdf_records:
+                    if record:
+                        record = toolbox.dict_merge(record, {"files": dir_file_md})
+                        feedstock.append(record)
+
+                for one_pif in cit_full:
+                    with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                        pif_dump(one_pif, pif_file)
+                        pif_file.seek(0)
+                        up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                        if up_res["success"]:
+                            print("DEBUG: Citrine upload success")
+                        else:
+                            print("DEBUG: Citrine upload failure, error", up_res.get("status"))
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")
