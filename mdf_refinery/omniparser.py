@@ -4,6 +4,8 @@ import ase.io
 from mdf_toolbox import toolbox
 import pandas as pd
 
+# Additional NaN values for Pandas
+NA_VALUES = ["", " "]
 
 # List of parsers at bottom
 
@@ -192,19 +194,24 @@ def parse_csv(file_data, params=None):
     """Parse a CSV."""
     if not params:
         return {}
-    df = pd.read_csv(file_data, na_values=["", " "])
-    csv_len = len(df.index)
-    df_json = json.loads(df.to_json())
+    df = pd.read_csv(file_data, delimiter=params.pop("delimiter", ","), na_values=NA_VALUES)
+    return parse_pandas(df, params)
 
-    records = []
-    for index in range(csv_len):
-        new_struct = {}
-        for path, value in flatten_struct(params):
-            new_struct[path] = value + "." + str(index)
-        rec = parse_json(df_json, new_struct)
-        if rec:
-            records.append(rec)
-    return records
+
+def parse_excel(file_data, params=None):
+    """Parse an Excel file."""
+    if not params:
+        return {}
+    df = pd.read_excel(file_data, na_values=NA_VALUES)
+    return parse_pandas(df, params)
+
+
+def parse_hdf5(file_data, params=None):
+    """Parse an HDF5 file."""
+    if not params:
+        return {}
+    df = pd.read_hdf(file_data)
+    return parse_pandas(df, params)
 
 
 def parse_json(file_data, params=None):
@@ -241,12 +248,30 @@ def parse_json(file_data, params=None):
     return record
 
 
-# Dict of all parsers as parser:function
+# Dict of all user-selectable parsers as parser:function
 ALL_PARSERS = {
     "ase": parse_ase,
     "csv": parse_csv,
+    "excel": parse_excel,
+    "hdf5": parse_hdf5,
     "json": parse_json
 }
+
+
+def parse_pandas(df, struct):
+    """Parse a Pandas DataFrame."""
+    csv_len = len(df.index)
+    df_json = json.loads(df.to_json())
+
+    records = []
+    for index in range(csv_len):
+        new_struct = {}
+        for path, value in flatten_struct(struct):
+            new_struct[path] = value + "." + str(index)
+        rec = parse_json(df_json, new_struct)
+        if rec:
+            records.append(rec)
+    return records
 
 
 def flatten_struct(struct, path=""):
