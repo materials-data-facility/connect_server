@@ -13,6 +13,7 @@ setup(
         "globus-sdk>=1.1.1",
         "requests>=2.18.1",
         "python-magic>=0.4.13",
+        "pandas>=0.20.3",
         "tqdm>=4.14.0",
         "ase>=3.14.1",
         "beautifulsoup4>=4.6.0",

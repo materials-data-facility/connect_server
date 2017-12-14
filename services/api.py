@@ -29,7 +29,7 @@ KEY_FILES = {
     "dft": {
         "exact": [],
         "extension": [],
-        "regex": ["OUTCAR"]
+        "regex": ["OUTCAR.*"]
     }
 }
 PUBLISH_COLLECTION = 35
@@ -117,7 +117,7 @@ def begin_convert(mdf_dataset, status_id):
     for path, dirs, files in os.walk(os.path.abspath(local_path)):
         # Determine if dir or file is single entity
         # Dir is record
-        if count_key_files(files, key_info) == 1:
+        if False: #count_key_files(files, key_info) == 1:
             # TODO: Handle multi-record files in dir-unit
             raise NotImplementedError("Dir currently not handled as expected")
             dir_file_md = []
@@ -253,6 +253,8 @@ def begin_convert(mdf_dataset, status_id):
                     mdf_records = mdf_res
 
                 # Filter out null records, save rest
+                if not mdf_records:
+                    print("DEBUG: No MDF records")
                 for record in mdf_records:
                     if record:
                         record = toolbox.dict_merge(record, {"files": dir_file_md})
