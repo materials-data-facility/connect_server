@@ -8,13 +8,14 @@ import pandas as pd
 NA_VALUES = ["", " "]
 
 # List of parsers at bottom
+# All parsers accept data_path and/or file_data, and arbitrary other parameters
 
 
-def omniparse(data_file, special_formats=None):
+def omniparse(data_path, special_formats=None):
     """Parse a data file however possible.
 
     Arguments:
-    data_file (file object or str): The data file or path.
+    data_path (str): The path to the data file.
     special_formats (dict): Run parsers with these parameters. Default None.
 
     Returns:
@@ -25,14 +26,8 @@ def omniparse(data_file, special_formats=None):
         special_formats = {}
     records = []
 
-    # Open data_file if necessary
-    # Wrap in a try-finally to always close file
-    # with does not provide enough conditional functionality
-    try:
-        if isinstance(data_file, str):
-            file_data = open(data_file)
-        else:
-            file_data = data_file
+    # Open data_file
+    with open(data_path) as file_data:
         # Check all parsers
         for par_name, par_func in ALL_PARSERS.items():
             # All parsers should be run if "exclusive" is set
@@ -40,7 +35,9 @@ def omniparse(data_file, special_formats=None):
             if "exclusive" not in special_formats.keys() or par_name in special_formats.keys():
                 try:
                     # Call parser with params if present
-                    parser_res = par_func(file_data, params=special_formats.get(par_name, None))
+                    parser_res = par_func(data_path=data_path,
+                                          file_data=file_data,
+                                          params=special_formats.get(par_name, None))
                     # If no data returned, fail
                     if not parser_res:
                         raise ValueError("No data parsed")
@@ -61,20 +58,16 @@ def omniparse(data_file, special_formats=None):
                             new_records.append(toolbox.dict_merge(r1, r2))
                         records = new_records
                 file_data.seek(0)
-    finally:
-        # Close file if opened in this function
-        if isinstance(data_file, str):
-            file_data.close()
     return records
 
 
-def parse_ase(file_data, **ignored):
+def parse_ase(data_path=None, **ignored):
     """Parser for data in ASE-readable formats.
     If ASE is incapable of reading the file, an exception will be raised.
 
     Arguments:
-    file_data (file object or str): Data file, or path to the data file.
-    ignored (any): Ignored.
+    data_path (str): Path to the data file.
+    ignored (any): Ignored arguments.
 
     Returns:
     dict: Useful data ASE could pull out of the file.
@@ -123,7 +116,8 @@ def parse_ase(file_data, **ignored):
         }
 
     # Read the file and process it if the reading succeeds
-    result = ase.io.read(file_data)
+    # Will throw exception on certain failures
+    result = ase.io.read(data_path)
     if not result:
         raise ValueError("No data")
 
@@ -190,34 +184,34 @@ def parse_ase(file_data, **ignored):
     }
 
 
-def parse_csv(file_data, params=None):
+def parse_csv(file_data=None, params=None, **ignored):
     """Parse a CSV."""
-    if not params:
+    if not params or not file_data:
         return {}
     df = pd.read_csv(file_data, delimiter=params.pop("delimiter", ","), na_values=NA_VALUES)
     return parse_pandas(df, params)
 
 
-def parse_excel(file_data, params=None):
+def parse_excel(file_data=None, params=None, **ignored):
     """Parse an Excel file."""
-    if not params:
+    if not params or not file_data:
         return {}
     df = pd.read_excel(file_data, na_values=NA_VALUES)
     return parse_pandas(df, params)
 
 
-def parse_hdf5(file_data, params=None):
+def parse_hdf5(file_data=None, params=None, **ignored):
     """Parse an HDF5 file."""
-    if not params:
+    if not params or not file_data:
         return {}
     df = pd.read_hdf(file_data)
     return parse_pandas(df, params)
 
 
-def parse_json(file_data, params=None):
+def parse_json(file_data=None, params=None, **ignored):
     """Parse a JSON file."""
     # If no structure is supplied, do no parsing
-    if not params:
+    if not params or not file_data:
         return {}
     record = {}
     if not isinstance(file_data, dict):

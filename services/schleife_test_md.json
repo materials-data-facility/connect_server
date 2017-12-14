@@ -1,0 +1,32 @@
+{
+    "mdf": {
+        "source_name": "schleife_zno",
+        "landing_page": "http://materialsdatafacility.org",
+        "acl": ["public"]
+    },
+    "dc": {
+        "descriptions": [{
+            "description": "A test VASP dataset",
+            "descriptionType": "Other"
+        }],
+        "publicationYear": "2017",
+        "creators": [{
+            "creatorName": "Andre Schleife"
+        }],
+        "titles": [{
+            "title": "Schleife VASP Test"
+        }],
+        "identifier": {
+            "identifierType": "DOI",
+            "identifier": "10.test/1"
+        },
+        "publisher": "MDF",
+        "resourceType": {
+            "resourceTypeGeneral": "Dataset"
+        }
+    },
+    "data": {
+        "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/Schleife/ZnOpaper/"
+    },
+    "services": []
+}

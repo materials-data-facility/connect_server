@@ -125,6 +125,7 @@ def begin_convert(mdf_dataset, status_id):
             cit_res = {}
             # Process all files into one record
             for filename in files:
+                file_path = os.path.join(path, filename)
                 # Get file metadata
                 file_md = get_file_metadata(
                                 file_path=os.path.join(path, filename),
@@ -135,10 +136,10 @@ def begin_convert(mdf_dataset, status_id):
                 # Save file metadata
                 all_files.append(file_md)
                 dir_file_md.append(file_md)
-                with open(os.path.join(path, filename)) as data_file:
-                    # MDF parsing
-                    mdf_res = omniparser.omniparse(data_file, data_formats)
-                    mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
+
+                # MDF parsing
+                mdf_res = omniparser.omniparse(file_path, data_formats)
+                mdf_record = toolbox.dict_merge(mdf_record, mdf_res)
 
             # Citrine parsing
             print("DEBUG: path:", path)
@@ -193,18 +194,18 @@ def begin_convert(mdf_dataset, status_id):
         # File is record
         else:
             for filename in files:
+                file_path = os.path.join(path, filename)
                 # Get file metadata
-                file_md = get_file_metadata(file_path=os.path.join(path, filename),
+                file_md = get_file_metadata(file_path=file_path,
                                             backup_path=os.path.join(backup_path, path, filename))
-                with open(os.path.join(path, filename)) as data_file:
-                    # MDF parsing
-                    mdf_res = omniparser.omniparse(data_file, data_formats)
+                # MDF parsing
+                mdf_res = omniparser.omniparse(file_path, data_formats)
                 if not isinstance(mdf_res, list):
                     mdf_res = [mdf_res]
 
                 # Citrine parsing
                 print("DEBUG: path:", path)
-                cit_pifs = cit_manager.run_extensions([os.path.abspath(path)],
+                cit_pifs = cit_manager.run_extensions([file_path],
                                                       include=None, exclude=[],
                                                       args={"quality_report": False})
                 if not isinstance(cit_pifs, list):
