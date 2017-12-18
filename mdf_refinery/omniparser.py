@@ -37,7 +37,7 @@ def omniparse(data_paths, parse_params=None):
             for par_name, par_func in ALL_PARSERS.items():
                 # All parsers should be run if "exclusive" is set
                 # Otherwise, only parsers listed in the formats should be run
-                if "exclusive" not in parse_params.keys() or par_name in parse_params.keys():
+                if not parse_params.get("exclusive") or par_name in parse_params.keys():
                     try:
                         # Call parser with params if present
                         parser_res = par_func(data_path=path,
@@ -195,7 +195,7 @@ def parse_csv(file_data=None, params=None, **ignored):
     if not params or not file_data:
         return {}
     df = pd.read_csv(file_data, delimiter=params.pop("delimiter", ","), na_values=NA_VALUES)
-    return parse_pandas(df, params)
+    return parse_pandas(df, params.get("mapping", {}))
 
 
 def parse_excel(file_data=None, params=None, **ignored):
@@ -203,7 +203,7 @@ def parse_excel(file_data=None, params=None, **ignored):
     if not params or not file_data:
         return {}
     df = pd.read_excel(file_data, na_values=NA_VALUES)
-    return parse_pandas(df, params)
+    return parse_pandas(df, params.get("mapping", {}))
 
 
 def parse_hdf5(file_data=None, params=None, **ignored):
@@ -211,7 +211,7 @@ def parse_hdf5(file_data=None, params=None, **ignored):
     if not params or not file_data:
         return {}
     df = pd.read_hdf(file_data)
-    return parse_pandas(df, params)
+    return parse_pandas(df, params.get("mapping", {}))
 
 
 def parse_json(file_data=None, params=None, **ignored):
@@ -224,6 +224,10 @@ def parse_json(file_data=None, params=None, **ignored):
         data = json.load(file_data)
     else:
         data = file_data
+    try:
+        mapping = params.pop("mapping")
+    except KeyError:
+        mapping = params
 
     # Get (path, value) pairs from the key structure
     # Loop over each
@@ -258,17 +262,17 @@ ALL_PARSERS = {
 }
 
 
-def parse_pandas(df, struct):
+def parse_pandas(df, mapping):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
 
     records = []
     for index in range(csv_len):
-        new_struct = {}
-        for path, value in flatten_struct(struct):
-            new_struct[path] = value + "." + str(index)
-        rec = parse_json(df_json, new_struct)
+        new_map = {}
+        for path, value in flatten_struct(mapping):
+            new_map[path] = value + "." + str(index)
+        rec = parse_json(df_json, new_map)
         if rec:
             records.append(rec)
     return records
