@@ -231,7 +231,7 @@ def parse_json(file_data=None, params=None, **ignored):
 
     # Get (path, value) pairs from the key structure
     # Loop over each
-    for mdf_path, json_path in flatten_struct(params):
+    for mdf_path, json_path in flatten_struct(mapping):
         try:
             value = follow_path(data, json_path)
         except KeyError:
