@@ -11,53 +11,59 @@ NA_VALUES = ["", " "]
 # All parsers accept data_path and/or file_data, and arbitrary other parameters
 
 
-def omniparse(data_path, special_formats=None):
-    """Parse a data file however possible.
+def omniparse(data_paths, parse_params=None):
+    """Parse data files however possible.
 
     Arguments:
-    data_path (str): The path to the data file.
-    special_formats (dict): Run parsers with these parameters. Default None.
+    data_paths (str or list of str): The path(s) to the data file(s).
+    parse_params (dict): Run parsers with these parameters. Default None.
 
     Returns:
     list of dict: The metadata parsed from the file.
                   Will be empty if no selected parser can parse data.
     """
-    if special_formats is None:
-        special_formats = {}
+    if parse_params is None:
+        parse_params = {}
+    if isinstance(data_paths, str):
+        data_paths = [data_paths]
+
     records = []
 
-    # Open data_file
-    with open(data_path) as file_data:
-        # Check all parsers
-        for par_name, par_func in ALL_PARSERS.items():
-            # All parsers should be run if "exclusive" is set
-            # Otherwise, only parsers listed in the formats should be run
-            if "exclusive" not in special_formats.keys() or par_name in special_formats.keys():
-                try:
-                    # Call parser with params if present
-                    parser_res = par_func(data_path=data_path,
-                                          file_data=file_data,
-                                          params=special_formats.get(par_name, None))
-                    # If no data returned, fail
-                    if not parser_res:
-                        raise ValueError("No data parsed")
-                    # If single record returned, make into list
-                    elif not isinstance(parser_res, list):
-                        parser_res = [parser_res]
-                # Exception indicates no data parsed
-                except Exception as e:
-                    pass
-                else:
-                    # TODO: Challenge assumption:
-                    #       All parsers return same number of records or fail
-                    if len(records) == 0:
-                        records = parser_res
+    # Parse each data file
+    for path in data_paths:
+        # Open data_file
+        with open(path) as file_data:
+            # Check all parsers
+            for par_name, par_func in ALL_PARSERS.items():
+                # All parsers should be run if "exclusive" is set
+                # Otherwise, only parsers listed in the formats should be run
+                if "exclusive" not in parse_params.keys() or par_name in parse_params.keys():
+                    try:
+                        # Call parser with params if present
+                        parser_res = par_func(data_path=path,
+                                              file_data=file_data,
+                                              params=parse_params.get(par_name, None))
+                        # If no data returned, fail
+                        if not parser_res:
+                            raise ValueError("No data parsed")
+                        # If single record returned, make into list
+                        elif not isinstance(parser_res, list):
+                            parser_res = [parser_res]
+                    # Exception indicates no data parsed
+                    except Exception as e:
+                        pass
                     else:
-                        new_records = []
-                        for r1, r2 in zip(records, parser_res):
-                            new_records.append(toolbox.dict_merge(r1, r2))
-                        records = new_records
-                file_data.seek(0)
+                        # If only one file is being parsed, return all records
+                        if len(data_paths) == 1:
+                            records = parser_res
+                        # If multiple files are being parsed, merge results
+                        else:
+                            # All results should be merged into records[0]
+                            if len(records) == 0:
+                                records.append({})
+                            for res in parser_res:
+                                records[0] = toolbox.dict_merge(records[0], res)
+                    file_data.seek(0)
     return records
 
 
@@ -132,7 +138,7 @@ def parse_ase(data_path=None, **ignored):
 
     # Data without a .get()
     try:
-        ase_dict["filetype"] = ase.io.formats.filetype(file_data)
+        ase_dict["filetype"] = ase.io.formats.filetype(data_path)
     except Exception as e:
         pass
     try:

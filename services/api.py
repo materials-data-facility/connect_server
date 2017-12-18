@@ -75,20 +75,21 @@ def begin_convert(mdf_dataset, status_id):
     if dl_res["success"]:
         local_path = dl_res["local_path"]
         backup_path = dl_res["backup_path"]
-        data_formats = dl_res["formats"]
     else:
         raise IOError("No data downloaded")
     # TODO: Update status - data downloaded
     print("DEBUG: Data downloaded")
 
     print("DEBUG: Conversions started")
+    # Pop indexing args
+    parse_params = mdf_dataset.pop("index", {})
     add_services = mdf_dataset.pop("services", [])
 
     # TODO: Stream data into files instead of holding feedstock in memory
     feedstock = [mdf_dataset]
 
-    tags = [sub["subject"] for sub in mdf_dataset.get("dc", {}).get("subjects", [])]
-    key_info = get_key_matches(tags or None)
+    # tags = [sub["subject"] for sub in mdf_dataset.get("dc", {}).get("subjects", [])]
+    # key_info = get_key_matches(tags or None)
 
     # List of all files, for bag
     all_files = []
@@ -115,6 +116,92 @@ def begin_convert(mdf_dataset, status_id):
     print("DEBUG: Citrine dataset ID:", cit_ds_id)
 
     for path, dirs, files in os.walk(os.path.abspath(local_path)):
+        # Separate files into groups, process group as unit
+        for group in group_files(files):
+            # Get all file metadata
+            group_file_md = [get_file_metadata(
+                                file_path=os.path.join(path, filename),
+                                backup_path=os.path.join(
+                                                backup_path,
+                                                path.replace(os.path.abspath(local_path), ""),
+                                                filename))
+                             for filename in group]
+            all_files.extend(group_file_md)
+
+            group_paths = [os.path.join(path, filename) for filename in group]
+
+            # MDF parsing
+            mdf_res = omniparser.omniparse(group_paths, parse_params)
+
+            # Citrine parsing
+            cit_pifs = cit_manager.run_extensions(group_paths,
+                                                  include=None, exclude=[],
+                                                  args={"quality_report": False})
+            cit_full = []
+            if len(cit_pifs) > 0:
+                cit_res = []
+                # Add UIDs
+                cit_pifs = cit_utils.set_uids(cit_pifs)
+                for pif in cit_pifs:
+                    # Get PIF URL
+                    pif_land_page = {
+                                        "mdf": {
+                                            "landing_page": cit_utils.get_url(pif, cit_ds_id)
+                                        }
+                                    } if cit_ds_id else {}
+                    # Make PIF into feedstock and save
+                    cit_res.append(toolbox.dict_merge(pif_to_feedstock(pif), pif_land_page))
+                    # Add DataCite metadata
+                    pif = add_dc(pif, mdf_dataset.get("dc", {}))
+
+                    cit_full.append(pif)
+            else:  # No PIFs parsed
+                # TODO: Send failed datatype to Citrine for logging
+                # Pad cit_res to the same length as mdf_res for "merging"
+                cit_res = [{} for i in range(len(mdf_res))]
+
+            # If MDF parser failed to parse group, pad mdf_res to match PIF count
+            if len(mdf_res) == 0:
+                mdf_res = [{} for i in range(len(cit_res))]
+
+            # If only one mdf record was parsed, merge all PIFs into that record
+            if len(mdf_res) == 1:
+                merged_cit = {}
+                [toolbox.dict_merge(merged_cit, cr) for cr in cit_res]
+                mdf_records = [toolbox.dict_merge(mdf_res[0], merged_cit)]
+            # If the same number of MDF records and Citrine PIFs were parsed, merge in order
+            elif len(mdf_res) == len(cit_res):
+                mdf_records = [toolbox.dict_merge(r_mdf, r_cit)
+                               for r_mdf, r_cit in zip(mdf_res, cit_res)]
+            # Otherwise, keep the MDF records only
+            else:
+                print("DEBUG: Record mismatch:\nMDF parsed", len(mdf_res), "records",
+                      "\nCitrine parsed", len(cit_res), "records"
+                      "\nPIFs discarded")
+                # TODO: Update status/log - Citrine records discarded
+                mdf_records = mdf_res
+
+            # Filter null records, save rest
+            if not mdf_records:
+                print("DEBUG: No MDF records")
+            [feedstock.append(toolbox.dict_merge(record, {"files": group_file_md}))
+             for record in mdf_records if record]
+
+            # Upload PIFs to Citrine
+            for full_pif in cit_full:
+                with tempfile.NamedTemporaryFile(mode="w+") as pif_file:
+                    pif_dump(full_pif, pif_file)
+                    pif_file.seek(0)
+                    up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+                    if up_res["success"]:
+                        print("DEBUG: Citrine upload success")
+                    else:
+                        print("DEBUG: Citrine upload failure, error", up_res.get("status"))
+
+        # OLD
+        #
+        #
+        '''
         # Determine if dir or file is single entity
         # Dir is record
         if False: #count_key_files(files, key_info) == 1:
@@ -269,6 +356,7 @@ def begin_convert(mdf_dataset, status_id):
                             print("DEBUG: Citrine upload success")
                         else:
                             print("DEBUG: Citrine upload failure, error", up_res.get("status"))
+        '''
 
     # TODO: Update status - indexing success
     print("DEBUG: Indexing success")
@@ -376,9 +464,38 @@ def download_and_backup(mdf_transfer_client, data_loc, status_id):
     return {
         "success": True,
         "local_path": local_path,
-        "backup_path": backup_path,
-        "formats": data_loc.get("formats", {})
+        "backup_path": backup_path
         }
+
+
+def group_files(files):
+    """Group files based on format-specific rules."""
+    if not isinstance(files, list):
+        files = [files]
+    groups = []
+    # TODO: Expand list of triggers
+    # VASP
+    # TODO: Use regex instead of exact matching
+    if "OUTCAR" in files:
+        outcar_files = ["OUTCAR", "INCAR", "POSCAR", "WAVCAR"]
+        new_group = []
+        for group_file in outcar_files:
+            # Remove file from list and add to group if present
+            # If not present, noop
+            try:
+                files.remove(group_file)
+            except ValueError:
+                pass
+            else:
+                new_group.append(group_file)
+        if new_group:  # Should always be present
+            groups.append(new_group)
+
+    # NOTE: Keep this grouping last!
+    # Each file group
+    groups.extend([[f] for f in files])
+
+    return groups
 
 
 def get_key_matches(tags=None):
