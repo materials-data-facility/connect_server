@@ -137,6 +137,8 @@ def begin_convert(mdf_dataset, status_id):
             cit_pifs = cit_manager.run_extensions(group_paths,
                                                   include=None, exclude=[],
                                                   args={"quality_report": False})
+            if not isinstance(cit_pifs, list):
+                cit_pifs = [cit_pifs]
             cit_full = []
             if len(cit_pifs) > 0:
                 cit_res = []
@@ -183,7 +185,7 @@ def begin_convert(mdf_dataset, status_id):
 
             # Filter null records, save rest
             if not mdf_records:
-                print("DEBUG: No MDF records")
+                print("DEBUG: No MDF records in group:", group)
             [feedstock.append(toolbox.dict_merge(record, {"files": group_file_md}))
              for record in mdf_records if record]
 
