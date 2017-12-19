@@ -186,7 +186,7 @@ def parse_ase(data_path=None, **ignored):
 
     # Return correct block
     return {
-        "materials": ase_dict
+        "material": ase_dict
     }
 
 
