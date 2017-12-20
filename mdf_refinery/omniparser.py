@@ -150,6 +150,9 @@ def parse_ase(data_path=None, **ignored):
 #        else:
 #            ase_dict["num_atoms"] = len(result)
 
+    # Format fields
+    ase_dict["composition"] = ase_dict.pop("chemical_formula", None)
+
     # Fix up the extracted data
     none_keys = []
     for key in ase_dict.keys():

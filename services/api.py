@@ -529,7 +529,7 @@ def count_key_files(files, key_info):
 def get_file_metadata(file_path, backup_path):
     with open(file_path, "rb") as f:
         md = {
-            "globus_endpoint": app.config["BACKUP_EP"] + backup_path,
+            "globus": app.config["BACKUP_EP"] + backup_path,
             "data_type": magic.from_file(file_path),
             "mime_type": magic.from_file(file_path, mime=True),
             "url": app.config["BACKUP_HOST"] + backup_path,
