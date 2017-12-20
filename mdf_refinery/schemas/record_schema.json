@@ -11,7 +11,7 @@
             "type": "object",
             "description": "Data file metadata.",
             "properties": {
-                "globus_endpoint": {
+                "globus": {
                     "type": "string",
                     "description": "The Globus Endpoint ID and path to the data."
                 },
