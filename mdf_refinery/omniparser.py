@@ -3,6 +3,7 @@ import json
 import ase.io
 from mdf_toolbox import toolbox
 import pandas as pd
+from PIL import Image
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
@@ -255,13 +256,28 @@ def parse_json(file_data=None, params=None, **ignored):
     return record
 
 
+def parse_image(data_path=None, **ignored):
+    """Parse an image."""
+    im = Image.open(data_path)
+    return {
+        "image": {
+            "width": im.width,
+            "height": im.height,
+            "pixels": im.width * im.height,
+            "format": im.format
+        }
+    }
+
+
 # Dict of all user-selectable parsers as parser:function
 ALL_PARSERS = {
     "ase": parse_ase,
     "csv": parse_csv,
     "excel": parse_excel,
     "hdf5": parse_hdf5,
-    "json": parse_json
+    "json": parse_json,
+    "jpg": parse_image,
+    "png": parse_image
 }
 
 
