@@ -1,0 +1,47 @@
+{
+    "mdf": {
+        "source_name": "chen_test",
+        "landing_page": "https://doi.org/10.6084/m9.figshare.c.3822835",
+        "acl": ["public"]
+    },
+    "dc": {
+        "descriptions": [{
+            "description": "The dataset contains 1,276 entries on experimental enthalpy of formation values and structural information.",
+            "descriptionType": "Other"
+        }],
+        "publicationYear": "2017",
+        "creators": [{
+            "creatorName": "George Kim"
+        },
+        {
+            "creatorName": "S. V. Meschel"
+        },
+        {
+            "creatorName": "Philip Nash"
+        },
+        {
+            "creatorName": "Wei Chen"
+        }],
+        "titles": [{
+            "title": "Experimental formation enthalpies for intermetallic phases and other inorganic compounds"
+        }],
+        "identifier": {
+            "identifierType": "DOI",
+            "identifier": "10.1038/sdata.2017.162"
+        },
+        "publisher": "Nature",
+        "resourceType": {
+            "resourceTypeGeneral": "Dataset"
+        }
+    },
+    "data": {
+        "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/testing_publication/moc_files/enthalpy_formation.json"
+    },
+    "index": {
+        "json":{
+            "material.composition": "formula",
+            "chen_test.calorimetry_method": "calorimetry_method",
+            "chen_test.oqmd_id": "oqmd.oqmd_id"
+        }
+    }
+}

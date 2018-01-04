@@ -223,37 +223,46 @@ def parse_json(file_data=None, params=None, **ignored):
     # If no structure is supplied, do no parsing
     if not params or not file_data:
         return {}
-    record = {}
-    if not isinstance(file_data, dict):
-        data = json.load(file_data)
+    records = []
+    if not isinstance(file_data, dict) or isinstance(file_data, list):
+        file_json = json.load(file_data)
     else:
-        data = file_data
+        file_json = file_data
     try:
         mapping = params.pop("mapping")
     except KeyError:
         mapping = params
 
-    # Get (path, value) pairs from the key structure
-    # Loop over each
-    for mdf_path, json_path in flatten_struct(mapping):
-        try:
-            value = follow_path(data, json_path)
-        except KeyError:
-            value = None
-        # Only add value if value exists
-        if value is not None:
-            fields = mdf_path.split(".")
-            last_field = fields.pop()
-            current_field = record
-            # Create all missing fields
-            for field in fields:
-                if current_field.get(field) is None:
-                    current_field[field] = {}
-                current_field = current_field[field]
-            # Add value to end
-            current_field[last_field] = value
+    # Handle lists of JSON documents as separate records
+    if not isinstance(file_json, list):
+        file_json = [file_json]
 
-    return record
+    for data in file_json:
+        record = {}
+        # Get (path, value) pairs from the key structure
+        # Loop over each
+        for mdf_path, json_path in flatten_struct(mapping):
+            try:
+                value = follow_path(data, json_path)
+            except KeyError:
+                value = None
+            # Only add value if value exists
+            if value is not None:
+                fields = mdf_path.split(".")
+                last_field = fields.pop()
+                current_field = record
+                # Create all missing fields
+                for field in fields:
+                    if current_field.get(field) is None:
+                        current_field[field] = {}
+                    current_field = current_field[field]
+                # Add value to end
+                current_field[last_field] = value
+        # Add record to list if exists
+        if record:
+            records.append(record)
+
+    return records
 
 
 def parse_image(data_path=None, **ignored):
