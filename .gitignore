@@ -6,8 +6,9 @@
 Untitled*.ipynb
 
 *.cache*
-
+*.conf*
 *temp/*
+*nohup.out
 
 */build/*
 */dist/*

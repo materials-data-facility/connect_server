@@ -1,7 +1,7 @@
 import json
 import os
 from tqdm import tqdm
-from mdf_forge.toolbox import find_files
+from mdf_toolbox.toolbox import find_files
 
 translate_template = {
 ##    "mdf.title": "dc.titles,.title",

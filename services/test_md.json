@@ -1,0 +1,45 @@
+{
+    "mdf": {
+        "source_name": "generic_test",
+        "landing_page": "http://example.tld",
+        "acl": ["public"]
+    },
+    "dc": {
+        "descriptions": [{
+            "description": "A dataset, for testing, that is generic in content.",
+            "descriptionType": "Other"
+        }],
+        "publicationYear": "2017",
+        "creators": [{
+            "creatorName": "Abe Aardvark"
+        },
+        {
+            "creatorName": "Benny Blastname"
+        }],
+        "titles": [{
+            "title": "Generic Testing Dataset"
+        }],
+        "identifier": {
+            "identifierType": "DOI",
+            "identifier": "10.0000/0000"
+        },
+        "publisher": "Missing Data Farm",
+        "resourceType": {
+            "resourceTypeGeneral": "Dataset"
+        }
+    },
+    "data": {
+        "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/testing_publication/moc_files/"
+    },
+    "index": {
+        "ase": true,
+        "csv": {
+            "delimiter": ",",
+            "mapping": {
+                "material.composition": "comp",
+                "material.temperature": "temp"
+            }
+        },
+        "exclusive": true
+    }
+}
