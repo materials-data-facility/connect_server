@@ -5,6 +5,11 @@ from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
 
+# data_format to data_type translations
+FORMAT_TYPE = {
+    "vasp": "dft"
+}
+
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
 
@@ -79,6 +84,80 @@ def parse_ase(data_path=None, **ignored):
     Returns:
     dict: Useful data ASE could pull out of the file.
     """
+    ase_formats = {
+        'abinit': "abinit",
+        'aims': "aims",
+        'aims-output': "aims",
+        'bundletrajectory': "bundletrajectory",
+        'castep-castep': "castep",
+        'castep-cell': "castep",
+        'castep-geom': "castep",
+        'castep-md': "castep",
+        'castep-phonon': "castep",
+        'cfg': "atomeye",
+        'cif': "cif",
+        'cmdft': "cmdft",
+        'cube': "cube",
+        'dacapo': "dacapo",
+        'dacapo-text': "dacapo",
+        'db': "ase_db",
+        'dftb': "dftb",
+        'dlp4': "dlp4",
+        'dmol-arc': "dmol3",
+        'dmol-car': "dmol3",
+        'dmol-incoor': "dmol3",
+        'elk': "elk",
+        'eon': "eon",
+        'eps': "eps",
+        'espresso-in': "espresso",
+        'espresso-out': "espresso",
+        'etsf': "etsf",
+        'exciting': "exciting",
+        'extxyz': "extxyz",
+        'findsym': "findsym",
+        'gaussian': "gaussian",
+        'gaussian-out': "gaussian",
+        'gen': "dftb",
+        'gpaw-out': "gpaw",
+        'gpw': "gpaw",
+        'gromacs': "gromacs",
+        'gromos': "gromos",
+        'html': "html",
+        'iwm': "iwn",
+        'json': "ase_json",
+        'jsv': "jsv",
+        'lammps-dump': "lammps",
+        'lammps-data': "lammps",
+        'magres': "magres",
+        'mol': "mol",
+        'nwchem': "nwchem",
+        'octopus': "octopus",
+        'proteindatabank': "proteindatabank",
+        'png': "ase_png",
+        'postgresql': "ase_postgresql",
+        'pov': "pov",
+        'py': "ase_py",
+        'qbox': "qbox",
+        'res': "shelx",
+        'sdf': "sdf",
+        'struct': "wien2k",
+        'struct_out': "siesta",
+        'traj': "ase_traj",
+        'trj': "ase_trj",
+        'turbomole': "turbomole",
+        'turbomole-gradient': "turbomole",
+        'v-sim': "v-sim",
+        'vasp': "vasp",
+        'vasp-out': "vasp",
+        'vasp-xdatcar': "vasp",
+        'vasp-xml': "vasp",
+        'vti': "vtk",
+        'vtu': "vtk",
+        'x3d': "x3d",
+        'xsd': "xsd",
+        'xsf': "xsf",
+        'xyz': "xyz"
+        }
     ase_template = {
         # "constraints": None,              # No get()
         # "all_distances": None,
@@ -121,13 +200,29 @@ def parse_ase(data_path=None, **ignored):
         # "num_frames": None,                # No get()
         # "num_atoms": None                  # No get()
         }
-
+    record = {}
+    materials = {}
     # Read the file and process it if the reading succeeds
     # Will throw exception on certain failures
     result = ase.io.read(data_path)
     if not result:
         raise ValueError("No data")
 
+    # Must have a known data format to know which block to output to
+    try:
+        materials["data_format"] = ase_formats[ase.io.formats.filetype(data_path)]
+    except Exception as e:
+        raise ValueError("Unable to determine data format.")
+    materials["data_type"] = FORMAT_TYPE[materials["data_format"]]
+
+    try:
+        composition = result.get_chemical_formula()
+        materials["composition"] = composition
+    except Exception as e:
+        # No composition extracted
+        pass
+
+    '''
     ase_dict = ase_template.copy()
     # Data with easy .get() functions
     for key in ase_dict.keys():
@@ -138,10 +233,6 @@ def parse_ase(data_path=None, **ignored):
             pass
 
     # Data without a .get()
-    try:
-        ase_dict["filetype"] = ase.io.formats.filetype(data_path)
-    except Exception as e:
-        pass
     try:
         ase_dict["num_atoms"] = len(result)
     except Exception as e:
@@ -187,11 +278,12 @@ def parse_ase(data_path=None, **ignored):
 
     if not ase_dict:
         raise ValueError("All data None")
+    '''
 
-    # Return correct block
-    return {
-        "material": ase_dict
-    }
+    # Return correct record
+    if materials:
+        record["materials"] = materials
+    return record
 
 
 def parse_csv(file_data=None, params=None, **ignored):
