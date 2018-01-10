@@ -1,0 +1,35 @@
+{
+    "mdf": {
+        "source_name": "alloy_db_test",
+        "landing_page": "http://alloy.phys.cmu.edu/",
+        "acl": ["public"]
+    },
+    "dc": {
+        "descriptions": [{
+            "description": "A subsection of Alloy DB for testing the MDF-Citrine integration.",
+            "descriptionType": "Other"
+        }],
+        "publicationYear": "2017",
+        "creators": [{
+            "creatorName": "Alice Smith"
+        },
+        {
+            "creatorName": "Carl Carlson"
+        }],
+        "titles": [{
+            "title": "Alloy DB (full test)"
+        }],
+        "identifier": {
+            "identifierType": "DOI",
+            "identifier": "10.test/1"
+        },
+        "publisher": "MDF",
+        "resourceType": {
+            "resourceTypeGeneral": "Dataset"
+        }
+    },
+    "data": {
+        "globus": "e38ee745-6d04-11e5-ba46-22000b92c6ec/citrine_mdf_demo/alloy.pbe/"
+    },
+    "services": ["globus_publish"]
+}

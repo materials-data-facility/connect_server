@@ -1,0 +1,24 @@
+{
+    "dc":{
+        "creators": [
+            {
+                "creatorName": "Hopper, Grace"
+            }
+        ],
+        "titles": [
+            {
+                "title": "Testing Dataset"
+            }
+        ],
+        "publisher": "MDF",
+        "publicationYear": "1970",
+        "resourceType": {
+            "resourceTypeGeneral": "Dataset"
+        }
+    },
+    "mdf": {
+        "source_name": "test_ds",
+        "acl": ["public"],
+        "landing_page": "https://example.com"
+    }
+}
