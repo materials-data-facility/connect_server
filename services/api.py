@@ -420,8 +420,8 @@ def get_publish_metadata(dc_metadata):
                                for title in dc_metadata.get("titles", [])]),
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": ", ".join([author.get("creatorName", "")
-                                            for author in dc_metadata.get("creators", [])]),
+        "dc.contributor.author": [author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])]),
         "collection_id": PUBLISH_COLLECTION,
         "accept_license": True
     }
