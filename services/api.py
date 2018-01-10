@@ -467,8 +467,7 @@ def begin_ingest(base_stock_path, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["search_ingest"],
-        "index": app.config["INGEST_INDEX"]
+        "services": ["search_ingest"]
         }
     search_client = toolbox.confidential_login(creds)["search_ingest"]
     final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
@@ -501,7 +500,7 @@ def begin_ingest(base_stock_path, status_id):
 
     # Ingest finalized feedstock
     try:
-        ingester.ingest(search_client, final_feed_path)
+        ingester.ingest(search_client, final_feed_path, index=app.config["INGEST_INDEX"])
     except Exception as e:
         # TODO: Update status - ingest failed
         raise Exception("ERROR:" + str({
