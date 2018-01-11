@@ -20,7 +20,8 @@ setup(
         "xmltodict>=0.10.2",
         "pymatgen>=2017.6.8",
         "jsonschema>=2.6.0",
-        "pymongo>=3.4.0"  # For bson.ObjectId
+        "pymongo>=3.4.0",  # For bson.ObjectId
+        "Pillow>=3.1.2"
     ],
     package_data={'mdf_refinery': ['schemas/*.schema']}
 )
