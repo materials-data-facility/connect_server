@@ -222,7 +222,7 @@ def parse_ase(data_path=None, **ignored):
         # No composition extracted
         pass
 
-    #'''
+    '''
     ase_dict = ase_template.copy()
     # Data with easy .get() functions
     for key in ase_dict.keys():
@@ -278,13 +278,12 @@ def parse_ase(data_path=None, **ignored):
 
     if not ase_dict:
         raise ValueError("All data None")
-    #'''
+    '''
 
     # Return correct record
     if materials:
         record["materials"] = materials
-    #return record
-    return {"materials": ase_dict}
+    return record
 
 
 def parse_csv(file_data=None, params=None, **ignored):
