@@ -4,6 +4,15 @@ import ase.io
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
+import pymatgen
+from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg
+from pif_ingestor.manager import IngesterManager
+from pypif.pif import dump as pif_dump
+from pypif_sdk.util import citrination as cit_utils
+from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
+from pypif_sdk.interop.datacite import add_datacite as add_dc
+from queue import Empty
+
 
 # data_format to data_type translations
 FORMAT_TYPE = {
@@ -17,279 +26,147 @@ NA_VALUES = ["", " "]
 # All parsers accept data_path and/or file_data, and arbitrary other parameters
 
 
-def omniparse(data_paths, parse_params=None):
+def transformer(input_queue, output_queue, queue_done, parse_params):
     """Parse data files however possible.
 
     Arguments:
-    data_paths (str or list of str): The path(s) to the data file(s).
-    parse_params (dict): Run parsers with these parameters. Default None.
+    group (list of str): One group of files to parse.
+    parse_params (dict): Run parsers with these parameters.
+        dataset (dict): The dataset entry.
+        parsers (dict): The parser-specific information.
 
     Returns:
     list of dict: The metadata parsed from the file.
                   Will be empty if no selected parser can parse data.
     """
-    if parse_params is None:
-        parse_params = {}
-    if isinstance(data_paths, str):
-        data_paths = [data_paths]
+    # Parse each group from the queue
+    # Exit loop when queue_done is True and no groups remain
+    while True:
+        # Fetch group from queue
+        try:
+            group = input_queue.get(timeout=5)
+        # No group fetched
+        except Empty:
+            # Queue is permanently depleted, stop processing
+            if queue_done.value:
+                break
+            # Queue is still active, try again
+            else:
+                continue
 
-    records = []
-
-    # Parse each data file
-    for path in data_paths:
-        # Open data_file
-        with open(path) as file_data:
-            # Check all parsers
-            for par_name, par_func in ALL_PARSERS.items():
-                # All parsers should be run if "exclusive" is set
-                # Otherwise, only parsers listed in the formats should be run
-                if not parse_params.get("exclusive") or par_name in parse_params.keys():
-                    try:
-                        # Call parser with params if present
-                        parser_res = par_func(data_path=path,
-                                              file_data=file_data,
-                                              params=parse_params.get(par_name, None))
-                        # If no data returned, fail
-                        if not parser_res:
-                            raise ValueError("No data parsed")
-                        # If single record returned, make into list
-                        elif not isinstance(parser_res, list):
-                            parser_res = [parser_res]
-                    # Exception indicates no data parsed
-                    except Exception as e:
-                        pass
-                    else:
-                        # If only one file is being parsed, return all records
-                        if len(data_paths) == 1:
-                            records = parser_res
-                        # If multiple files are being parsed, merge results
+        # Process fetched group
+        single_record = {}
+        multi_records = []
+        for parser in ALL_PARSERS:
+            # TODO: Filter appropriate parsers
+            if True or parser.__name__ in parse_params.get("parsers", {}).keys():
+                try:
+                    parser_res = parser(group=group, params=parse_params)
+                except Exception as e:
+                    print("Parser {p} failed with exception {e}".format(
+                                                                    p=parser.__name__,
+                                                                    e=repr(e)))
+                else:
+                    # Only process actual results
+                    if parser_res:
+                        # If a single record was returned, merge with others
+                        if isinstance(parser_res, dict):
+                            single_record = toolbox.dict_merge(single_record, parser_res)
+                        # If multiple records were returned, add to list
+                        elif isinstance(parser_res, list):
+                            multi_records.extend(parser_res)
+                        # Else, panic
                         else:
-                            # All results should be merged into records[0]
-                            if len(records) == 0:
-                                records.append({})
-                            for res in parser_res:
-                                records[0] = toolbox.dict_merge(records[0], res)
-                    file_data.seek(0)
-    return records
+                            raise TypeError(("Parser '{p}' returned "
+                                             "type '{t}'!").format(p=parser.__name__,
+                                                                   t=type(parser_res)))
+        # Merge the single_record into all multi_records if both exist
+        if single_record and multi_record:
+            records = [toolbox.dict_merge(r, single_record) for r in multi_record if r]
+        # Else, if single_record exists, make it a list
+        elif single_record:
+            records = [single_record]
+        # Otherwise, use the list of records if it exists
+        elif multi_record:
+            records = multi_record
+        # If nothing exists, make a blank list
+        else:
+            records = []
+
+        # Push records to output queue
+        for record in records:
+            output_queue.put(record)
 
 
-def parse_ase(data_path=None, **ignored):
-    """Parser for data in ASE-readable formats.
-    If ASE is incapable of reading the file, an exception will be raised.
+def parse_crystal_structure(group, params=None):
+    """Parser for the crystal_structure block.
+    Will also populate materials block.
 
     Arguments:
-    data_path (str): Path to the data file.
-    ignored (any): Ignored arguments.
+    group (list of str): The paths to grouped files.
+    params (dict): N/A
 
     Returns:
-    dict: Useful data ASE could pull out of the file.
+    dict: The record parsed.
     """
-    ase_formats = {
-        'abinit': "abinit",
-        'aims': "aims",
-        'aims-output': "aims",
-        'bundletrajectory': "bundletrajectory",
-        'castep-castep': "castep",
-        'castep-cell': "castep",
-        'castep-geom': "castep",
-        'castep-md': "castep",
-        'castep-phonon': "castep",
-        'cfg': "atomeye",
-        'cif': "cif",
-        'cmdft': "cmdft",
-        'cube': "cube",
-        'dacapo': "dacapo",
-        'dacapo-text': "dacapo",
-        'db': "ase_db",
-        'dftb': "dftb",
-        'dlp4': "dlp4",
-        'dmol-arc': "dmol3",
-        'dmol-car': "dmol3",
-        'dmol-incoor': "dmol3",
-        'elk': "elk",
-        'eon': "eon",
-        'eps': "eps",
-        'espresso-in': "espresso",
-        'espresso-out': "espresso",
-        'etsf': "etsf",
-        'exciting': "exciting",
-        'extxyz': "extxyz",
-        'findsym': "findsym",
-        'gaussian': "gaussian",
-        'gaussian-out': "gaussian",
-        'gen': "dftb",
-        'gpaw-out': "gpaw",
-        'gpw': "gpaw",
-        'gromacs': "gromacs",
-        'gromos': "gromos",
-        'html': "html",
-        'iwm': "iwn",
-        'json': "ase_json",
-        'jsv': "jsv",
-        'lammps-dump': "lammps",
-        'lammps-data': "lammps",
-        'magres': "magres",
-        'mol': "mol",
-        'nwchem': "nwchem",
-        'octopus': "octopus",
-        'proteindatabank': "proteindatabank",
-        'png': "ase_png",
-        'postgresql': "ase_postgresql",
-        'pov': "pov",
-        'py': "ase_py",
-        'qbox': "qbox",
-        'res': "shelx",
-        'sdf': "sdf",
-        'struct': "wien2k",
-        'struct_out': "siesta",
-        'traj': "ase_traj",
-        'trj': "ase_trj",
-        'turbomole': "turbomole",
-        'turbomole-gradient': "turbomole",
-        'v-sim': "v-sim",
-        'vasp': "vasp",
-        'vasp-out': "vasp",
-        'vasp-xdatcar': "vasp",
-        'vasp-xml': "vasp",
-        'vti': "vtk",
-        'vtu': "vtk",
-        'x3d': "x3d",
-        'xsd': "xsd",
-        'xsf': "xsf",
-        'xyz': "xyz"
-        }
-    ase_template = {
-        # "constraints": None,              # No get()
-        # "all_distances": None,
-        # "angular_momentum": None,
-        # "atomic_numbers": None,
-        # "cell": None,
-        "cell_lengths_and_angles": None,
-        # "celldisp": None,
-        # "center_of_mass": None,
-        # "charges": None,
-        "chemical_formula": None,
-        # "chemical_symbols": None,
-        # "dipole_moment": None,
-        # "forces": None,
-        # "forces_raw": None,               # No get()
-        # "initial_charges": None,
-        # "initial_magnetic_moments": None,
-        # "kinetic_energy": None,
-        # "magnetic_moment": None,
-        # "magnetic_moments": None,
-        # "masses": None,
-        # "momenta": None,
-        # "moments_of_inertia": None,
-        # "number_of_atoms": None,
-        "pbc": None,
-        # "positions": None,
-        # "potential_energies": None,
-        # "potential_energy": None,
-        # "potential_energy_raw": None,     # No get()
-        # "reciprocal_cell": None,
-        # "scaled_positions": None,
-        # "stress": None,
-        # "stresses": None,
-        # "tags": None,
-        "temperature": None,
-        # "total_energy": None,
-        # "velocities": None,
-        "volume": None,
-        # "filetype": None,                  # No get()
-        # "num_frames": None,                # No get()
-        # "num_atoms": None                  # No get()
-        }
     record = {}
-    materials = {}
-    # Read the file and process it if the reading succeeds
-    # Will throw exception on certain failures
-    result = ase.io.read(data_path)
-    if not result:
-        raise ValueError("No data")
 
-    # Must have a known data format to know which block to output to
-    try:
-        materials["data_format"] = ase_formats[ase.io.formats.filetype(data_path)]
-    except Exception as e:
-        raise ValueError("Unable to determine data format.")
-    materials["data_type"] = FORMAT_TYPE[materials["data_format"]]
-
-    try:
-        composition = result.get_chemical_formula()
-        materials["composition"] = composition
-    except Exception as e:
-        # No composition extracted
-        pass
-
-    '''
-    ase_dict = ase_template.copy()
-    # Data with easy .get() functions
-    for key in ase_dict.keys():
+    for data_file in group:
+        materials = {}
+        crystal_structure = {}
+        # Attempt to read the file
         try:
-            ase_dict[key] = eval("result.get_" + key + "()")
-        # Exceptions can be generally ignored
-        except Exception as e:
-            pass
-
-    # Data without a .get()
-    try:
-        ase_dict["num_atoms"] = len(result)
-    except Exception as e:
-        pass
-#        if type(result) is list:
-#            ase_dict["num_frames"] = len(result)
-#        else:
-#            ase_dict["num_atoms"] = len(result)
-
-    # Format fields
-    ase_dict["composition"] = ase_dict.pop("chemical_formula", None)
-
-    # Fix up the extracted data
-    none_keys = []
-    for key in ase_dict.keys():
-        # numpy ndarrays aren't JSON serializable
-        if 'numpy' in str(type(ase_dict[key])).lower():
-            ase_dict[key] = ase_dict[key].tolist()
-
-        # None values aren't useful
-        if ase_dict[key] is None:
-            none_keys.append(key)
-        # Remake lists with valid values
-        elif type(ase_dict[key]) is list:
-            new_list = []
-            for elem in ase_dict[key]:
-                # FixAtoms aren't JSON serializable
-                if 'fixatoms' in str(elem).lower():
-                    new_elem = elem.get_indices().tolist()
-                else:
-                    new_elem = elem
-                # Only add elements with data
-                if new_elem:
-                    new_list.append(new_elem)
-            # Only add lists with data
-            if new_list:
-                ase_dict[key] = new_list
+            # Read with ASE
+            ase_res = ase.io.read(data_path)
+            # Check data read, validate crystal structure
+            if not ase_res or not all(ase_res.get_pbc()):
+                raise ValueError("No valid data")
             else:
-                none_keys.append(key)
-    # None keys aren't useful
-    for key in none_keys:
-        ase_dict.pop(key)
+                # Convert ASE Atoms to Pymatgen Structure
+                pmg_s = ase_to_pmg.get_structure(ase_res)
+        # ASE failed to read file
+        except Exception:
+            try:
+                # Read with Pymatgen
+                pmg_s = pymatgen.Structure.from_file(data_path)
+            except Exception:
+                # Can't read file
+                continue
 
-    if not ase_dict:
-        raise ValueError("All data None")
-    '''
+        # Parse materials block
+        materials["composition"] = pmg_s.formula.replace(" ", "")
+        # Parse crystal_structure block
+        crystal_structure["space_group_number"] = pmg_s.get_space_group_info()[1]
+        crystal_structure["number_of_atoms"] = int(pmg_s.composition.num_atoms)
+        crystal_structure["volume"] = float(pmg_s.volume)
 
-    # Return correct record
-    if materials:
-        record["materials"] = materials
+        # Add to record
+        record = toolbox.dict_merge(record, {
+                                                "materials": materials,
+                                                "crystal_structure": crystal_structure
+                                            })
     return record
 
 
-def parse_csv(file_data=None, params=None, **ignored):
+def parse_pif(data_path, params=None):
+    """Use Citrine's parsers."""
+    # TODO: Should this be elsewhere?
+    cit_manager = IngesterManager()
+
+    cit_pifs = cit_manager.run_extensions(group_paths, include=None, exclude=[],
+                                          args={"quality_report": False})
+    cit_pifs = cit_utils.set_uids(cit_pifs)
+
+
+
+def parse_csv(groups, params=None):
     """Parse a CSV."""
-    if not params or not file_data:
+    if not params:
         return {}
+    csv_params = params.get("parsers", {}).get("csv", {})
+    if not csv_params:
+        return {}
+# TODO
     df = pd.read_csv(file_data, delimiter=params.pop("delimiter", ","), na_values=NA_VALUES)
     return parse_pandas(df, params.get("mapping", {}))
 
@@ -370,16 +247,15 @@ def parse_image(data_path=None, **ignored):
     }
 
 
-# Dict of all user-selectable parsers as parser:function
-ALL_PARSERS = {
-    "ase": parse_ase,
-    "csv": parse_csv,
-    "excel": parse_excel,
-    "hdf5": parse_hdf5,
-    "json": parse_json,
-    "jpg": parse_image,
-    "png": parse_image
-}
+# List of all user-selectable parsers
+ALL_PARSERS = [
+    parse_ase,
+    parse_csv,
+    parse_excel,
+    parse_hdf5,
+    parse_json,
+    parse_image
+]
 
 
 def parse_pandas(df, mapping):
