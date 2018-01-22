@@ -26,7 +26,7 @@ def converter(root_path, dataset, convert_params):
 
     parse_params = {
         "dataset": convert_params,
-        "parsers": convert_params.pop("index")
+        "parsers": convert_params.pop("index", {})
     }
 
     # Start up transformers
