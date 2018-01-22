@@ -70,7 +70,7 @@ def moc_driver(moc_params, status_id):
 
     # Download data locally, back up on MDF resources
     dl_res = download_and_backup(mdf_transfer_client,
-                                 mdf_dataset.pop("data", {}),
+                                 moc_params.pop("data", {}),
                                  status_id)
     if dl_res["success"]:
         local_path = dl_res["local_path"]
@@ -79,6 +79,8 @@ def moc_driver(moc_params, status_id):
         raise IOError("No data downloaded")
     # TODO: Update status - data downloaded
     print("DEBUG: Data downloaded")
+
+    services = moc_params.pop("services")
 
     # Convert data
     feedstock = converter(local_path, moc_params)
@@ -91,7 +93,8 @@ def moc_driver(moc_params, status_id):
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
                                    data={"status_id": status_id,
-                                         "local_path": local_path},
+                                         "local_path": local_path,
+                                         "services": services},
                                    files={'file': stock})
     if not ingest_res.json().get("success"):
         # TODO: Update status? Ingest failed
