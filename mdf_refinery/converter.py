@@ -1,4 +1,5 @@
 from ctypes import c_bool
+import json
 import multiprocessing
 import os
 from queue import Empty
@@ -51,7 +52,7 @@ def convert(root_path, convert_params):
     while True:
         try:
             record = output_queue.get(1)
-            feedstock.append(record)
+            feedstock.append(json.loads(record))
         except Empty:
             break
 
