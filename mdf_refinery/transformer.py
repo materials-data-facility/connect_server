@@ -74,7 +74,8 @@ def transformer(input_queue, output_queue, queue_done, parse_params):
                             single_record = toolbox.dict_merge(single_record, parser_res)
                         # If multiple records were returned, add to list
                         elif isinstance(parser_res, list):
-                            multi_records.extend(parser_res)
+                            # Only add records with data
+                            [multi_records.append(rec) for rec in parser_res if rec]
                         # Else, panic
                         else:
                             raise TypeError(("Parser '{p}' returned "
@@ -148,6 +149,7 @@ def parse_crystal_structure(group, params=None):
     return record
 
 
+# TODO
 def parse_pif(data_path, params=None):
     """Use Citrine's parsers."""
     # TODO: Should this be elsewhere?
@@ -158,19 +160,35 @@ def parse_pif(data_path, params=None):
     cit_pifs = cit_utils.set_uids(cit_pifs)
 
 
+def parse_csv(group, params=None):
+    """Parser for CSVs.
+    Will populate blocks according to mapping.
 
-def parse_csv(groups, params=None):
-    """Parse a CSV."""
-    if not params:
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            csv (dict):
+                mapping (dict): The mapping of mdf_fields: csv_headers
+                delimiter (str): The delimiter. Default ','
+                na_values (list of str): Values to treat as N/A. Default NA_VALUES
+
+    Returns:
+    dict: The record(s) parsed.
+    """
+    try:
+        csv_params = params["parsers"]["csv"]
+        mapping = csv_params["mapping"]
+    except KeyError:
         return {}
-    csv_params = params.get("parsers", {}).get("csv", {})
-    if not csv_params:
-        return {}
-# TODO
-    df = pd.read_csv(file_data, delimiter=params.pop("delimiter", ","), na_values=NA_VALUES)
+
+    for file_path in groups:
+        df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
+    # TODO
     return parse_pandas(df, params.get("mapping", {}))
 
 
+# TODO
 def parse_excel(file_data=None, params=None, **ignored):
     """Parse an Excel file."""
     if not params or not file_data:
@@ -179,14 +197,7 @@ def parse_excel(file_data=None, params=None, **ignored):
     return parse_pandas(df, params.get("mapping", {}))
 
 
-def parse_hdf5(file_data=None, params=None, **ignored):
-    """Parse an HDF5 file."""
-    if not params or not file_data:
-        return {}
-    df = pd.read_hdf(file_data)
-    return parse_pandas(df, params.get("mapping", {}))
-
-
+# TODO
 def parse_json(file_data=None, params=None, **ignored):
     """Parse a JSON file."""
     # If no structure is supplied, do no parsing
@@ -234,6 +245,7 @@ def parse_json(file_data=None, params=None, **ignored):
     return records
 
 
+# TODO
 def parse_image(data_path=None, **ignored):
     """Parse an image."""
     im = Image.open(data_path)
@@ -248,7 +260,11 @@ def parse_image(data_path=None, **ignored):
 
 
 # List of all user-selectable parsers
+# TODO: Repopulate
 ALL_PARSERS = [
+    parse_crystal_structure
+]
+old_PARSERS = [
     parse_ase,
     parse_csv,
     parse_excel,
@@ -258,6 +274,7 @@ ALL_PARSERS = [
 ]
 
 
+# TODO
 def parse_pandas(df, mapping):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
