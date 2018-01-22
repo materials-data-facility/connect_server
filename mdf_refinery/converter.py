@@ -41,7 +41,7 @@ def converter(root_path, convert_params):
     input_complete.value = True
 
     # TODO: Process dataset entry
-    full_dataset = convert_params["dataset"]
+    full_dataset = convert_params
 
     # Wait for transformers
     [t.join() for t in transformers]
