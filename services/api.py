@@ -80,7 +80,7 @@ def moc_driver(moc_params, status_id):
     # TODO: Update status - data downloaded
     print("DEBUG: Data downloaded")
 
-    services = moc_params.pop("services")
+    services = moc_params.pop("services", [])
 
     # Convert data
     feedstock = converter(local_path, moc_params)
