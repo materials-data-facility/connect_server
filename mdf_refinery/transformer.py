@@ -264,14 +264,6 @@ def parse_image(data_path=None, **ignored):
 ALL_PARSERS = [
     parse_crystal_structure
 ]
-old_PARSERS = [
-    parse_ase,
-    parse_csv,
-    parse_excel,
-    parse_hdf5,
-    parse_json,
-    parse_image
-]
 
 
 # TODO
