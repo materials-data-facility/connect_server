@@ -57,6 +57,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         # Process fetched group
         single_record = {}
         multi_records = []
+        print("DEBUG: Fetched: ", group)
         for parser in ALL_PARSERS:
             # TODO: Filter appropriate parsers
             if True or parser.__name__ in parse_params.get("parsers", {}).keys():
@@ -82,8 +83,8 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                              "type '{t}'!").format(p=parser.__name__,
                                                                    t=type(parser_res)))
         # Merge the single_record into all multi_records if both exist
-        if single_record and multi_record:
-            records = [toolbox.dict_merge(r, single_record) for r in multi_record if r]
+        if single_record and multi_records:
+            records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
         # Else, if single_record exists, make it a list
         elif single_record:
             records = [single_record]
@@ -94,9 +95,11 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         else:
             records = []
 
+        print("DEBUG: Records:", records)
+
         # Push records to output queue
         for record in records:
-            output_queue.put(record)
+            output_queue.put(json.dumps(record))
 
 
 def parse_crystal_structure(group, params=None):
@@ -118,7 +121,7 @@ def parse_crystal_structure(group, params=None):
         # Attempt to read the file
         try:
             # Read with ASE
-            ase_res = ase.io.read(data_path)
+            ase_res = ase.io.read(data_file)
             # Check data read, validate crystal structure
             if not ase_res or not all(ase_res.get_pbc()):
                 raise ValueError("No valid data")
@@ -126,10 +129,10 @@ def parse_crystal_structure(group, params=None):
                 # Convert ASE Atoms to Pymatgen Structure
                 pmg_s = ase_to_pmg.get_structure(ase_res)
         # ASE failed to read file
-        except Exception:
+        except Exception as e:
             try:
                 # Read with Pymatgen
-                pmg_s = pymatgen.Structure.from_file(data_path)
+                pmg_s = pymatgen.Structure.from_file(data_file)
             except Exception:
                 # Can't read file
                 continue
