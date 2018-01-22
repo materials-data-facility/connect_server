@@ -10,7 +10,7 @@ from mdf_toolbox import toolbox
 NUM_SUBMITTERS = 5
 
 
-def ingester(ingest_client, feedstocks, index, batch_size=100):
+def ingest(ingest_client, feedstocks, index, batch_size=100):
     """Ingests feedstock from file.
 
     Arguments:

@@ -3,12 +3,12 @@ import multiprocessing
 import os
 from queue import Empty
 
-from . import transformer
+from .transformer import transform
 
 NUM_TRANSFORMERS = 5
 
 
-def converter(root_path, convert_params):
+def convert(root_path, convert_params):
     """Convert files under the root path into feedstock.
 
     Arguments:
@@ -30,7 +30,7 @@ def converter(root_path, convert_params):
     }
 
     # Start up transformers
-    transformers = [multiprocessing.Process(target=transformer,
+    transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue, 
                                                   input_complete, parse_params))]
     [t.start() for t in transformers]

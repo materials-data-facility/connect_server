@@ -1,4 +1,4 @@
-from .converter import converter
-from .ingester import ingester
-from .transformer import transformer
+from .converter import convert
+from .ingester import ingest
+from .transformer import transform
 from .validator import Validator
