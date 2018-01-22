@@ -88,8 +88,8 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         elif single_record:
             records = [single_record]
         # Otherwise, use the list of records if it exists
-        elif multi_record:
-            records = multi_record
+        elif multi_records:
+            records = multi_records
         # If nothing exists, make a blank list
         else:
             records = []
@@ -182,7 +182,7 @@ def parse_csv(group, params=None):
     except KeyError:
         return {}
 
-    for file_path in groups:
+    for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
     # TODO
     return parse_pandas(df, params.get("mapping", {}))
