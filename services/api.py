@@ -13,7 +13,7 @@ from citrination_client import CitrinationClient
 from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
-from mdf_refinery import ingester, omniparser, validator
+from mdf_refinery import converter, ingester
 from pif_ingestor.manager import IngesterManager
 from pypif.pif import dump as pif_dump
 from pypif_sdk.util import citrination as cit_utils
@@ -47,7 +47,7 @@ def accept_convert():
     status_id = str(ObjectId())
     # TODO: Register status ID
     print("DEBUG: Status ID created")
-    converter = Thread(target=begin_convert, name="converter_thread", args=(metadata, status_id))
+    converter = Thread(target=moc_driver, name="converter_thread", args=(metadata, status_id))
     converter.start()
     return jsonify({
         "success": True,
@@ -55,6 +55,58 @@ def accept_convert():
         })
 
 
+def moc_driver(moc_params, status_id):
+    """Pull, back up, and convert metadata."""
+    # Setup
+    creds = {
+        "app_name": "MDF Open Connect",
+        "client_id": app.config["API_CLIENT_ID"],
+        "client_secret": app.config["API_CLIENT_SECRET"],
+        "services": ["transfer", "publish"]
+        }
+    clients = toolbox.confidential_login(creds)
+    mdf_transfer_client = clients["transfer"]
+    globus_publish_client = clients["publish"]
+
+    # Download data locally, back up on MDF resources
+    dl_res = download_and_backup(mdf_transfer_client,
+                                 mdf_dataset.pop("data", {}),
+                                 status_id)
+    if dl_res["success"]:
+        local_path = dl_res["local_path"]
+        backup_path = dl_res["backup_path"]
+    else:
+        raise IOError("No data downloaded")
+    # TODO: Update status - data downloaded
+    print("DEBUG: Data downloaded")
+
+    # Convert data
+    feedstock = converter(local_path, moc_params)
+
+    # Pass dataset to /ingest
+    with tempfile.TemporaryFile(mode="w+") as stock:
+        for entry in feedstock:
+            json.dump(entry, stock)
+            stock.write("\n")
+        stock.seek(0)
+        ingest_res = requests.post(app.config["INGEST_URL"],
+                                   data={"status_id": status_id,
+                                         "local_path": local_path},
+                                   files={'file': stock})
+    if not ingest_res.json().get("success"):
+        # TODO: Update status? Ingest failed
+        raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
+
+    # Remove local data
+    shutil.rmtree(local_path)
+    # TODO: Update status - everything done
+    return {
+        "success": True,
+        "status_id": status_id
+        }
+
+
+# OLD
 def begin_convert(mdf_dataset, status_id):
     """Pull, back up, and convert metadata."""
     # Setup
