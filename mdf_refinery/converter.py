@@ -8,27 +8,31 @@ from . import transformer
 NUM_TRANSFORMERS = 5
 
 
-def converter(root_path, convert_params):
+def converter(root_path, dataset, convert_params):
     """Convert files under the root path into feedstock.
 
     Arguments:
     root_path (str): The path to the directory holding all the dataset files.
+    dataset (dict): The current dataset entry.
     convert_params (dict): Parameters for conversion.
-        dataset (dict): The current dataset entry.
-        parsers (dict): Parameters for specific parsers. Optional.
 
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
     """
     # Set up multiprocessing
     input_queue = multiprocessing.Queue()
-    output_queue - multiprocessing.Queue()
+    output_queue = multiprocessing.Queue()
     input_complete = multiprocessing.Value(c_bool, False)
+
+    parse_params = {
+        "dataset": convert_params,
+        "parsers": convert_params.pop("index")
+    }
 
     # Start up transformers
     transformers = [multiprocessing.Process(target=transformer,
                                             args=(input_queue, output_queue, 
-                                                  input_complete, convert_params))]
+                                                  input_complete, parse_params))]
     [t.start() for t in transformers]
 
     # Populate input queue
@@ -37,13 +41,13 @@ def converter(root_path, convert_params):
     input_complete.value = True
 
     # TODO: Process dataset entry
-    dataset = convert_params["dataset"]
+    full_dataset = convert_params["dataset"]
 
     # Wait for transformers
     [t.join() for t in transformers]
 
     # Create complete feedstock
-    feedstock = [dataset]
+    feedstock = [full_dataset]
     while True:
         try:
             record = output_queue.get(1)
