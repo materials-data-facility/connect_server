@@ -8,7 +8,7 @@ from . import transformer
 NUM_TRANSFORMERS = 5
 
 
-def converter(root_path, dataset, convert_params):
+def converter(root_path, convert_params):
     """Convert files under the root path into feedstock.
 
     Arguments:
