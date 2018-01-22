@@ -13,7 +13,7 @@ from citrination_client import CitrinationClient
 from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
-from mdf_refinery import converter, ingester
+from mdf_refinery import convert, ingest
 from pif_ingestor.manager import IngesterManager
 from pypif.pif import dump as pif_dump
 from pypif_sdk.util import citrination as cit_utils
@@ -47,8 +47,8 @@ def accept_convert():
     status_id = str(ObjectId())
     # TODO: Register status ID
     print("DEBUG: Status ID created")
-    converter = Thread(target=moc_driver, name="converter_thread", args=(metadata, status_id))
-    converter.start()
+    driver = Thread(target=moc_driver, name="driver_thread", args=(metadata, status_id))
+    driver.start()
     return jsonify({
         "success": True,
         "status_id": status_id
@@ -83,7 +83,7 @@ def moc_driver(moc_params, status_id):
     services = moc_params.pop("services", [])
 
     # Convert data
-    feedstock = converter(local_path, moc_params)
+    feedstock = convert(local_path, moc_params)
 
     # Pass dataset to /ingest
     with tempfile.TemporaryFile(mode="w+") as stock:

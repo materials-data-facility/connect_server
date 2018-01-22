@@ -26,7 +26,7 @@ NA_VALUES = ["", " "]
 # All parsers accept data_path and/or file_data, and arbitrary other parameters
 
 
-def transformer(input_queue, output_queue, queue_done, parse_params):
+def transform(input_queue, output_queue, queue_done, parse_params):
     """Parse data files however possible.
 
     Arguments:
