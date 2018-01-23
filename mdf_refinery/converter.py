@@ -33,25 +33,29 @@ def convert(root_path, convert_params):
     # Start up transformers
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue, 
-                                                  input_complete, parse_params))]
+                                                  input_complete, parse_params))
+                    for i in range(NUM_TRANSFORMERS)]
     [t.start() for t in transformers]
+    print("DEBUG: Transformers started")
 
     # Populate input queue
     [input_queue.put(group) for group in group_tree(root_path)]
     # Mark that input is finished
     input_complete.value = True
+    print("DEBUG: Input complete")
 
     # TODO: Process dataset entry
     full_dataset = convert_params
 
     # Wait for transformers
     [t.join() for t in transformers]
+    print("DEBUG: Transformers joined")
 
     # Create complete feedstock
     feedstock = [full_dataset]
     while True:
         try:
-            record = output_queue.get(1)
+            record = output_queue.get(timeout=1)
             feedstock.append(json.loads(record))
         except Empty:
             break

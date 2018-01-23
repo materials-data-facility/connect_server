@@ -57,7 +57,6 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         # Process fetched group
         single_record = {}
         multi_records = []
-        print("DEBUG: Fetched: ", group)
         for parser in ALL_PARSERS:
             # TODO: Filter appropriate parsers
             if True or parser.__name__ in parse_params.get("parsers", {}).keys():
@@ -94,8 +93,6 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         # If nothing exists, make a blank list
         else:
             records = []
-
-        print("DEBUG: Records:", records)
 
         # Push records to output queue
         for record in records:
