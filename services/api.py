@@ -433,7 +433,7 @@ def begin_ingest(base_feed_path, status_id):
 
     # Globus Search (mandatory)
     try:
-        ingester.ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
+        ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
                         feedstock_save=final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
