@@ -4,7 +4,7 @@ import multiprocessing
 import os
 from queue import Empty
 
-from .transformer import transform
+from mdf_refinery import transform
 
 NUM_TRANSFORMERS = 5
 

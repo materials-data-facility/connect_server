@@ -62,14 +62,12 @@ def moc_driver(moc_params, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer", "publish"]
+        "services": ["transfer"]
         }
-    clients = toolbox.confidential_login(creds)
-    mdf_transfer_client = clients["transfer"]
-    globus_publish_client = clients["publish"]
+    transfer_client = toolbox.confidential_login(creds)
 
     # Download data locally, back up on MDF resources
-    dl_res = download_and_backup(mdf_transfer_client,
+    dl_res = download_and_backup(transfer_client,
                                  moc_params.pop("data", {}),
                                  status_id)
     if dl_res["success"]:
@@ -369,62 +367,6 @@ def download_and_backup(mdf_transfer_client, data_loc, status_id):
         }
 
 
-def group_files(files):
-    """Group files based on format-specific rules."""
-    if not isinstance(files, list):
-        files = [files]
-    groups = []
-    # TODO: Expand list of triggers
-    # VASP
-    # TODO: Use regex instead of exact matching
-    if "OUTCAR" in files:
-        outcar_files = ["OUTCAR", "INCAR", "POSCAR", "WAVCAR"]
-        new_group = []
-        for group_file in outcar_files:
-            # Remove file from list and add to group if present
-            # If not present, noop
-            try:
-                files.remove(group_file)
-            except ValueError:
-                pass
-            else:
-                new_group.append(group_file)
-        if new_group:  # Should always be present
-            groups.append(new_group)
-
-    # NOTE: Keep this grouping last!
-    # Each file group
-    groups.extend([[f] for f in files])
-
-    return groups
-
-
-def get_key_matches(tags=None):
-    exa = []
-    ext = []
-    rex = []
-    for tag, val in KEY_FILES.items():
-        if not tags or tag in tags:
-            for key in val.get("exact", []):
-                exa.append(key.lower())
-            for key in val.get("extension", []):
-                ext.append(key.lower())
-            for key in val.get("regex", []):
-                rex.append(re.compile(key))
-    return {
-        "exact_keys": exa,
-        "extension_keys": ext,
-        "regex_keys": rex
-    }
-
-
-def count_key_files(files, key_info):
-    return len([f for f in files
-                if (f.lower() in key_info["exact_keys"]
-                    or any([f.lower().endswith(ext) for ext in key_info["extension_keys"]])
-                    or any([rx.match(f) for rx in key_info["regex_keys"]]))])
-
-
 def get_file_metadata(file_path, backup_path):
     with open(file_path, "rb") as f:
         md = {
@@ -439,48 +381,6 @@ def get_file_metadata(file_path, backup_path):
     return md
 
 
-def globus_publish_data(publish_client, transfer_client, metadata, local_path):
-    # Submit metadata
-    try:
-        pub_md = get_publish_metadata(metadata.get("dc", {}))
-        md_result = publish_client.push_metadata(pub_md["collection_id"], pub_md)
-        pub_endpoint = md_result['globus.shared_endpoint.name']
-        pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-        submission_id = md_result["id"]
-    except Exception as e:
-        # TODO: Raise exception - not Published due to bad metadata
-        print("DEBUG: Publish push failed")
-        raise
-    # Transfer data
-    try:
-        toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
-                               pub_endpoint, [(local_path, pub_path)], timeout=0)
-    except Exception as e:
-        # TODO: Raise exception - not Published due to failed Transfer
-        raise
-    # Complete submission
-    try:
-        fin_res = publish_client.complete_submission(submission_id)
-    except Exception as e:
-        # TODO: Raise exception - not Published due to Publish error
-        raise
-    return fin_res
-
-
-def get_publish_metadata(dc_metadata):
-    # TODO: Find full Publish schema for translation
-    # Required fields
-    pub_metadata = {
-        "dc.title": ", ".join([title.get("title", "")
-                               for title in dc_metadata.get("titles", [])]),
-        "dc.date.issued": str(date.today().year),
-        "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": [author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])],
-        "collection_id": PUBLISH_COLLECTION,
-        "accept_license": True
-    }
-    return pub_metadata
 
 
 @app.route("/ingest", methods=["POST"])
@@ -515,59 +415,97 @@ def accept_ingest():
         })
 
 
-def begin_ingest(base_stock_path, status_id):
+def begin_ingest(base_feed_path, status_id):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["search_ingest"]
+        "services": ["search_ingest", "publish", "transfer"]
         }
-    search_client = toolbox.confidential_login(creds)["search_ingest"]
+    clients = toolbox.confidential_login(creds)
+    search_client = clients["search_ingest"]
+    publish_client = clients["publish"]
+    transfer_client = clients["transfer"]
+
     final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
 
-    # Validate feedstock
-    val = validator.Validator()
-    with open(base_stock_path, "r") as base_stock:
-        # Validate dataset entry
-        ds_res = val.start_dataset(json.loads(next(base_stock)))
-        if not ds_res["success"]:
-            # TODO: Update status - dataset validation failed
-            raise Exception("ERROR:" + str(ds_res))
-
-        # Validate records
-        for rc in base_stock:
-            record = json.loads(rc)
-            rc_res = val.add_record(record)
-            if not rc_res["success"]:
-                # TODO: Update status - record validation failed
-                raise Exception("ERROR:" + str(rc_res))
-    os.remove(base_stock_path)
-
-    # TODO: Update status - validation passed
-    print("DEBUG: Validation success")
-    # Write out feedstock
-    with open(final_feed_path, 'w') as final_stock:
-        for entry in val.get_finished_dataset():
-            json.dump(entry, final_stock)
-            final_stock.write("\n")
-
-    # Ingest finalized feedstock
+    # Globus Search (mandatory)
     try:
-        ingester.ingest(search_client, final_feed_path, index=app.config["INGEST_INDEX"])
+        ingester.ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
+                        feedstock_save=final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
         raise Exception("ERROR:" + str({
             "success": False,
             "error": repr(e)
             }))
+
+    # Globus Publish
+    # TODO: Test after Publish API is fixed
+    if "globus_publish" in add_services:
+        try:
+            fin_res = globus_publish_data(publish_client, transfer_client,
+                                          mdf_dataset, local_path)
+        except Exception as e:
+            # TODO: Update status - Publish failed
+            print("Publish ERROR:", repr(e))
+        else:
+            # TODO: Update status - Publish success
+            print("DEBUG: Publish success:", fin_res)
+
     # TODO: Update status - ingest successful, processing complete
     print("DEBUG: Ingest success, processing complete")
     return {
         "success": True,
         "status_id": status_id
         }
+
+
+def globus_publish_data(publish_client, transfer_client, metadata, local_path):
+    # Submit metadata
+    try:
+        pub_md = get_publish_metadata(metadata.get("dc", {}))
+        md_result = publish_client.push_metadata(pub_md["collection_id"], pub_md)
+        pub_endpoint = md_result['globus.shared_endpoint.name']
+        pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
+        submission_id = md_result["id"]
+    except Exception as e:
+        # TODO: Raise exception - not Published due to bad metadata
+        print("DEBUG: Publish push failed")
+        raise
+    # Transfer data
+    try:
+        toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
+                               pub_endpoint, [(local_path, pub_path)], timeout=0)
+    except Exception as e:
+        # TODO: Raise exception - not Published due to failed Transfer
+        raise
+    # Complete submission
+    try:
+        fin_res = publish_client.complete_submission(submission_id)
+    except Exception as e:
+        # TODO: Raise exception - not Published due to Publish error
+        raise
+    return fin_res
+
+
+def get_publish_metadata(metadata):
+    dc_metadata = metadata.get("dc", {})
+    # TODO: Find full Publish schema for translation
+    # Required fields
+    pub_metadata = {
+        "dc.title": ", ".join([title.get("title", "")
+                               for title in dc_metadata.get("titles", [])]),
+        "dc.date.issued": str(date.today().year),
+        "dc.publisher": "Materials Data Facility",
+        "dc.contributor.author": [author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])],
+        "collection_id": PUBLISH_COLLECTION,
+        "accept_license": True
+    }
+    return pub_metadata
 
 
 @app.route("/status", methods=["GET", "POST"])
