@@ -64,7 +64,7 @@ def moc_driver(moc_params, status_id):
         "client_secret": app.config["API_CLIENT_SECRET"],
         "services": ["transfer"]
         }
-    transfer_client = toolbox.confidential_login(creds)
+    transfer_client = toolbox.confidential_login(creds)["transfer"]
 
     # Download data locally, back up on MDF resources
     dl_res = download_and_backup(transfer_client,
