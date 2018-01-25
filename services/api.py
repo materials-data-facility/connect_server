@@ -91,7 +91,9 @@ def moc_driver(moc_params, status_id):
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
                                    data={"status_id": status_id,
-                                         "data": app.config["LOCAL_EP"] + local_path,
+                                         "data": {
+                                            "globus": app.config["LOCAL_EP"] + local_path
+                                            },
                                          "services": services},
                                    files={'file': stock})
     print("DEBUG: Ingest result:", ingest_res)
