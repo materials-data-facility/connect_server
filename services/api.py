@@ -94,6 +94,7 @@ def moc_driver(moc_params, status_id):
                                          "data": app.config["LOCAL_EP"] + local_path,
                                          "services": services},
                                    files={'file': stock})
+    print("DEBUG: Ingest result:", ingest_res)
     if not ingest_res.json().get("success"):
         # TODO: Update status? Ingest failed
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
@@ -393,8 +394,8 @@ def accept_ingest():
     # Get parameters
     try:
         params = request.get_json(force=True, silent=True)
-        data_loc = params.get("data", None)
         services = params.get("services", [])
+        data_loc = params.get("data", None)
     except KeyError as e:
         return jsonify({
             "success": False,
