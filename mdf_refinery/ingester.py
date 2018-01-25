@@ -1,75 +1,105 @@
+from ctypes import c_bool
 import json
 import multiprocessing
 from queue import Empty
 
 from globus_sdk import GlobusAPIError
-
 from mdf_toolbox import toolbox
+
+from mdf_refinery import Validator
 
 
 NUM_SUBMITTERS = 5
 
 
-def ingest(ingest_client, feedstocks, index, batch_size=100):
+def ingest(ingest_client, feedstocks, index, batch_size=100,
+           num_submitters=NUM_SUBMITTERS, feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:
     ingest_client (globus_sdk.SearchClient): An authenticated client.
-    feedstocks (str or list of str): The path(s) to feedstock to ingest.
+    feedstock (str or list of str): The path(s) to feedstock to ingest.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
+    num_submitters (int): The number of submission processes to create. Default NUM_SUBMITTERS.
+    feedstock_save (str): Path to file for saving final feedstock. Default None, to save nothing.
     """
     if type(feedstocks) is str:
         feedstocks = [feedstocks]
 
-    # Set up multiprocessing
-    ingest_queue = multiprocessing.JoinableQueue()
-    killswitch = multiprocessing.Value('i', 0)
+    # Validate feedstock
+    all_validators = []
+    for feed_path in feedstocks:
+        with open(feed_path) as stock:
+            val = Validator()
+            ds_res = val.start_dataset(json.loads(next(stock)))
+            if not ds_res.get("success"):
+                raise ValueError("Feedstock '{}' invalid: {}".format(feed_path, str(ds_res)))
 
-    # One reader
-    reader = multiprocessing.Process(target=queue_ingests,
-                                     args=(ingest_queue, feedstocks, batch_size))
-    # As many submitters as is feasible
-    submitters = [multiprocessing.Process(target=process_ingests,
-                                          args=(ingest_queue, ingest_client, index, killswitch))
+            for rc in stock:
+                record = json.loads(rc)
+                rc_res = val.add_record(record)
+                if not rc_res.get("success"):
+                    raise ValueError("Feedstock '{}' invalid: {}".format(feed_path, str(rc_res)))
+        all_validators.append(val)
+
+    # Set up multiprocessing
+    ingest_queue = multiprocessing.Queue()
+    input_done = multiprocessing.Value(c_bool, False)
+
+    # Create submitters
+    submitters = [multiprocessing.Process(target=submit_ingests,
+                                          args=(ingest_queue, ingest_client, index, input_done))
                   for i in range(NUM_SUBMITTERS)]
-    reader.start()
     [s.start() for s in submitters]
 
-    reader.join()
-    ingest_queue.join()
-    killswitch.value = 1
+    # Populate ingest queue and save results if requested
+    with open(feedstock_save or os.devnull, 'w') as save_loc:
+        batch = []
+        # For each entry in each dataset
+        for val in all_validators:
+            for entry in val.get_finished_dataset():
+                # Save entry
+                json.dump(entry, save_loc)
+                save_loc.write("\n")
+                # Add gmeta-formatted entry to batch
+                batch.append(toolbox.format_gmeta(entry))
+
+                # If batch is appropriate size
+                if batch_size > 0 and len(batch) >= batch_size:
+                    # Format batch into gmeta and put in queue
+                    full_ingest = toolbox.format_gmeta(batch)
+                    ingest_queue.put(json.dumps(full_ingest))
+                    batch.clear()
+
+        # Ingest partial batch if needed
+        if batch:
+            full_ingest = toolbox.format_gmeta(batch)
+            ingest_queue.put(json.dumps(full_ingest))
+            batch.clear()
+        input_done.value = True
+
+    # Wait for submitters to finish
     [s.join() for s in submitters]
 
     return {"success": True}
 
 
-def queue_ingests(ingest_queue, feedstocks, batch_size):
-    for stock in feedstocks:
-        list_ingestables = []
-        with open(stock, 'r') as feedstock:
-            for json_record in feedstock:
-                record = toolbox.format_gmeta(json.loads(json_record))
-                list_ingestables.append(record)
-
-                if batch_size > 0 and len(list_ingestables) >= batch_size:
-                    full_ingest = toolbox.format_gmeta(list_ingestables)
-                    ingest_queue.put(json.dumps(full_ingest))
-                    list_ingestables.clear()
-
-        # Check for partial batch to ingest
-        if list_ingestables:
-            full_ingest = toolbox.format_gmeta(list_ingestables)
-            ingest_queue.put(json.dumps(full_ingest))
-            list_ingestables.clear()
-
-
-def process_ingests(ingest_queue, ingest_client, index, killswitch):
-    while killswitch.value == 0:
+def submit_ingests(ingest_queue, ingest_client, index, input_done):
+    """Submit entry ingests to Globus Search."""
+    while True:
+        # Try getting an ingest from the queue
         try:
             ingestable = json.loads(ingest_queue.get(timeout=5))
+        # There are no ingests in the queue
         except Empty:
-            continue
+            # If all ingests have been put in the queue (and thus processed), break
+            if input_done.value:
+                break
+            # Otherwise, more ingests are coming, try again
+            else:
+                continue
+        # Ingest, with error handling
         try:
             res = ingest_client.ingest(index, ingestable)
             if not res["success"]:
@@ -78,5 +108,4 @@ def process_ingests(ingest_queue, ingest_client, index, killswitch):
                 raise ValueError("No documents ingested: " + str(res))
         except GlobusAPIError as e:
             print("\nA Globus API Error has occurred. Details:\n", e.raw_json, "\n")
-            continue
-        ingest_queue.task_done()
+            raise
