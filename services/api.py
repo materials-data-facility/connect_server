@@ -90,16 +90,14 @@ def moc_driver(moc_params, status_id):
             stock.write("\n")
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
-                                   data={"status_id": status_id,
-                                         "local_path": local_path,
+                                   json={"status_id": status_id,
+                                         "data": app.config["LOCAL_EP"] + local_path,
                                          "services": services},
                                    files={'file': stock})
     if not ingest_res.json().get("success"):
         # TODO: Update status? Ingest failed
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
 
-    # Remove local data
-    shutil.rmtree(local_path)
     # TODO: Update status - everything done
     return {
         "success": True,
@@ -263,7 +261,7 @@ def begin_convert(mdf_dataset, status_id):
             stock.write("\n")
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
-                                   data={"status_id": status_id},
+                                   json={"status_id": status_id},
                                    files={'file': stock})
     if not ingest_res.json().get("success"):
         # TODO: Update status? Ingest failed
@@ -381,8 +379,6 @@ def get_file_metadata(file_path, backup_path):
     return md
 
 
-
-
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
@@ -394,20 +390,39 @@ def accept_ingest():
             "success": False,
             "error": "No feedstock file uploaded"
             })
+    # Get parameters
+    try:
+        params = request.get_json(force=True, silent=True)
+        data_loc = params.get("data", None)
+        services = params.get("services", [])
+    except KeyError as e:
+        return jsonify({
+            "success": False,
+            "error": "Parameters missing: " + repr(e)
+            })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": "Invalid ingest JSON: " + repr(e)
+            })
+    
     # Mint/update status ID
-    if not request.form.get("mdf_status_id"):
+    if not params.get("status_id"):
         status_id = str(ObjectId())
         # TODO: Register status ID
         print("DEBUG: New status ID created")
     else:
         # TODO: Check that status exists (must not be set by user)
         # TODO: Update status - ingest request recieved
-        status_id = request.form.get("mdf_status_id")
+        status_id = params.get("status_id")
         print("DEBUG: Current status ID read")
     # Save file
     feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
     feedstock.save(feed_path)
-    ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path, status_id))
+    ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path,
+                                                                         status_id,
+                                                                         services,
+                                                                         data_loc))
     ingester.start()
     return jsonify({
         "success": True,
@@ -415,7 +430,7 @@ def accept_ingest():
         })
 
 
-def begin_ingest(base_feed_path, status_id):
+def begin_ingest(base_feed_path, status_id, services, data_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -431,29 +446,52 @@ def begin_ingest(base_feed_path, status_id):
 
     final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
 
+    # If the data should be local, make sure it is
+    if data_loc:
+        # Will not transfer anything if already in place
+        dl_res = download_and_backup(transfer_client,
+                                     data_loc,
+                                     status_id)
+        if dl_res["success"]:
+            local_path = dl_res["local_path"]
+            backup_path = dl_res["backup_path"]
+        else:
+            raise IOError("No data downloaded")
+        # TODO: Update status - data downloaded
+        print("DEBUG: Data downloaded")
+    # If the data aren't local, but need to be, error
+    elif "globus_publish" in services:
+        raise ValueError("Unable to Publish data without location")
+
     # Globus Search (mandatory)
     try:
         ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
                         feedstock_save=final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
-        raise Exception("ERROR:" + str({
+        raise Exception("Search error:" + str({
             "success": False,
             "error": repr(e)
             }))
 
     # Globus Publish
     # TODO: Test after Publish API is fixed
-    if "globus_publish" in add_services:
+    if "globus_publish" in services:
+        # Get DC metadata
+        with open(final_feed_path) as f:
+            dataset = json.loads(f.readline())
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
-                                          mdf_dataset, local_path)
+                                          dataset, local_path)
         except Exception as e:
             # TODO: Update status - Publish failed
             print("Publish ERROR:", repr(e))
         else:
             # TODO: Update status - Publish success
             print("DEBUG: Publish success:", fin_res)
+
+    # Remove local data
+    shutil.rmtree(local_path)
 
     # TODO: Update status - ingest successful, processing complete
     print("DEBUG: Ingest success, processing complete")
