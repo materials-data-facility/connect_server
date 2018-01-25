@@ -90,7 +90,7 @@ def moc_driver(moc_params, status_id):
             stock.write("\n")
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
-                                   json={"status_id": status_id,
+                                   data={"status_id": status_id,
                                          "data": app.config["LOCAL_EP"] + local_path,
                                          "services": services},
                                    files={'file': stock})
@@ -393,7 +393,7 @@ def accept_ingest():
             })
     # Get parameters
     try:
-        params = request.get_json(force=True, silent=True)
+        params = request.form
         services = params.get("services", [])
         data_loc = params.get("data", None)
     except KeyError as e:
