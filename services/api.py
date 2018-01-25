@@ -91,9 +91,9 @@ def moc_driver(moc_params, status_id):
         stock.seek(0)
         ingest_res = requests.post(app.config["INGEST_URL"],
                                    data={"status_id": status_id,
-                                         "data": {
+                                         "data": json.dumps({
                                             "globus": app.config["LOCAL_EP"] + local_path
-                                            },
+                                            }),
                                          "services": services},
                                    files={'file': stock})
     print("DEBUG: Ingest result:", ingest_res)
@@ -397,7 +397,7 @@ def accept_ingest():
     try:
         params = request.form
         services = params.get("services", [])
-        data_loc = params.get("data", None)
+        data_loc = json.loads(params.get("data", "{}"))
     except KeyError as e:
         return jsonify({
             "success": False,
