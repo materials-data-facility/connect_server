@@ -320,9 +320,11 @@ def download_and_backup(mdf_transfer_client, data_loc, status_id):
             # Right now, path assumed to be a directory
             user_ep, user_path = data_loc["globus"].split("/", 1)
             user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
-            # Transfer locally
-            toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
-                                   [(user_path, local_path)], timeout=0)
+            # Check that data not already in place
+            if user_ep != app.config["LOCAL_EP"] or user_path != local_path:
+                # Transfer locally
+                toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
+                                       [(user_path, local_path)], timeout=0)
 
         elif data_loc.get("zip"):
             # Download and unzip

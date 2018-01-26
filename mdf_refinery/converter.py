@@ -14,7 +14,6 @@ def convert(root_path, convert_params):
 
     Arguments:
     root_path (str): The path to the directory holding all the dataset files.
-    dataset (dict): The current dataset entry.
     convert_params (dict): Parameters for conversion.
 
     Returns:
