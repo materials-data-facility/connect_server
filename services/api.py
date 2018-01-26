@@ -480,6 +480,7 @@ def begin_ingest(base_feed_path, status_id, services, data_loc):
         # Get DC metadata
         with open(final_feed_path) as f:
             dataset = json.loads(f.readline())
+        print("DEBUG: Dataset:", dataset)
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
                                           dataset, local_path)
