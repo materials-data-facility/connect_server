@@ -39,67 +39,70 @@ def transform(input_queue, output_queue, queue_done, parse_params):
     list of dict: The metadata parsed from the file.
                   Will be empty if no selected parser can parse data.
     """
-    # Parse each group from the queue
-    # Exit loop when queue_done is True and no groups remain
-    while True:
-        # Fetch group from queue
-        try:
-            group = input_queue.get(timeout=5)
-        # No group fetched
-        except Empty:
-            # Queue is permanently depleted, stop processing
-            if queue_done.value:
-                break
-            # Queue is still active, try again
-            else:
-                continue
-
-        print("DEBUG: Fetched group", group)
-        # Process fetched group
-        single_record = {}
-        multi_records = []
-        for parser in ALL_PARSERS:
-            # TODO: Filter appropriate parsers
-            if True or parser.__name__ in parse_params.get("parsers", {}).keys():
-                try:
-                    parser_res = parser(group=group, params=parse_params)
-                except Exception as e:
-                    print("Parser {p} failed with exception {e}".format(
-                                                                    p=parser.__name__,
-                                                                    e=repr(e)))
+    try:
+        # Parse each group from the queue
+        # Exit loop when queue_done is True and no groups remain
+        while True:
+            # Fetch group from queue
+            try:
+                group = input_queue.get(timeout=5)
+            # No group fetched
+            except Empty:
+                # Queue is permanently depleted, stop processing
+                if queue_done.value:
+                    break
+                # Queue is still active, try again
                 else:
-                    # Only process actual results
-                    if parser_res:
-                        # If a single record was returned, merge with others
-                        if isinstance(parser_res, dict):
-                            single_record = toolbox.dict_merge(single_record, parser_res)
-                        # If multiple records were returned, add to list
-                        elif isinstance(parser_res, list):
-                            # Only add records with data
-                            [multi_records.append(rec) for rec in parser_res if rec]
-                        # Else, panic
-                        else:
-                            raise TypeError(("Parser '{p}' returned "
-                                             "type '{t}'!").format(p=parser.__name__,
-                                                                   t=type(parser_res)))
-                    else:
-                        print("DEBUG:", parser.__name__, "unable to parse")
-        # Merge the single_record into all multi_records if both exist
-        if single_record and multi_records:
-            records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
-        # Else, if single_record exists, make it a list
-        elif single_record:
-            records = [single_record]
-        # Otherwise, use the list of records if it exists
-        elif multi_records:
-            records = multi_records
-        # If nothing exists, make a blank list
-        else:
-            records = []
+                    continue
 
-        # Push records to output queue
-        for record in records:
-            output_queue.put(json.dumps(record))
+            print("DEBUG: Fetched group", group)
+            # Process fetched group
+            single_record = {}
+            multi_records = []
+            for parser in ALL_PARSERS:
+                # TODO: Filter appropriate parsers
+                if True or parser.__name__ in parse_params.get("parsers", {}).keys():
+                    try:
+                        parser_res = parser(group=group, params=parse_params)
+                    except Exception as e:
+                        print("Parser {p} failed with exception {e}".format(
+                                                                        p=parser.__name__,
+                                                                        e=repr(e)))
+                    else:
+                        # Only process actual results
+                        if parser_res:
+                            # If a single record was returned, merge with others
+                            if isinstance(parser_res, dict):
+                                single_record = toolbox.dict_merge(single_record, parser_res)
+                            # If multiple records were returned, add to list
+                            elif isinstance(parser_res, list):
+                                # Only add records with data
+                                [multi_records.append(rec) for rec in parser_res if rec]
+                            # Else, panic
+                            else:
+                                raise TypeError(("Parser '{p}' returned "
+                                                 "type '{t}'!").format(p=parser.__name__,
+                                                                       t=type(parser_res)))
+                        else:
+                            print("DEBUG:", parser.__name__, "unable to parse")
+            # Merge the single_record into all multi_records if both exist
+            if single_record and multi_records:
+                records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
+            # Else, if single_record exists, make it a list
+            elif single_record:
+                records = [single_record]
+            # Otherwise, use the list of records if it exists
+            elif multi_records:
+                records = multi_records
+            # If nothing exists, make a blank list
+            else:
+                records = []
+
+            # Push records to output queue
+            for record in records:
+                output_queue.put(json.dumps(record))
+    except Exception as e:
+        print("DEBUG: Transformer error:", repr(e))
 
 
 def parse_crystal_structure(group, params=None):
