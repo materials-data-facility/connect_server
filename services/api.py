@@ -505,7 +505,7 @@ def begin_ingest(base_feed_path, status_id, services, data_loc):
 def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     # Submit metadata
     try:
-        pub_md = get_publish_metadata(metadata.get("dc", {}))
+        pub_md = get_publish_metadata(metadata)
         md_result = publish_client.push_metadata(pub_md["collection_id"], pub_md)
         pub_endpoint = md_result['globus.shared_endpoint.name']
         pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
