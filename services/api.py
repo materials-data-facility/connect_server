@@ -26,9 +26,6 @@ from werkzeug.utils import secure_filename
 from services import app
 
 
-PUBLISH_COLLECTION = 35
-
-
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
@@ -541,7 +538,7 @@ def get_publish_metadata(metadata):
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": str([author.get("creatorName", "")
                                   for author in dc_metadata.get("creators", [])]),
-        "collection_id": PUBLISH_COLLECTION,
+        "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
     return pub_metadata
