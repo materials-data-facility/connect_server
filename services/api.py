@@ -25,13 +25,7 @@ from werkzeug.utils import secure_filename
 
 from services import app
 
-KEY_FILES = {
-    "dft": {
-        "exact": [],
-        "extension": [],
-        "regex": ["OUTCAR.*"]
-    }
-}
+
 PUBLISH_COLLECTION = 35
 
 
@@ -544,8 +538,8 @@ def get_publish_metadata(metadata):
                                for title in dc_metadata.get("titles", [])]),
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": [author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])],
+        "dc.contributor.author": str([author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])]),
         "collection_id": PUBLISH_COLLECTION,
         "accept_license": True
     }
