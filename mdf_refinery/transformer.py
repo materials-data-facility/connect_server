@@ -53,6 +53,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     break
                 # Queue is still active, try again
                 else:
+                    print("DEBUG: Queue active:", queue_done.value)
                     continue
 
             # Process fetched group
@@ -83,7 +84,8 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                                  "type '{t}'!").format(p=parser.__name__,
                                                                        t=type(parser_res)))
                         else:
-                            print("DEBUG:", parser.__name__, "unable to parse", group)
+                            pass
+                            # print("DEBUG:", parser.__name__, "unable to parse", group)
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
