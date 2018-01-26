@@ -82,6 +82,7 @@ def moc_driver(moc_params, status_id):
 
     # Convert data
     feedstock = convert(local_path, moc_params)
+    print("DEBUG: Feedstock contains", len(feedstock), "entries")
 
     # Pass dataset to /ingest
     with tempfile.TemporaryFile(mode="w+") as stock:
