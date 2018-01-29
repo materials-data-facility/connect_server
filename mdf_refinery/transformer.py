@@ -53,7 +53,6 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     break
                 # Queue is still active, try again
                 else:
-                    print("DEBUG: Queue active:", queue_done.value)
                     continue
 
             # Process fetched group
@@ -85,7 +84,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                                                        t=type(parser_res)))
                         else:
                             pass
-                            # print("DEBUG:", parser.__name__, "unable to parse", group)
+                            print("DEBUG:", parser.__name__, "unable to parse", group)
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -104,6 +103,8 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                 output_queue.put(json.dumps(record))
     except Exception as e:
         print("DEBUG: Transformer error:", repr(e))
+
+    return
 
 
 def parse_crystal_structure(group, params=None):
