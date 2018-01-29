@@ -46,7 +46,7 @@ def accept_convert():
         })
 
 
-def moc_driver(moc_params, status_id):
+def moc_driver(metadata, status_id):
     """Pull, back up, and convert metadata."""
     # Setup
     creds = {
@@ -58,21 +58,30 @@ def moc_driver(moc_params, status_id):
     transfer_client = toolbox.confidential_login(creds)["transfer"]
 
     # Download data locally, back up on MDF resources
+    local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
     dl_res = download_and_backup(transfer_client,
                                  moc_params.pop("data", {}),
-                                 status_id)
-    if dl_res["success"]:
-        local_path = dl_res["local_path"]
-        backup_path = dl_res["backup_path"]
-    else:
+                                 local_path)
+    if not dl_res["success"]:
         raise IOError("No data downloaded")
     # TODO: Update status - data downloaded
     print("DEBUG: Data downloaded")
 
-    services = moc_params.pop("services", [])
+    # Handle service integration data directory
+    service_data = os.path.join(app.config["SERVICE_DATA"], status_id) + "/"
+    os.makedirs(service_data)
+
+    # Pull out special fields in metadata (the rest is the dataset)
+    services = metadata.pop("services", [])
+    parse_params = metadata.pop("index", {})
+    convert_params = {
+        "dataset": metadata,
+        "parsers": parse_params,
+        "service_data": service_data
+        }
 
     # Convert data
-    feedstock = convert(local_path, moc_params)
+    feedstock = convert(local_path, convert_params)
     print("DEBUG: Feedstock contains", len(feedstock), "entries")
 
     # Pass dataset to /ingest
@@ -81,12 +90,18 @@ def moc_driver(moc_params, status_id):
             json.dump(entry, stock)
             stock.write("\n")
         stock.seek(0)
+        ingest_args = {
+            "status_id": status_id,
+            "data": json.dumps({
+                "globus": app.config["LOCAL_EP"] + local_path
+                }),
+            "services": services,
+            "service_data": json.dumps({
+                "globus": app.config["LOCAL_EP"] + service_data
+                })
+        }
         ingest_res = requests.post(app.config["INGEST_URL"],
-                                   data={"status_id": status_id,
-                                         "data": json.dumps({
-                                            "globus": app.config["LOCAL_EP"] + local_path
-                                            }),
-                                         "services": services},
+                                   data=ingest_args,
                                    files={'file': stock})
     print("DEBUG: Ingest result:", ingest_res)
     if not ingest_res.json().get("success"):
@@ -298,21 +313,18 @@ def begin_convert(mdf_dataset, status_id):
         }
 
 
-def download_and_backup(mdf_transfer_client, data_loc, status_id):
+def download_and_backup(mdf_transfer_client, data_loc, local_path):
     """Download remote data, backup"""
-    local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
-    backup_path = os.path.join(app.config["BACKUP_PATH"], status_id) + "/"
-    os.makedirs(local_path, exist_ok=True)  # TODO: exist not okay when status is real
-
+    os.makedirs(local_path, exist_ok=True)
     # Download data locally
     try:
         if data_loc.get("globus"):
-            # Parse out EP and path
-            # Right now, path assumed to be a directory
-            user_ep, user_path = data_loc["globus"].split("/", 1)
-            user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
             # Check that data not already in place
-            if user_ep != app.config["LOCAL_EP"] or user_path != local_path:
+            if data_loc.get("globus") != local_path:
+                # Parse out EP and path
+                # Right now, path assumed to be a directory
+                user_ep, user_path = data_loc["globus"].split("/", 1)
+                user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
                 # Transfer locally
                 toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
                                        [(user_path, local_path)], timeout=0)
@@ -335,30 +347,13 @@ def download_and_backup(mdf_transfer_client, data_loc, status_id):
             raise IOError("Invalid data location: " + str(data_loc))
 
     except Exception as e:
-        # TODO: Update status - download failure
         raise
-    # TODO: Update status - download success
     print("DEBUG: Download success")
 
-    # Backup data
-    # TODO: Re-enable backup after testing
-    print("DEBUG: WARNING: NO BACKUP")
-    '''
-    try:
-        toolbox.quick_transfer(mdf_transfer_client,
-                               app.config["LOCAL_EP"], app.config["BACKUP_EP"],
-                               [(local_path, backup_path)], timeout=0)
-    except Exception as e:
-        # TODO: Update status - backup failed
-        raise
-    # TODO: Update status - backup success
-    print("DEBUG: Backup success")
-    '''
 
     return {
         "success": True,
-        "local_path": local_path,
-        "backup_path": backup_path
+        "local_path": local_path
         }
 
 
@@ -392,6 +387,7 @@ def accept_ingest():
         params = request.form
         services = params.get("services", [])
         data_loc = json.loads(params.get("data", "{}"))
+        service_data = json.loads(params.get("service_data", "{}"))
     except KeyError as e:
         return jsonify({
             "success": False,
@@ -419,7 +415,8 @@ def accept_ingest():
     ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path,
                                                                          status_id,
                                                                          services,
-                                                                         data_loc))
+                                                                         data_loc,
+                                                                         service_data))
     ingester.start()
     return jsonify({
         "success": True,
@@ -427,7 +424,7 @@ def accept_ingest():
         })
 
 
-def begin_ingest(base_feed_path, status_id, services, data_loc):
+def begin_ingest(base_feed_path, status_id, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -446,19 +443,26 @@ def begin_ingest(base_feed_path, status_id, services, data_loc):
     # If the data should be local, make sure it is
     if data_loc:
         # Will not transfer anything if already in place
+        local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
         dl_res = download_and_backup(transfer_client,
                                      data_loc,
-                                     status_id)
-        if dl_res["success"]:
-            local_path = dl_res["local_path"]
-            backup_path = dl_res["backup_path"]
-        else:
+                                     local_path)
+        if not dl_res["success"]:
             raise IOError("No data downloaded")
         # TODO: Update status - data downloaded
         print("DEBUG: Data downloaded")
     # If the data aren't local, but need to be, error
     elif "globus_publish" in services:
         raise ValueError("Unable to Publish data without location")
+
+    # Same for integrated service data
+    if service_loc:
+        service_data = os.path.join(app.config["SERVICE_DATA"], status_id) + "/"
+        dl_res = download_and_backup(transfer_client,
+                                     service_loc,
+                                     service_data)
+        if not dl_res["success"]:
+            raise IOError("No data downloaded")
 
     # Globus Search (mandatory)
     try:
@@ -471,13 +475,15 @@ def begin_ingest(base_feed_path, status_id, services, data_loc):
             "error": repr(e)
             }))
 
+    # Other services use the dataset information
+    if services:
+        with open(final_feed_path) as f:
+            dataset = json.loads(f.readline())
+
     # Globus Publish
     # TODO: Test after Publish API is fixed
     if "globus_publish" in services:
         # Get DC metadata
-        with open(final_feed_path) as f:
-            dataset = json.loads(f.readline())
-        print("DEBUG: Dataset:", dataset)
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
                                           dataset, local_path)
@@ -488,8 +494,17 @@ def begin_ingest(base_feed_path, status_id, services, data_loc):
             # TODO: Update status - Publish success
             print("DEBUG: Publish success:", fin_res)
 
-    # Remove local data
-    shutil.rmtree(local_path)
+    # Citrine
+    if "citrine" in services:
+        try:
+            cit_res = citrine_upload(os.path.join(service_data, "citrine"),
+                           app.config["CITRINATION_API_KEY"],
+                           dataset)
+            if not cit_res["success"]:
+                raise ValueError("No data uploaded to Citrine: " + str(cit_res))
+        except Exception as e:
+            # TODO: Update status, Citrine upload failed
+            print("Citrine upload failed:", repr(e))
 
     # TODO: Update status - ingest successful, processing complete
     print("DEBUG: Ingest success, processing complete")
@@ -542,6 +557,40 @@ def get_publish_metadata(metadata):
         "accept_license": True
     }
     return pub_metadata
+
+
+def citrine_upload(citrine_data, api_key, mdf_dataset):
+    cit_client = CitrinationClient(api_key)
+    try:
+        cit_title = mdf_dataset["dc"]["titles"][0]["title"]
+    except (KeyError, IndexError):
+        cit_title = "Untitled"
+    try:
+        cit_desc = " ".join([desc["description"]
+                             for desc in mdf_dataset["dc"]["descriptions"]])
+        if not cit_desc:
+            raise KeyError
+    except (KeyError, IndexError):
+        cit_desc = None
+
+    cit_ds_id = cit_client.create_data_set(name=cit_title,
+                                        description=cit_desc,
+                                        share=0).json()["id"]
+    if not cit_ds_id:
+        raise ValueError("Dataset name present in Citrine")
+
+    for _, _, files in os.walk(citrine_data):
+        for pif in files:
+            up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+            if not up_res["success"]:
+                # TODO: Handle errors
+                print("DEBUG: Citrine upload failure:", up_res.get("status"))
+    # TODO: Set share to 1 to enable public uploads
+    cit_client.update_data_set(cit_ds_id, share=0)
+
+    return {
+        "success": True
+        }
 
 
 @app.route("/status", methods=["GET", "POST"])
