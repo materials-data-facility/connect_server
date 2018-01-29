@@ -15,6 +15,9 @@ def convert(root_path, convert_params):
     Arguments:
     root_path (str): The path to the directory holding all the dataset files.
     convert_params (dict): Parameters for conversion.
+        dataset (dict): The dataset associated with the files.
+        parsers (dict): Parser-specific parameters, keyed by parser (ex. "json": {...}).
+        service_data (str): The path to a directory to store integration data.
 
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
@@ -24,15 +27,10 @@ def convert(root_path, convert_params):
     output_queue = multiprocessing.Queue()
     input_complete = multiprocessing.Value(c_bool, False)
 
-    parse_params = {
-        "dataset": convert_params,
-        "parsers": convert_params.pop("index", {})
-    }
-
     # Start up transformers
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue, 
-                                                  input_complete, parse_params))
+                                                  input_complete, convert_params))
                     for i in range(NUM_TRANSFORMERS)]
     [t.start() for t in transformers]
     print("DEBUG: Transformers started")
