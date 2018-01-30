@@ -175,7 +175,7 @@ def parse_pif(group, params=None):
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
-        mdf_pifs.append(pif_to_feedstock(pif))
+        mdf_pifs.append({"pif": pif_to_feedstock(pif)})
 
         cit_pifs.append(add_dc(pif, dc_md))
         pif_name = (pif.get("uid", None) or str(ObjectId())) + ".pif"
