@@ -13,7 +13,7 @@ from citrination_client import CitrinationClient
 from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
-from mdf_refinery import convert, ingest
+from mdf_refinery import convert, search_ingest
 from pif_ingestor.manager import IngesterManager
 from pypif.pif import dump as pif_dump
 from pypif_sdk.util import citrination as cit_utils
@@ -412,7 +412,7 @@ def accept_ingest():
     # Save file
     feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
     feedstock.save(feed_path)
-    ingester = Thread(target=begin_ingest, name="ingester_thread", args=(feed_path,
+    ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
                                                                          status_id,
                                                                          services,
                                                                          data_loc,
@@ -424,7 +424,7 @@ def accept_ingest():
         })
 
 
-def begin_ingest(base_feed_path, status_id, services, data_loc, service_loc):
+def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -466,7 +466,7 @@ def begin_ingest(base_feed_path, status_id, services, data_loc, service_loc):
 
     # Globus Search (mandatory)
     try:
-        ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
+        search_ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
                         feedstock_save=final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
@@ -551,8 +551,8 @@ def get_publish_metadata(metadata):
                                for title in dc_metadata.get("titles", [])]),
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": str([author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])]),
+        "dc.contributor.author": [author.get("creatorName", "")
+                                  for author in dc_metadata.get("creators", [])],
         "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
