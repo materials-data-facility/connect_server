@@ -109,3 +109,4 @@ def submit_ingests(ingest_queue, ingest_client, index, input_done):
         except GlobusAPIError as e:
             print("\nA Globus API Error has occurred. Details:\n", e.raw_json, "\n")
             raise
+    return

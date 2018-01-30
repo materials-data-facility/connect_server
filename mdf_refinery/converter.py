@@ -42,7 +42,7 @@ def convert(root_path, convert_params):
     print("DEBUG: Input complete")
 
     # TODO: Process dataset entry
-    full_dataset = convert_params
+    full_dataset = convert_params["dataset"]
 
     # Wait for transformers
     [t.join() for t in transformers]
