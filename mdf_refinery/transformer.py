@@ -157,6 +157,7 @@ def parse_crystal_structure(group, params=None):
 def parse_pif(group, params=None):
     """Use Citrine's parsers."""
     if not params:
+        print("DEBUG: PIF no params")
         return {}
 
     # Setup
@@ -169,6 +170,7 @@ def parse_pif(group, params=None):
     raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
                                           args={"quality_report": False})
     if not raw_pifs:
+        print("DEBUG: PIF no data")
         return {}
     if not isinstance(raw_pifs, list):
         raw_pifs = [raw_pifs]
