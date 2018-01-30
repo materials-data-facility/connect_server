@@ -1,6 +1,8 @@
 import json
+import os
 
 import ase.io
+from bson import ObjectId
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
@@ -14,16 +16,10 @@ from pypif_sdk.interop.datacite import add_datacite as add_dc
 from queue import Empty
 
 
-# data_format to data_type translations
-FORMAT_TYPE = {
-    "vasp": "dft"
-}
-
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
 
 # List of parsers at bottom
-# All parsers accept data_path and/or file_data, and arbitrary other parameters
 
 
 def transform(input_queue, output_queue, queue_done, parse_params):
@@ -34,6 +30,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
     parse_params (dict): Run parsers with these parameters.
         dataset (dict): The dataset entry.
         parsers (dict): The parser-specific information.
+        service_data (str): The path to the integration-specific data store.
 
     Returns:
     list of dict: The metadata parsed from the file.
@@ -157,15 +154,35 @@ def parse_crystal_structure(group, params=None):
     return record
 
 
-# TODO
-def parse_pif(data_path, params=None):
+def parse_pif(group, params=None):
     """Use Citrine's parsers."""
-    # TODO: Should this be elsewhere?
-    cit_manager = IngesterManager()
+    if not params:
+        return {}
 
-    cit_pifs = cit_manager.run_extensions(group_paths, include=None, exclude=[],
+    # Setup
+    dc_md = params["dataset"]["dc"]
+    cit_path = os.path.join(params["service_data"], "citrine")
+    os.makedirs(cit_path, exist_ok=True)
+    cit_manager = IngesterManager()
+    mdf_pifs = []
+
+    raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
                                           args={"quality_report": False})
-    cit_pifs = cit_utils.set_uids(cit_pifs)
+    if not raw_pifs:
+        return {}
+    if not isinstance(raw_pifs, list):
+        raw_pifs = [raw_pifs]
+    id_pifs = cit_utils.set_uids(raw_pifs)
+
+    for pif in id_pifs:
+        mdf_pifs.append(pif_to_feedstock(pif))
+
+        cit_pifs.append(add_dc(pif, dc_md))
+        pif_name = (pif.get("uid", None) or str(ObjectId())) + ".pif"
+        with open(os.path.join(cit_path, pif_name), 'w') as pif_file:
+            pif_dump(pif, pif_file)
+
+    return mdf_pifs
 
 
 def parse_csv(group, params=None):

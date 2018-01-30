@@ -12,7 +12,7 @@ from mdf_refinery import Validator
 NUM_SUBMITTERS = 5
 
 
-def ingest(ingest_client, feedstocks, index, batch_size=100,
+def search_ingest(ingest_client, feedstocks, index, batch_size=100,
            num_submitters=NUM_SUBMITTERS, feedstock_save=None):
     """Ingests feedstock from file.
 
