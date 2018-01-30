@@ -44,7 +44,7 @@ class Validator:
         title = title.strip().lower()
         # Replace words we don't want
         for stopword in stopwords:
-            title = title.replace(stopword, "")
+            title = title.replace(" " + stopword + " ", "")
         # Clear double spacing
         while title.find("  ") != -1:
             title = title.replace("  ", " ")
@@ -54,7 +54,7 @@ class Validator:
         if not title.isalnum():
             source_name = ""
             for char in title:
-                if char.isalnum():
+                if char.isalnum() or char == " ":
                     source_name += char
         else:
             source_name = title

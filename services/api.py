@@ -60,7 +60,8 @@ def moc_driver(metadata, status_id):
     # Download data locally, back up on MDF resources
     local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
     dl_res = download_and_backup(transfer_client,
-                                 moc_params.pop("data", {}),
+                                 metadata.pop("data", {}),
+                                 app.config["LOCAL_EP"],
                                  local_path)
     if not dl_res["success"]:
         raise IOError("No data downloaded")
@@ -103,7 +104,8 @@ def moc_driver(metadata, status_id):
         ingest_res = requests.post(app.config["INGEST_URL"],
                                    data=ingest_args,
                                    files={'file': stock})
-    print("DEBUG: Ingest result:", ingest_res)
+
+    print("DEBUG: Ingest result:", ingest_res.json())
     if not ingest_res.json().get("success"):
         # TODO: Update status? Ingest failed
         raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
@@ -313,14 +315,14 @@ def begin_convert(mdf_dataset, status_id):
         }
 
 
-def download_and_backup(mdf_transfer_client, data_loc, local_path):
+def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
     """Download remote data, backup"""
     os.makedirs(local_path, exist_ok=True)
     # Download data locally
     try:
         if data_loc.get("globus"):
             # Check that data not already in place
-            if data_loc.get("globus") != local_path:
+            if data_loc.get("globus") != local_ep + local_path:
                 # Parse out EP and path
                 # Right now, path assumed to be a directory
                 user_ep, user_path = data_loc["globus"].split("/", 1)
@@ -446,6 +448,7 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
         local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
         dl_res = download_and_backup(transfer_client,
                                      data_loc,
+                                     app.config["LOCAL_EP"],
                                      local_path)
         if not dl_res["success"]:
             raise IOError("No data downloaded")
@@ -460,6 +463,7 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
         service_data = os.path.join(app.config["SERVICE_DATA"], status_id) + "/"
         dl_res = download_and_backup(transfer_client,
                                      service_loc,
+                                     app.config["LOCAL_EP"],
                                      service_data)
         if not dl_res["success"]:
             raise IOError("No data downloaded")
