@@ -179,10 +179,9 @@ def parse_pif(group, params=None):
     for pif in id_pifs:
         mdf_pifs.append({"pif": pif_to_feedstock(pif)})
 
-        cit_pifs.append(add_dc(pif, dc_md))
-        pif_name = (pif.get("uid", None) or str(ObjectId())) + ".pif"
+        pif_name = (pif.uid or str(ObjectId())) + ".pif"
         with open(os.path.join(cit_path, pif_name), 'w') as pif_file:
-            pif_dump(pif, pif_file)
+            pif_dump(add_dc(pif, dc_md), pif_file)
 
     return mdf_pifs
 
@@ -212,7 +211,7 @@ def parse_csv(group, params=None):
     for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
     # TODO
-    return parse_pandas(df, params.get("mapping", {}))
+    return parse_pandas(df, mapping)
 
 
 # TODO

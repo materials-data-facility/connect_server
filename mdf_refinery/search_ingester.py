@@ -1,6 +1,7 @@
 from ctypes import c_bool
 import json
 import multiprocessing
+import os
 from queue import Empty
 
 from globus_sdk import GlobusAPIError
@@ -13,7 +14,7 @@ NUM_SUBMITTERS = 5
 
 
 def search_ingest(ingest_client, feedstocks, index, batch_size=100,
-           num_submitters=NUM_SUBMITTERS, feedstock_save=None):
+                  num_submitters=NUM_SUBMITTERS, feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:

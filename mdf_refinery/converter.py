@@ -29,7 +29,7 @@ def convert(root_path, convert_params):
 
     # Start up transformers
     transformers = [multiprocessing.Process(target=transform,
-                                            args=(input_queue, output_queue, 
+                                            args=(input_queue, output_queue,
                                                   input_complete, convert_params))
                     for i in range(NUM_TRANSFORMERS)]
     [t.start() for t in transformers]
@@ -89,4 +89,3 @@ def group_tree(root):
         # Add path to filenames and yield each group
         for g in groups:
             yield [os.path.join(path, f) for f in g]
-        #[yield [os.path.join(path, f) for f in g] for g in groups]
