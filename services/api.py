@@ -2,28 +2,59 @@ from datetime import date
 from hashlib import sha512
 import json
 import os
-import re
-import shutil
 import tempfile
 from threading import Thread
 import zipfile
 
+import boto3
 from bson import ObjectId
 from citrination_client import CitrinationClient
 from flask import jsonify, request
 import magic
 from mdf_toolbox import toolbox
 from mdf_refinery import convert, search_ingest
-from pif_ingestor.manager import IngesterManager
-from pypif.pif import dump as pif_dump
-from pypif_sdk.util import citrination as cit_utils
-from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
-from pypif_sdk.interop.datacite import add_datacite as add_dc
 
 import requests
 from werkzeug.utils import secure_filename
 
 from services import app
+
+# DynamoDB setup
+DMO_CLIENT = boto3.resource('dynamodb',
+                            aws_access_key_id=app.config["DYNAMO_KEY"],
+                            aws_secret_access_key=app.config["DYNAMO_SECRET"])
+DMO_TABLE = app.config["DYNAMO_TABLE"]
+DMO_SCHEMA = {
+    "TableName": DMO_TABLE,
+    "AttributeDefinitions": [{
+        "AttributeName": "status_id",
+        "AttributeType": "S"
+    }],
+    "KeySchema": [{
+        "AttributeName": "status_id",
+        "KeyType": "HASH"
+    }],
+    "ProvisionedThroughput": {
+        "ReadCapacityUnits": 20,
+        "WriteCapacityUnits": 20
+    }
+}
+STATUS_STEPS = (
+    ("convert_start", "Conversion initialization"),
+    ("convert_download", "Conversion data download"),
+    ("converting", "Data conversion"),
+    ("convert_ingest", "Ingestion preparation"),
+    ("ingest_start", "Ingestion initialization"),
+    ("ingest_download", "Ingestion data download"),
+    ("ingest_integration", "Integration data download"),
+    ("ingest_search", "Globus Search ingestion"),
+    ("ingest_publish", "Globus Publish publication"),
+    ("ingest_citrine", "Citrine upload")
+)
+# This is the start of ingest steps in STATUS_STEPS
+# In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
+# and the convert steps are STATUS_STEPS[:INGEST_MARK]
+INGEST_MARK = 4
 
 
 @app.route('/convert', methods=["POST"])
@@ -47,7 +78,16 @@ def accept_convert():
 
 
 def moc_driver(metadata, status_id):
-    """Pull, back up, and convert metadata."""
+    """The driver function for MOC.
+    Modifies the status database as steps are completed.
+
+    Arguments:
+    metadata (dict): The JSON passed to /convert.
+    status_id (str): The ID of this submission.
+
+    Returns:
+    dict: success (bool): True on success, False on failure.
+    """
     # Setup
     creds = {
         "app_name": "MDF Open Connect",
@@ -83,6 +123,7 @@ def moc_driver(metadata, status_id):
 
     # Convert data
     feedstock = convert(local_path, convert_params)
+    # TODO: Update status - conversion successful
     print("DEBUG: Feedstock contains", len(feedstock), "entries")
 
     # Pass dataset to /ingest
@@ -118,7 +159,20 @@ def moc_driver(metadata, status_id):
 
 
 def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
-    """Download remote data, backup"""
+    """Download data from a remote host to the configured machine.
+
+    Arguments:
+    mdf_transfer_client (TransferClient): An authenticated TransferClient.
+    data_loc (dict): The location of the data. Only one field should exist.
+        globus (str): The endpoint ID and path.
+        zip (str): The HTTP link to a zip file.
+        files: Not implemented
+    local_ep (str): The local machine's endpoint ID.
+    local_path (str): The path ot the local storage location.
+
+    Returns:
+    dict: success (bool): True on success, False on failure.
+    """
     os.makedirs(local_path, exist_ok=True)
     # Download data locally
     try:
@@ -135,12 +189,11 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
 
         elif data_loc.get("zip"):
             # Download and unzip
-            zip_path = os.path.join(local_path, status_id + ".zip")
+            zip_path = os.path.join(local_path, "archive.zip")
             res = requests.get(data_loc["zip"])
             with open(zip_path, 'wb') as out:
                 out.write(res.content)
-            zipfile.ZipFile(zip_path).extractall()  # local_path)
-            os.remove(zip_path)  # TODO: Should the .zip be removed?
+            zipfile.ZipFile(zip_path).extractall()
 
         elif data_loc.get("files"):
             # TODO: Implement this
@@ -154,14 +207,13 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
         raise
     print("DEBUG: Download success")
 
-
     return {
-        "success": True,
-        "local_path": local_path
+        "success": True
         }
 
 
 def get_file_metadata(file_path, backup_path):
+    """Parses file metadata."""
     with open(file_path, "rb") as f:
         md = {
             "globus": app.config["BACKUP_EP"] + backup_path,
@@ -202,7 +254,7 @@ def accept_ingest():
             "success": False,
             "error": "Invalid ingest JSON: " + repr(e)
             })
-    
+
     # Mint/update status ID
     if not params.get("status_id"):
         status_id = str(ObjectId())
@@ -273,7 +325,7 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
     # Globus Search (mandatory)
     try:
         search_ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
-                        feedstock_save=final_feed_path)
+                      feedstock_save=final_feed_path)
     except Exception as e:
         # TODO: Update status - ingest failed
         raise Exception("Search error:" + str({
@@ -304,8 +356,8 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
     if "citrine" in services:
         try:
             cit_res = citrine_upload(os.path.join(service_data, "citrine"),
-                           app.config["CITRINATION_API_KEY"],
-                           dataset)
+                                     app.config["CITRINATION_API_KEY"],
+                                     dataset)
             if not cit_res["success"]:
                 raise ValueError("No data uploaded to Citrine: " + str(cit_res))
         except Exception as e:
@@ -358,7 +410,7 @@ def get_publish_metadata(metadata):
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": str([author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])]),
+                                      for author in dc_metadata.get("creators", [])]),
         "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
@@ -380,14 +432,14 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
         cit_desc = None
 
     cit_ds_id = cit_client.create_data_set(name=cit_title,
-                                        description=cit_desc,
-                                        share=0).json()["id"]
+                                           description=cit_desc,
+                                           share=0).json()["id"]
     if not cit_ds_id:
         raise ValueError("Dataset name present in Citrine")
 
     for _, _, files in os.walk(citrine_data):
         for pif in files:
-            up_res = json.loads(cit_client.upload(cit_ds_id, pif_file.name))
+            up_res = json.loads(cit_client.upload(cit_ds_id, pif))
             if not up_res["success"]:
                 # TODO: Handle errors
                 print("DEBUG: Citrine upload failure:", up_res.get("status"))
@@ -399,6 +451,264 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
         }
 
 
-@app.route("/status", methods=["GET", "POST"])
-def status():
-    return jsonify({"success": False, "message": "Not implemented yet, try again later"})
+@app.route("/status/<status_id>", methods=["GET"])
+def get_status(status_id):
+    # TODO: Check auth
+    raw_status = read_status(status_id)
+    if raw_status["success"]:
+        status = translate_status(raw_status["status"])
+    else:
+        status = raw_status
+    return jsonify(status)
+
+
+@app.route("/status/<status_id>/raw", methods=["GET"])
+def get_raw_status(status_id):
+    # TODO: Check auth
+    raw_status = read_status(status_id)
+    # TODO: Remove private information
+    return jsonify(raw_status)
+
+
+def read_status(status_id):
+    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    status_res = table.get_item(Key={"status_id": status_id}, ConsistentRead=True).get("Item")
+    if not status_res:
+        return {
+            "success": False,
+            "error": "ID {} not found in status database".format(status_id)
+            }
+    else:
+        return {
+            "success": True,
+            "status": status_res
+            }
+
+
+def create_status(status):
+    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+    # TODO: Validate status better (JSONSchema?)
+    if not status.get("status_id"):
+        return {
+            "success": False,
+            "error": "status_id missing"
+            }
+    elif not status.get("submission_code"):
+        return {
+            "success": False,
+            "error": "submission_code missing"
+            }
+    elif not status.get("title"):
+        return {
+            "success": False,
+            "error": "title missing"
+            }
+    elif not status.get("submitter"):
+        return {
+            "success": False,
+            "error": "submitter missing"
+            }
+    elif not status.get("submission_time"):
+        return {
+            "success": False,
+            "error": "submission_time missing"
+            }
+
+    # Create defaults
+    status["messages"] = []
+    status["errors"] = []
+    status["code"] = "WWWWWWWWWW"
+
+    # Check that status does not already exist
+    if read_status(status["status_id"])["success"]:
+        return {
+            "success": False,
+            "error": "ID {} already exists in database".format(status["status_id"])
+            }
+    try:
+        table.put_item(Item=status)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+            }
+    else:
+        return {
+            "success": True,
+            "status": status
+            }
+
+
+def update_status(status_id, step, code, text=None):
+    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+    # TODO: Validate status
+    # Get old status
+    old_status = read_status(status_id)
+    if not old_status["success"]:
+        return old_status
+    status = old_status["status"]
+    # Update code
+    try:
+        step_index = int(step) - 1
+    except ValueError:
+        step_index = None
+        # Why yes, this would be easier if STATUS_STEPS was a dict
+        # But we need slicing for translate_status
+        # Or else we're duplicating the info and making maintenance hard
+        # And I'd rather one dumb hack than several painful, error-prone changes
+        for i, s in enumerate(STATUS_STEPS):
+            if step == s[0]:
+                step_index = i
+                break
+    code_list = list(status["code"])
+    code_list[step_index] = code
+    status["code"] = "".join(code_list)
+    # If needed, update messages or errors
+    if code == 'M':
+        status["messages"].append(text or "No message available")
+    elif code == 'F':
+        status["errors"].append(text or "An error occurred and we're trying to fix it")
+
+    try:
+        # put_item will overwrite
+        table.put_item(Item=status)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+            }
+    else:
+        return {
+            "success": True,
+            "status": status
+            }
+
+
+def translate_status(status):
+    # {
+    # status_id: str,
+    # submission_code: "C" or "I"
+    # code: str, based on char position
+    # messages: list of str, in order generated
+    # errors: list of str, in order of failures
+    # title: str,
+    # submitter: str,
+    # submission_time: str
+    # }
+    full_code = list(status["code"])
+    messages = status["messages"]
+    errors = status["errors"]
+    sub_type = status["submission_code"]
+    # Submission type determines steps
+    if sub_type == 'C':
+        steps = [st[1] for st in STATUS_STEPS]
+        subm = "convert"
+    elif sub_type == 'I':
+        steps = [st[1] for st in STATUS_STEPS[INGEST_MARK:]]
+        subm = "ingest"
+    else:
+        steps = []
+        subm = "unknown submission type '{}'".format(sub_type)
+
+    usr_msg = ("Status of {} submission {} ({})\n"
+               "Submitted by {} at {}\n\n").format(subm,
+                                                   status["status_id"],
+                                                   status["title"],
+                                                   status["submitter"],
+                                                   status["submission_time"])
+
+    for code, step in zip(full_code, steps):
+        if code == 'S':
+            usr_msg += "{} was successful.\n".format(step)
+        elif code == 'M':
+            usr_msg += "{} was successful: {}.\n".format(step, messages.pop(0))
+        elif code == 'F':
+            usr_msg += "{} failed: {}\n".format(step, errors.pop(0))
+        elif code == 'N':
+            usr_msg += "{} was not requested or required.\n".format(step)
+        elif code == 'P':
+            usr_msg += "{} is in progress.\n".format(step)
+        elif code == 'X':
+            usr_msg += "{} was cancelled.\n".format(step)
+        elif code == 'W':
+            usr_msg += "{} has not started yet.\n".format(step)
+        else:
+            usr_msg += "{} code: {}\n".format(step, code)
+
+    return {
+        "status_id": status["status_id"],
+        "title": status["title"],
+        "status_message": usr_msg
+        }
+
+
+def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCHEMA):
+    tbl_res = get_dmo_table(client, table_name)
+    # Table should not be active already
+    if tbl_res["success"]:
+        return {
+            "success": False,
+            "error": "Table already created"
+            }
+    # If misc/other exception, cannot create table
+    elif tbl_res["error"] != "Table does not exist or is not active":
+        return tbl_res
+
+    try:
+        new_table = client.create_table(**schema)
+        new_table.wait_until_exists()
+    except client.meta.client.exceptions.ResourceInUseException:
+        return {
+            "success": False,
+            "error": "Table concurrently created"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+            }
+
+    tbl_res2 = get_dmo_table(client, table_name)
+    if not tbl_res2["success"]:
+        return {
+            "success": False,
+            "error": "Unable to create table: {}".format(tbl_res2["error"])
+            }
+    else:
+        return {
+            "success": True,
+            "table": tbl_res2["table"]
+            }
+
+
+def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
+    try:
+        table = client.Table(table_name)
+        dmo_status = table.table_status
+        if dmo_status != "ACTIVE":
+            raise ValueError("Table not active")
+    except (ValueError, client.meta.client.exceptions.ResourceNotFoundException):
+        return {
+            "success": False,
+            "error": "Table does not exist or is not active"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+            }
+    else:
+        return {
+            "success": True,
+            "table": table
+            }
