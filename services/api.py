@@ -1,4 +1,4 @@
-from datetime import date
+import datetime
 from hashlib import sha512
 import json
 import os
@@ -18,6 +18,13 @@ import requests
 from werkzeug.utils import secure_filename
 
 from services import app
+
+# Frequency of status messages printed to console
+# Level 0: No messages
+# Level 1: Messages only when the status DB is updated
+# Level 2: Messages when something happens in a driver
+# Level 3 (in progress): Messages whenever anything happens in this module
+DEBUG_LEVEL = 1
 
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
@@ -66,9 +73,33 @@ def accept_convert():
             "success": False,
             "error": "POST data empty or not JSON"
             })
+    try:
+        sub_title = metadata["dc"]["titles"][0]["title"]
+    except (KeyError, ValueError):
+        return jsonify({
+            "success": False,
+            "error": "No title supplied"
+            })
     status_id = str(ObjectId())
-    # TODO: Register status ID
-    print("DEBUG: Status ID created")
+    status_info = {
+        "status_id": status_id,
+        "submission_code": "C",
+        "submission_time": datetime.utcnow().isoformat("T") + "Z",
+        # TODO: Get submitter through Auth
+        "submitter": "Testy T. Testopherson",
+        "title": sub_title
+        }
+    try:
+        # TODO: Better metadata validation
+        status_res = create_status(status_info)
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": repr(e)
+            })
+    if not status_res["success"]:
+        return jsonify(status_res)
+
     driver = Thread(target=moc_driver, name="driver_thread", args=(metadata, status_id))
     driver.start()
     return jsonify({
@@ -95,18 +126,46 @@ def moc_driver(metadata, status_id):
         "client_secret": app.config["API_CLIENT_SECRET"],
         "services": ["transfer"]
         }
-    transfer_client = toolbox.confidential_login(creds)["transfer"]
+    try:
+        transfer_client = toolbox.confidential_login(creds)["transfer"]
+    except Exception as e:
+        stat_res = update_status(status_id, "convert_start", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+    stat_res = update_status(status_id, "convert_start", "S")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
 
     # Download data locally, back up on MDF resources
+    stat_res = update_status(status_id, "convert_download", "P")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
     local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
-    dl_res = download_and_backup(transfer_client,
-                                 metadata.pop("data", {}),
-                                 app.config["LOCAL_EP"],
-                                 local_path)
+    try:
+        dl_res = download_and_backup(transfer_client,
+                                     metadata.pop("data", {}),
+                                     app.config["LOCAL_EP"],
+                                     local_path)
+    except Exception as e:
+        stat_res = update_status(status_id, "convert_download", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
     if not dl_res["success"]:
-        raise IOError("No data downloaded")
-    # TODO: Update status - data downloaded
-    print("DEBUG: Data downloaded")
+        stat_res = update_status(status_id, "convert_download", "F", text=str(dl_res))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+    else:
+        stat_res = update_status(status_id, "convert_download", "S")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        if DEBUG_LEVEL >= 2:
+            print("{}: Data downloaded".format(status_id))
 
     # Handle service integration data directory
     service_data = os.path.join(app.config["SERVICE_DATA"], status_id) + "/"
@@ -122,36 +181,66 @@ def moc_driver(metadata, status_id):
         }
 
     # Convert data
-    feedstock = convert(local_path, convert_params)
-    # TODO: Update status - conversion successful
-    print("DEBUG: Feedstock contains", len(feedstock), "entries")
+    stat_res = update_status(status_id, "converting", "P")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
+    try:
+        feedstock = convert(local_path, convert_params)
+    except Exception as e:
+        stat_res = update_status(status_id, "converting", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+    else:
+        stat_res = update_status(status_id, "converting", "M",
+                                 text="{} entries parsed".format(len(feedstock)))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        if DEBUG_LEVEL >= 2:
+            print("{}: {} entries parsed".format(status_id, len(feedstock)))
 
     # Pass dataset to /ingest
-    with tempfile.TemporaryFile(mode="w+") as stock:
-        for entry in feedstock:
-            json.dump(entry, stock)
-            stock.write("\n")
-        stock.seek(0)
-        ingest_args = {
-            "status_id": status_id,
-            "data": json.dumps({
-                "globus": app.config["LOCAL_EP"] + local_path
-                }),
-            "services": services,
-            "service_data": json.dumps({
-                "globus": app.config["LOCAL_EP"] + service_data
-                })
-        }
-        ingest_res = requests.post(app.config["INGEST_URL"],
-                                   data=ingest_args,
-                                   files={'file': stock})
+    stat_res = update_status(status_id, "convert_ingest", "P")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
+    try:
+        with tempfile.TemporaryFile(mode="w+") as stock:
+            for entry in feedstock:
+                json.dump(entry, stock)
+                stock.write("\n")
+            stock.seek(0)
+            ingest_args = {
+                "status_id": status_id,
+                "data": json.dumps({
+                    "globus": app.config["LOCAL_EP"] + local_path
+                    }),
+                "services": services,
+                "service_data": json.dumps({
+                    "globus": app.config["LOCAL_EP"] + service_data
+                    })
+            }
+            ingest_res = requests.post(app.config["INGEST_URL"],
+                                       data=ingest_args,
+                                       files={'file': stock})
+    except Exception as e:
+        stat_res = update_status(status_id, "convert_ingest", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+    else:
+        if ingest_res.json().get("success"):
+            stat_res = update_status(status_id, "convert_ingest", "S")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+        else:
+            stat_res = update_status(status_id, "convert_ingest", "F", text=str(ingest_res.json()))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
 
-    print("DEBUG: Ingest result:", ingest_res.json())
-    if not ingest_res.json().get("success"):
-        # TODO: Update status? Ingest failed
-        raise ValueError("In convert - Ingest failed" + str(ingest_res.json()))
-
-    # TODO: Update status - everything done
     return {
         "success": True,
         "status_id": status_id
@@ -255,24 +344,51 @@ def accept_ingest():
             "error": "Invalid ingest JSON: " + repr(e)
             })
 
-    # Mint/update status ID
-    if not params.get("status_id"):
-        status_id = str(ObjectId())
-        # TODO: Register status ID
-        print("DEBUG: New status ID created")
+    # Mint or update status ID
+    if params.get("status_id"):
+        status_id = params["status_id"]
+        stat_res = update_status(status_id, "ingest_start", "P")
+        if not stat_res["success"]:
+            return jsonify(stat_res)
     else:
-        # TODO: Check that status exists (must not be set by user)
-        # TODO: Update status - ingest request recieved
-        status_id = params.get("status_id")
-        print("DEBUG: Current status ID read")
+        status_id = str(ObjectId())
+        status_info = {
+            "status_id": status_id,
+            "submission_code": "I",
+            "submission_time": datetime.utcnow().isoformat("T") + "Z",
+            # TODO: Get submitter through Auth
+            "submitter": "Testy T. Testopherson",
+            "title": "[Title skipped for Ingest]"
+            }
+        try:
+            # TODO: Better metadata validation
+            status_res = create_status(status_info)
+        except Exception as e:
+            return jsonify({
+                "success": False,
+                "error": repr(e)
+                })
+        if not status_res["success"]:
+            return jsonify(status_res)
+
     # Save file
-    feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
-    feedstock.save(feed_path)
-    ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
+    try:
+        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
+        feedstock.save(feed_path)
+        ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
                                                                          status_id,
                                                                          services,
                                                                          data_loc,
                                                                          service_data))
+    except Exception as e:
+        stat_res = update_status(status_id, "ingest_start", "F", text=repr(e))
+        if not stat_res["success"]:
+            return jsonify(stat_res)
+        else:
+            return jsonify({
+                "success": False,
+                "error": repr(e)
+                })
     ingester.start()
     return jsonify({
         "success": True,
@@ -289,83 +405,186 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
         "client_secret": app.config["API_CLIENT_SECRET"],
         "services": ["search_ingest", "publish", "transfer"]
         }
-    clients = toolbox.confidential_login(creds)
-    search_client = clients["search_ingest"]
-    publish_client = clients["publish"]
-    transfer_client = clients["transfer"]
+    try:
+        clients = toolbox.confidential_login(creds)
+        search_client = clients["search_ingest"]
+        publish_client = clients["publish"]
+        transfer_client = clients["transfer"]
 
-    final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
+        final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
+
+        # Other services use the dataset information
+        if services:
+            with open(final_feed_path) as f:
+                dataset = json.loads(f.readline())
+    except Exception as e:
+        stat_res = update_status(status_id, "ingest_start", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+
+    stat_res = update_status(status_id, "ingest_start", "S")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
 
     # If the data should be local, make sure it is
     if data_loc:
+        stat_res = update_status(status_id, "ingest_download", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
         # Will not transfer anything if already in place
         local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
-        dl_res = download_and_backup(transfer_client,
-                                     data_loc,
-                                     app.config["LOCAL_EP"],
-                                     local_path)
+        try:
+            dl_res = download_and_backup(transfer_client,
+                                         data_loc,
+                                         app.config["LOCAL_EP"],
+                                         local_path)
+        except Exception as e:
+            stat_res = update_status(status_id, "ingest_download", "F", text=repr(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
         if not dl_res["success"]:
-            raise IOError("No data downloaded")
-        # TODO: Update status - data downloaded
-        print("DEBUG: Data downloaded")
+            stat_res = update_status(status_id, "ingest_download", "F", text=str(dl_res))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+        else:
+            stat_res = update_status(status_id, "ingest_download", "S")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            if DEBUG_LEVEL >= 2:
+                print("{}: Ingest data downloaded".format(status_id))
     # If the data aren't local, but need to be, error
     elif "globus_publish" in services:
-        raise ValueError("Unable to Publish data without location")
+        stat_res = update_status(status_id, "ingest_download", "F",
+                                 text=("Globus Publish integration was selected, "
+                                      "but the data location was not provided."))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        stat_res = update_status(status_id, "ingest_publish", "F",
+                                 text="Unable to publish data without location.")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        return
+    else:
+        stat_res = update_status(status_id, "ingest_download", "N")
 
     # Same for integrated service data
     if service_loc:
+        stat_res = update_status(status_id, "ingest_integration", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        # Will not transfer anything if already in place
         service_data = os.path.join(app.config["SERVICE_DATA"], status_id) + "/"
-        dl_res = download_and_backup(transfer_client,
-                                     service_loc,
-                                     app.config["LOCAL_EP"],
-                                     service_data)
+        try:
+            dl_res = download_and_backup(transfer_client,
+                                         service_loc,
+                                         app.config["LOCAL_EP"],
+                                         service_data)
+        except Exception as e:
+            stat_res = update_status(status_id, "ingest_integration", "F", text=repr(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
         if not dl_res["success"]:
-            raise IOError("No data downloaded")
+            stat_res = update_status(status_id, "ingest_integration", "F", text=str(dl_res))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+        else:
+            stat_res = update_status(status_id, "ingest_integration", "S")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            if DEBUG_LEVEL >= 2:
+                print("{}: Integration data downloaded".format(status_id))
+    # If the data aren't local, but need to be, error
+    elif "citrine" in services:
+        stat_res = update_status(status_id, "ingest_integration", "F",
+                                 text=("Citrine integration was selected, but the"
+                                      "integration data location was not provided."))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        stat_res = update_status(status_id, "ingest_citrine", "F",
+                                 text="Unable to upload PIFs without location.")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        return
+    else:
+        stat_res = update_status(status_id, "ingest_integration", "N")
+
+    # Integrations
 
     # Globus Search (mandatory)
+    stat_res = update_status(status_id, "ingest_search", "P")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
     try:
         search_ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
                       feedstock_save=final_feed_path)
     except Exception as e:
-        # TODO: Update status - ingest failed
-        raise Exception("Search error:" + str({
-            "success": False,
-            "error": repr(e)
-            }))
-
-    # Other services use the dataset information
-    if services:
-        with open(final_feed_path) as f:
-            dataset = json.loads(f.readline())
+        stat_res = update_status(status_id, "ingest_search", "F", text=repr(e))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        else:
+            return
+    else:
+        stat_res = update_status(status_id, "ingest_search", "S")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Globus Publish
     # TODO: Test after Publish API is fixed
     if "globus_publish" in services:
-        # Get DC metadata
+        stat_res = update_status(status_id, "ingest_publish", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
                                           dataset, local_path)
         except Exception as e:
-            # TODO: Update status - Publish failed
-            print("Publish ERROR:", repr(e))
+            stat_res = update_status(status_id, "ingest_publish", "R", text=repr(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
         else:
-            # TODO: Update status - Publish success
-            print("DEBUG: Publish success:", fin_res)
+            stat_res = update_status(status_id, "ingest_publish", "M", text=str(fin_res))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+    else:
+        stat_res = update_status(status_id, "ingest_publish", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Citrine
     if "citrine" in services:
+        stat_res = update_status(status_id, "ingest_citrine", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
         try:
             cit_res = citrine_upload(os.path.join(service_data, "citrine"),
                                      app.config["CITRINATION_API_KEY"],
                                      dataset)
-            if not cit_res["success"]:
-                raise ValueError("No data uploaded to Citrine: " + str(cit_res))
         except Exception as e:
-            # TODO: Update status, Citrine upload failed
-            print("Citrine upload failed:", repr(e))
+            stat_res = update_status(status_id, "ingest_citrine", "R", text=repr(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+        else:
+            if not cit_res["success"]:
+                stat_res = update_status(status_id, "ingest_citrine", "R", text=str(cit_res))
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+            else:
+                 stat_res = update_status(status_id, "ingest_citrine", "S")
+                 if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
 
-    # TODO: Update status - ingest successful, processing complete
-    print("DEBUG: Ingest success, processing complete")
+    if DEBUG_LEVEL >= 2:
+        print("{}: Ingest complete".format(status_id))
     return {
         "success": True,
         "status_id": status_id
@@ -407,7 +626,7 @@ def get_publish_metadata(metadata):
     pub_metadata = {
         "dc.title": ", ".join([title.get("title", "")
                                for title in dc_metadata.get("titles", [])]),
-        "dc.date.issued": str(date.today().year),
+        "dc.date.issued": str(datetime.date.today().year),
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": str([author.get("creatorName", "")
                                       for author in dc_metadata.get("creators", [])]),
@@ -540,6 +759,8 @@ def create_status(status):
             "error": repr(e)
             }
     else:
+        if DEBUG_LEVEL >= 1:
+            print("STATUS {}: Created".format(status["status_id"]))
         return {
             "success": True,
             "status": status
@@ -572,12 +793,16 @@ def update_status(status_id, step, code, text=None):
                 break
     code_list = list(status["code"])
     code_list[step_index] = code
-    status["code"] = "".join(code_list)
-    # If needed, update messages or errors
+    # If needed, update messages or errors and cancel tasks
     if code == 'M':
         status["messages"].append(text or "No message available")
     elif code == 'F':
         status["errors"].append(text or "An error occurred and we're trying to fix it")
+        # Cancel subsequent tasks
+        code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
+    elif code == 'R':
+        status["errors"].append(text or "An error occurred but we're recovering")
+    status["code"] = "".join(code_list)
 
     try:
         # put_item will overwrite
@@ -588,6 +813,8 @@ def update_status(status_id, step, code, text=None):
             "error": repr(e)
             }
     else:
+        if DEBUG_LEVEL >= 1:
+            print("STATUS {}: {}: {}, {}".format(status_id, step, code, text))
         return {
             "success": True,
             "status": status
@@ -634,6 +861,8 @@ def translate_status(status):
             usr_msg += "{} was successful: {}.\n".format(step, messages.pop(0))
         elif code == 'F':
             usr_msg += "{} failed: {}\n".format(step, errors.pop(0))
+        elif code == 'R':
+            usr_msg += "{} failed (processing will continue): {}\n".format(step, errors.pop(0))
         elif code == 'N':
             usr_msg += "{} was not requested or required.\n".format(step)
         elif code == 'P':
