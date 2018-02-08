@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime, date
 from hashlib import sha512
 import json
 import os
@@ -29,7 +29,8 @@ DEBUG_LEVEL = 1
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
                             aws_access_key_id=app.config["DYNAMO_KEY"],
-                            aws_secret_access_key=app.config["DYNAMO_SECRET"])
+                            aws_secret_access_key=app.config["DYNAMO_SECRET"],
+                            region_name="us-east-1")
 DMO_TABLE = app.config["DYNAMO_TABLE"]
 DMO_SCHEMA = {
     "TableName": DMO_TABLE,
@@ -222,7 +223,9 @@ def moc_driver(metadata, status_id):
             }
             ingest_res = requests.post(app.config["INGEST_URL"],
                                        data=ingest_args,
-                                       files={'file': stock})
+                                       files={'file': stock},
+                                       # TODO: Verify after getting real cert
+                                       verify=False)
     except Exception as e:
         stat_res = update_status(status_id, "convert_ingest", "F", text=repr(e))
         if not stat_res["success"]:
@@ -412,11 +415,6 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
         transfer_client = clients["transfer"]
 
         final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], status_id + "_final.json")
-
-        # Other services use the dataset information
-        if services:
-            with open(final_feed_path) as f:
-                dataset = json.loads(f.readline())
     except Exception as e:
         stat_res = update_status(status_id, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -537,6 +535,10 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
         stat_res = update_status(status_id, "ingest_search", "S")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
+        # Other services use the dataset information
+        if services:
+            with open(final_feed_path) as f:
+                dataset = json.loads(f.readline())
 
     # Globus Publish
     # TODO: Test after Publish API is fixed
@@ -582,6 +584,10 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
                  stat_res = update_status(status_id, "ingest_citrine", "S")
                  if not stat_res["success"]:
                     raise ValueError(str(stat_res))
+    else:
+        stat_res = update_status(status_id, "ingest_citrine", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     if DEBUG_LEVEL >= 2:
         print("{}: Ingest complete".format(status_id))
@@ -626,7 +632,7 @@ def get_publish_metadata(metadata):
     pub_metadata = {
         "dc.title": ", ".join([title.get("title", "")
                                for title in dc_metadata.get("titles", [])]),
-        "dc.date.issued": str(datetime.date.today().year),
+        "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": str([author.get("creatorName", "")
                                       for author in dc_metadata.get("creators", [])]),
