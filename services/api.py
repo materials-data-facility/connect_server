@@ -599,29 +599,17 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
 
 def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     # Submit metadata
-    try:
-        pub_md = get_publish_metadata(metadata)
-        md_result = publish_client.push_metadata(pub_md["collection_id"], pub_md)
-        pub_endpoint = md_result['globus.shared_endpoint.name']
-        pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-        submission_id = md_result["id"]
-    except Exception as e:
-        # TODO: Raise exception - not Published due to bad metadata
-        print("DEBUG: Publish push failed")
-        raise
+    pub_md = get_publish_metadata(metadata)
+    md_result = publish_client.push_metadata(pub_md.pop("collection_id"), pub_md)
+    pub_endpoint = md_result['globus.shared_endpoint.name']
+    pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
+    submission_id = md_result["id"]
     # Transfer data
-    try:
-        toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
-                               pub_endpoint, [(local_path, pub_path)], timeout=0)
-    except Exception as e:
-        # TODO: Raise exception - not Published due to failed Transfer
-        raise
+    toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
+                           pub_endpoint, [(local_path, pub_path)], timeout=0)
     # Complete submission
-    try:
-        fin_res = publish_client.complete_submission(submission_id)
-    except Exception as e:
-        # TODO: Raise exception - not Published due to Publish error
-        raise
+    fin_res = publish_client.complete_submission(submission_id)
+
     return fin_res
 
 
