@@ -68,6 +68,46 @@ INGEST_MARK = 4
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
+    auth_head = request.headers.get("Authorization")
+    if not auth_head:
+        return jsonify({
+            "success": False,
+            "error": "401 Unauthorized"
+            })
+    try:
+        auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
+                                                           app.config["API_CLIENT_SECRET"])
+        auth_res = auth_client.oauth2_token_introspect(auth_head)
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": "Unacceptable auth: " + repr(e)
+            })
+    if not auth_res:
+        return jsonify({
+            "success": False,
+            "error": "Token not introspectable"
+            })
+    if not auth_res["active"]:
+        return jsonify({
+            "success": False,
+            "error": "Token expired"
+            })
+    if app.config["API_SCOPE"] not in auth_res["scope"]:
+        return jsonify({
+            "success": False,
+            "error": "Not authorized to MOC scope"
+            })
+    if auth_res["client_id"] not in app.config["CLIENT_WHITELIST"]:
+        return jsonify({
+            "success": False,
+            "error": "403 You cannot access this service (yet)"
+            })
+    client_id = auth_res["client_id"]
+    username = auth_res["username"]
+    name = auth_res["name"] or "Not given"
+    email = auth_res["email"] or "Not given"
+
     metadata = request.get_json(force=True, silent=True)
     if not metadata:
         return jsonify({
@@ -87,8 +127,10 @@ def accept_convert():
         "submission_code": "C",
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         # TODO: Get submitter through Auth
-        "submitter": "Testy T. Testopherson",
-        "title": sub_title
+        "submitter": name,
+        "title": sub_title,
+        "user_id": client_id,
+        "user_email": email
         }
     try:
         # TODO: Better metadata validation
