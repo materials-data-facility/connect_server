@@ -10,6 +10,7 @@ import boto3
 from bson import ObjectId
 from citrination_client import CitrinationClient
 from flask import jsonify, request
+import globus_sdk
 import magic
 from mdf_toolbox import toolbox
 from mdf_refinery import convert, search_ingest
