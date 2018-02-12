@@ -100,14 +100,14 @@ def accept_convert():
             "success": False,
             "error": "Not authorized to MOC scope"
             }), 401)
-    if (auth_res["client_id"] not in app.config["CONVERT_WHITELIST"]
-            and auth_res["client_id"] not in app.config["INGEST_WHITELIST"]
-            and auth_res["client_id"] not in app.config["ADMIN_WHITELIST"]):
+    if (auth_res["sub"] not in app.config["CONVERT_WHITELIST"]
+            and auth_res["sub"] not in app.config["INGEST_WHITELIST"]
+            and auth_res["sub"] not in app.config["ADMIN_WHITELIST"]):
         return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
             }), 403)
-    client_id = auth_res["client_id"]
+    user_id = auth_res["sub"]
     # username = auth_res["username"]
     name = auth_res["name"] or "Not given"
     email = auth_res["email"] or "Not given"
@@ -132,7 +132,7 @@ def accept_convert():
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         "submitter": name,
         "title": sub_title,
-        "user_id": client_id,
+        "user_id": user_id,
         "user_email": email
         }
     try:
@@ -403,13 +403,13 @@ def accept_ingest():
             "success": False,
             "error": "Not authorized to MOC scope"
             }), 401)
-    if (auth_res["client_id"] not in app.config["INGEST_WHITELIST"]
-            and auth_res["client_id"] not in app.config["ADMIN_WHITELIST"]):
+    if (auth_res["sub"] not in app.config["INGEST_WHITELIST"]
+            and auth_res["sub"] not in app.config["ADMIN_WHITELIST"]):
         return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
             }), 403)
-    client_id = auth_res["client_id"]
+    user_id = auth_res["sub"]
     # username = auth_res["username"]
     name = auth_res["name"] or "Not given"
     email = auth_res["email"] or "Not given"
@@ -453,7 +453,7 @@ def accept_ingest():
             "submitter": name,
             # TODO: Get title?
             "title": "[Title skipped for Ingest]",
-            "user_id": client_id,
+            "user_id": user_id,
             "user_email": email
             }
         try:
