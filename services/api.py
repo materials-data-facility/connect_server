@@ -108,7 +108,7 @@ def accept_convert():
             "error": "You cannot access this service (yet)"
             }), 403)
     client_id = auth_res["client_id"]
-    username = auth_res["username"]
+    # username = auth_res["username"]
     name = auth_res["name"] or "Not given"
     email = auth_res["email"] or "Not given"
 
@@ -170,10 +170,12 @@ def moc_driver(metadata, status_id):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer"]
+        "services": ["transfer", "moc"]
         }
     try:
-        transfer_client = toolbox.confidential_login(creds)["transfer"]
+        clients = toolbox.confidential_login(creds)
+        transfer_client = clients["transfer"]
+        moc_authorizer = clients["moc"]
     except Exception as e:
         stat_res = update_status(status_id, "convert_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -266,9 +268,12 @@ def moc_driver(metadata, status_id):
                     "globus": app.config["LOCAL_EP"] + service_data
                     })
             }
+            headers = {}
+            moc_authorizer.set_authorization_header(headers)
             ingest_res = requests.post(app.config["INGEST_URL"],
                                        data=ingest_args,
                                        files={'file': stock},
+                                       headers=headers,
                                        # TODO: Verify after getting real cert
                                        verify=False)
     except Exception as e:
@@ -405,7 +410,7 @@ def accept_ingest():
             "error": "You cannot access this service (yet)"
             }), 403)
     client_id = auth_res["client_id"]
-    username = auth_res["username"]
+    # username = auth_res["username"]
     name = auth_res["name"] or "Not given"
     email = auth_res["email"] or "Not given"
     # Check that file exists and is valid
@@ -445,9 +450,11 @@ def accept_ingest():
             "status_id": status_id,
             "submission_code": "I",
             "submission_time": datetime.utcnow().isoformat("T") + "Z",
-            # TODO: Get submitter through Auth
-            "submitter": "Testy T. Testopherson",
-            "title": "[Title skipped for Ingest]"
+            "submitter": name,
+            # TODO: Get title?
+            "title": "[Title skipped for Ingest]",
+            "user_id": client_id,
+            "user_email": email
             }
         try:
             # TODO: Better metadata validation
