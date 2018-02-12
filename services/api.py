@@ -69,13 +69,14 @@ INGEST_MARK = 4
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
-    auth_head = request.headers.get("Authorization").replace("Bearer ", "")
+    auth_head = request.headers.get("Authorization")
     if not auth_head:
         return jsonify({
             "success": False,
             "error": "Not Authenticated"
             }), 401
     try:
+        auth_head = auth_head.replace("Bearer ", "")
         auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
                                                            app.config["API_CLIENT_SECRET"])
         auth_res = auth_client.oauth2_token_introspect(auth_head)
