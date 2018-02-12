@@ -69,7 +69,7 @@ INGEST_MARK = 4
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
-    auth_head = request.headers.get("Authorization")
+    auth_head = request.headers.get("Authorization").replace("Bearer ", "")
     if not auth_head:
         return jsonify({
             "success": False,
