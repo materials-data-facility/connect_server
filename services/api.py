@@ -73,8 +73,8 @@ def accept_convert():
     if not auth_head:
         return jsonify({
             "success": False,
-            "error": "401 Unauthorized"
-            })
+            "error": "Not Authenticated"
+            }), 401
     try:
         auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
                                                            app.config["API_CLIENT_SECRET"])
@@ -83,27 +83,27 @@ def accept_convert():
         return jsonify({
             "success": False,
             "error": "Unacceptable auth: " + repr(e)
-            })
+            }), 400
     if not auth_res:
         return jsonify({
             "success": False,
-            "error": "Token not introspectable"
-            })
+            "error": "Token could not be validated"
+            }), 401
     if not auth_res["active"]:
         return jsonify({
             "success": False,
-            "error": "Token expired"
-            })
+            "error": "Invalid authentication"
+            }), 403
     if app.config["API_SCOPE"] not in auth_res["scope"]:
         return jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
-            })
+            }), 401
     if auth_res["client_id"] not in app.config["CLIENT_WHITELIST"]:
         return jsonify({
             "success": False,
-            "error": "403 You cannot access this service (yet)"
-            })
+            "error": "You cannot access this service (yet)"
+            }), 403
     client_id = auth_res["client_id"]
     username = auth_res["username"]
     name = auth_res["name"] or "Not given"
@@ -114,7 +114,7 @@ def accept_convert():
         return jsonify({
             "success": False,
             "error": "POST data empty or not JSON"
-            })
+            }), 400
     try:
         sub_title = metadata["dc"]["titles"][0]["title"]
     except (KeyError, ValueError):
@@ -140,7 +140,7 @@ def accept_convert():
         return jsonify({
             "success": False,
             "error": repr(e)
-            })
+            }), 500
     if not status_res["success"]:
         return jsonify(status_res)
 
@@ -149,7 +149,7 @@ def accept_convert():
     return jsonify({
         "success": True,
         "status_id": status_id
-        })
+        }), 202
 
 
 def moc_driver(metadata, status_id):
@@ -422,10 +422,10 @@ def accept_ingest():
         feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
         feedstock.save(feed_path)
         ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
-                                                                         status_id,
-                                                                         services,
-                                                                         data_loc,
-                                                                         service_data))
+                                                                             status_id,
+                                                                             services,
+                                                                             data_loc,
+                                                                             service_data))
     except Exception as e:
         stat_res = update_status(status_id, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -503,7 +503,7 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
     elif "globus_publish" in services:
         stat_res = update_status(status_id, "ingest_download", "F",
                                  text=("Globus Publish integration was selected, "
-                                      "but the data location was not provided."))
+                                       "but the data location was not provided."))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         stat_res = update_status(status_id, "ingest_publish", "F",
@@ -548,7 +548,7 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
     elif "citrine" in services:
         stat_res = update_status(status_id, "ingest_integration", "F",
                                  text=("Citrine integration was selected, but the"
-                                      "integration data location was not provided."))
+                                       "integration data location was not provided."))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         stat_res = update_status(status_id, "ingest_citrine", "F",
@@ -624,8 +624,8 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
             else:
-                 stat_res = update_status(status_id, "ingest_citrine", "S")
-                 if not stat_res["success"]:
+                stat_res = update_status(status_id, "ingest_citrine", "S")
+                if not stat_res["success"]:
                     raise ValueError(str(stat_res))
     else:
         stat_res = update_status(status_id, "ingest_citrine", "N")
