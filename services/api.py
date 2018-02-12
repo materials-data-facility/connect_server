@@ -71,40 +71,42 @@ def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
     auth_head = request.headers.get("Authorization")
     if not auth_head:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Not Authenticated"
-            }), 401
+            }), 401)
     try:
         auth_head = auth_head.replace("Bearer ", "")
         auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
                                                            app.config["API_CLIENT_SECRET"])
         auth_res = auth_client.oauth2_token_introspect(auth_head)
     except Exception as e:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Unacceptable auth: " + repr(e)
-            }), 400
+            }), 400)
     if not auth_res:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Token could not be validated"
-            }), 401
+            }), 401)
     if not auth_res["active"]:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Invalid authentication"
-            }), 403
+            }), 403)
     if app.config["API_SCOPE"] not in auth_res["scope"]:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
-            }), 401
-    if auth_res["client_id"] not in app.config["CLIENT_WHITELIST"]:
-        return jsonify({
+            }), 401)
+    if (auth_res["client_id"] not in app.config["CONVERT_WHITELIST"]
+            and auth_res["client_id"] not in app.config["INGEST_WHITELIST"]
+            and auth_res["client_id"] not in app.config["ADMIN_WHITELIST"]):
+        return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
-            }), 403
+            }), 403)
     client_id = auth_res["client_id"]
     username = auth_res["username"]
     name = auth_res["name"] or "Not given"
@@ -112,23 +114,22 @@ def accept_convert():
 
     metadata = request.get_json(force=True, silent=True)
     if not metadata:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "POST data empty or not JSON"
-            }), 400
+            }), 400)
     try:
         sub_title = metadata["dc"]["titles"][0]["title"]
     except (KeyError, ValueError):
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "No title supplied"
-            })
+            }), 400)
     status_id = str(ObjectId())
     status_info = {
         "status_id": status_id,
         "submission_code": "C",
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
-        # TODO: Get submitter through Auth
         "submitter": name,
         "title": sub_title,
         "user_id": client_id,
@@ -138,19 +139,19 @@ def accept_convert():
         # TODO: Better metadata validation
         status_res = create_status(status_info)
     except Exception as e:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": repr(e)
-            }), 500
+            }), 500)
     if not status_res["success"]:
-        return jsonify(status_res)
+        return (jsonify(status_res), 500)
 
     driver = Thread(target=moc_driver, name="driver_thread", args=(metadata, status_id))
     driver.start()
-    return jsonify({
+    return (jsonify({
         "success": True,
         "status_id": status_id
-        }), 202
+        }), 202)
 
 
 def moc_driver(metadata, status_id):
@@ -366,14 +367,55 @@ def get_file_metadata(file_path, backup_path):
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
+    auth_head = request.headers.get("Authorization")
+    if not auth_head:
+        return (jsonify({
+            "success": False,
+            "error": "Not Authenticated"
+            }), 401)
+    try:
+        auth_head = auth_head.replace("Bearer ", "")
+        auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
+                                                           app.config["API_CLIENT_SECRET"])
+        auth_res = auth_client.oauth2_token_introspect(auth_head)
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": "Unacceptable auth: " + repr(e)
+            }), 400)
+    if not auth_res:
+        return (jsonify({
+            "success": False,
+            "error": "Token could not be validated"
+            }), 401)
+    if not auth_res["active"]:
+        return (jsonify({
+            "success": False,
+            "error": "Invalid authentication"
+            }), 403)
+    if app.config["API_SCOPE"] not in auth_res["scope"]:
+        return (jsonify({
+            "success": False,
+            "error": "Not authorized to MOC scope"
+            }), 401)
+    if (auth_res["client_id"] not in app.config["INGEST_WHITELIST"]
+            and auth_res["client_id"] not in app.config["ADMIN_WHITELIST"]):
+        return (jsonify({
+            "success": False,
+            "error": "You cannot access this service (yet)"
+            }), 403)
+    client_id = auth_res["client_id"]
+    username = auth_res["username"]
+    name = auth_res["name"] or "Not given"
+    email = auth_res["email"] or "Not given"
     # Check that file exists and is valid
     try:
         feedstock = request.files["file"]
     except KeyError:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "No feedstock file uploaded"
-            })
+            }), 400)
     # Get parameters
     try:
         params = request.form
@@ -381,22 +423,22 @@ def accept_ingest():
         data_loc = json.loads(params.get("data", "{}"))
         service_data = json.loads(params.get("service_data", "{}"))
     except KeyError as e:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Parameters missing: " + repr(e)
-            })
+            }), 400)
     except Exception as e:
-        return jsonify({
+        return (jsonify({
             "success": False,
             "error": "Invalid ingest JSON: " + repr(e)
-            })
+            }), 400)
 
     # Mint or update status ID
     if params.get("status_id"):
         status_id = params["status_id"]
         stat_res = update_status(status_id, "ingest_start", "P")
         if not stat_res["success"]:
-            return jsonify(stat_res)
+            return (jsonify(stat_res), 500)
     else:
         status_id = str(ObjectId())
         status_info = {
@@ -411,12 +453,12 @@ def accept_ingest():
             # TODO: Better metadata validation
             status_res = create_status(status_info)
         except Exception as e:
-            return jsonify({
+            return (jsonify({
                 "success": False,
                 "error": repr(e)
-                })
+                }), 500)
         if not status_res["success"]:
-            return jsonify(status_res)
+            return (jsonify(status_res), 500)
 
     # Save file
     try:
@@ -430,17 +472,17 @@ def accept_ingest():
     except Exception as e:
         stat_res = update_status(status_id, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
-            return jsonify(stat_res)
+            return (jsonify(stat_res), 500)
         else:
-            return jsonify({
+            return (jsonify({
                 "success": False,
                 "error": repr(e)
-                })
+                }), 400)
     ingester.start()
-    return jsonify({
+    return (jsonify({
         "success": True,
         "status_id": status_id
-        })
+        }), 202)
 
 
 def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
@@ -713,14 +755,14 @@ def get_status(status_id):
     # TODO: Check auth
     raw_status = read_status(status_id)
     if raw_status["success"]:
-        status = translate_status(raw_status["status"])
+        return (jsonify(translate_status(raw_status["status"])), 200)
     else:
-        status = raw_status
-    return jsonify(status)
+        return (jsonify(raw_status), 400)
 
 
 @app.route("/status/<status_id>/raw", methods=["GET"])
 def get_raw_status(status_id):
+    return (jsonify({"success": False, "error": "Not Implemented (yet)"}), 501)
     # TODO: Check auth
     raw_status = read_status(status_id)
     # TODO: Remove private information
