@@ -17,7 +17,7 @@ import requests
 from werkzeug.utils import secure_filename
 
 from mdf_refinery import convert, search_ingest
-from services import app
+from moc import app
 
 # Frequency of status messages printed to console
 # Level 0: No messages
@@ -102,6 +102,8 @@ def accept_convert():
     if (auth_res["sub"] not in app.config["CONVERT_WHITELIST"]
             and auth_res["sub"] not in app.config["INGEST_WHITELIST"]
             and auth_res["sub"] not in app.config["ADMIN_WHITELIST"]):
+        # TODO: Proper logging
+        print("DEBUG: User not in whitelist:", auth_res["sub"])
         return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
