@@ -13,11 +13,10 @@ from flask import jsonify, request
 import globus_sdk
 import magic
 from mdf_toolbox import toolbox
-from mdf_refinery import convert, search_ingest
-
 import requests
 from werkzeug.utils import secure_filename
 
+from mdf_refinery import convert, search_ingest
 from services import app
 
 # Frequency of status messages printed to console

@@ -1,8 +1,8 @@
 import json
 import os
+from queue import Empty
 
 import ase.io
-from bson import ObjectId
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
@@ -13,7 +13,6 @@ from pypif.pif import dump as pif_dump
 from pypif_sdk.util import citrination as cit_utils
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
 from pypif_sdk.interop.datacite import add_datacite as add_dc
-from queue import Empty
 
 
 # Additional NaN values for Pandas
