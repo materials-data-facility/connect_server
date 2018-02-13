@@ -324,7 +324,11 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
             if data_loc.get("globus") != local_ep + local_path:
                 # Parse out EP and path
                 # Right now, path assumed to be a directory
-                user_ep, user_path = data_loc["globus"].split("/", 1)
+                try:
+                    user_ep, user_path = data_loc["globus"].split("/", 1)
+                except ValueError:
+                    raise ValueError(("Globus link must be in the form "
+                                      "'[endpoint_id]/path/to/data.file"))
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
                 # Transfer locally
                 toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
