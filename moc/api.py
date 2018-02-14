@@ -711,8 +711,8 @@ def get_publish_metadata(metadata):
                                for title in dc_metadata.get("titles", [])]),
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": str([author.get("creatorName", "")
-                                      for author in dc_metadata.get("creators", [])]),
+        "dc.contributor.author": [author.get("creatorName", "")
+                                      for author in dc_metadata.get("creators", [])],
         "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
@@ -941,63 +941,63 @@ def translate_status(status):
     for code, step in zip(full_code, steps):
         if code == 'S':
             msg = "{} was successful.".format(step)
-            usr_msg += msg + "/n"
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "success",
                 "text": msg
             })
         elif code == 'M':
-            msg += "{} was successful: {}.".format(step, messages.pop(0))
-            usr_msg += msg + "/n"
+            msg = "{} was successful: {}.".format(step, messages.pop(0))
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "success",
                 "text": msg
             })
         elif code == 'F':
-            msg += "{} failed: {}.".format(step, errors.pop(0))
-            usr_msg += msg + "/n"
+            msg = "{} failed: {}.".format(step, errors.pop(0))
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'R':
-            msg += "{} failed (processing will continue): {}.".format(step, errors.pop(0))
-            usr_msg += msg + "/n"
+            msg = "{} failed (processing will continue): {}.".format(step, errors.pop(0))
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'N':
-            msg += "{} was not requested or required.".format(step)
-            usr_msg += msg + "/n"
+            msg = "{} was not requested or required.".format(step)
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "idle",
                 "text": msg
             })
         elif code == 'P':
-            msg += "{} is in progress.".format(step)
-            usr_msg += msg + "/n"
+            msg = "{} is in progress.".format(step)
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "started",
                 "text": msg
             })
         elif code == 'X':
-            msg += "{} was cancelled.".format(step)
-            usr_msg += msg + "/n"
+            msg = "{} was cancelled.".format(step)
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "idle",
                 "text": msg
             })
         elif code == 'W':
-            msg += "{} has not started yet.".format(step)
-            usr_msg += msg + "/n"
+            msg = "{} has not started yet.".format(step)
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "idle",
                 "text": msg
             })
         else:
-            msg += "{} code: {}".format(step, code)
-            usr_msg += msg + "/n"
+            msg = "{} code: {}".format(step, code)
+            usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",
                 "text": msg
