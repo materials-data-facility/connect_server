@@ -1,8 +1,10 @@
+from hashlib import sha512
 import json
 import os
 from queue import Empty
 
 import ase.io
+import magic
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
@@ -55,32 +57,35 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             single_record = {}
             multi_records = []
             for parser in ALL_PARSERS:
-                # TODO: Filter appropriate parsers
-                if True or parser.__name__ in parse_params.get("parsers", {}).keys():
-                    try:
-                        parser_res = parser(group=group, params=parse_params)
-                    except Exception as e:
-                        print("Parser {p} failed with exception {e}".format(
-                                                                        p=parser.__name__,
-                                                                        e=repr(e)))
-                    else:
-                        # Only process actual results
-                        if parser_res:
-                            # If a single record was returned, merge with others
-                            if isinstance(parser_res, dict):
-                                single_record = toolbox.dict_merge(single_record, parser_res)
-                            # If multiple records were returned, add to list
-                            elif isinstance(parser_res, list):
-                                # Only add records with data
-                                [multi_records.append(rec) for rec in parser_res if rec]
-                            # Else, panic
-                            else:
-                                raise TypeError(("Parser '{p}' returned "
-                                                 "type '{t}'!").format(p=parser.__name__,
-                                                                       t=type(parser_res)))
+                try:
+                    parser_res = parser(group=group, params=parse_params)
+                except Exception as e:
+                    print("Parser {p} failed with exception {e}".format(
+                                                                    p=parser.__name__,
+                                                                    e=repr(e)))
+                else:
+                    # If a list of one record was returned, treat as single record
+                    # Eliminates [{}] from cluttering feedstock
+                    # Filters one-record results from parsers that always return lists
+                    if isinstance(parser_res, list) and len(parser_res) == 1:
+                        parser_res = parser_res[0]
+                    # Only process actual results
+                    if parser_res:
+                        # If a single record was returned, merge with others
+                        if isinstance(parser_res, dict):
+                            single_record = toolbox.dict_merge(single_record, parser_res)
+                        # If multiple records were returned, add to list
+                        elif isinstance(parser_res, list):
+                            # Only add records with data
+                            [multi_records.append(rec) for rec in parser_res if rec]
+                        # Else, panic
                         else:
-                            pass
-                            print("DEBUG:", parser.__name__, "unable to parse", group)
+                            raise TypeError(("Parser '{p}' returned "
+                                             "type '{t}'!").format(p=parser.__name__,
+                                                                   t=type(parser_res)))
+                    else:
+                        pass
+                        print("DEBUG:", parser.__name__, "unable to parse", group)
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -95,7 +100,14 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                 records = []
 
             # Push records to output queue
+            # Get the file info
+            try:
+                file_info = _parse_file_info(group=group, params=parse_params)
+            except Exception as e:
+                print("File info parser failed:", repr(e))
             for record in records:
+                # TODO: Should files be handled differently?
+                record = toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
         print("DEBUG: Transformer error:", repr(e))
@@ -185,6 +197,33 @@ def parse_pif(group, params=None):
     return mdf_pifs
 
 
+def parse_json(group, params=None):
+    """Parser for JSON.
+    Will populate blocks according to mapping.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            json (dict):
+                mapping (dict): The mapping of mdf_fields: json_fields
+
+    Returns:
+    dict: The record(s) parsed.
+    """
+    try:
+        mapping = params["parsers"]["json"]["mapping"]
+    except (KeyError, AttributeError):
+        return {}
+
+    records = []
+    for file_path in group:
+        with open(file_path) as f:
+            file_json = json.load(f)
+        records.extend(_parse_json(file_json, mapping))
+    return records
+
+
 def parse_csv(group, params=None):
     """Parser for CSVs.
     Will populate blocks according to mapping.
@@ -199,56 +238,191 @@ def parse_csv(group, params=None):
                 na_values (list of str): Values to treat as N/A. Default NA_VALUES
 
     Returns:
-    dict: The record(s) parsed.
+    list of dict: The record(s) parsed.
     """
     try:
         csv_params = params["parsers"]["csv"]
         mapping = csv_params["mapping"]
-    except KeyError:
+    except (KeyError, AttributeError):
         return {}
 
+    records = []
     for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
-    # TODO
-    return parse_pandas(df, mapping)
+        records.extend(parse_pandas(df, mapping))
+    return records
 
 
-# TODO
-def parse_excel(file_data=None, params=None, **ignored):
-    """Parse an Excel file."""
-    if not params or not file_data:
-        return {}
-    df = pd.read_excel(file_data, na_values=NA_VALUES)
-    return parse_pandas(df, params.get("mapping", {}))
+def parse_yaml(group, params=None):
+    """Parser for YAML files.
+    Will populate blocks according to mapping.
 
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            yaml (dict):
+                mapping (dict): The mapping of mdf_fields: yaml_fields
 
-# TODO
-def parse_json(file_data=None, params=None, **ignored):
-    """Parse a JSON file."""
-    # If no structure is supplied, do no parsing
-    if not params or not file_data:
-        return {}
-    records = []
-    if not isinstance(file_data, dict) or isinstance(file_data, list):
-        file_json = json.load(file_data)
-    else:
-        file_json = file_data
+    Returns:
+    list of dict: The record(s) parsed.
+    """
     try:
-        mapping = params.pop("mapping")
-    except KeyError:
-        mapping = params
+        mapping = params["parsers"]["yaml"]["mapping"]
+    except (KeyError, AttributeError):
+        return {}
 
+    records = []
+    for file_path in group:
+        with open(file_path) as f:
+            file_json = yaml.safe_load(f)
+        records.extend(_parse_json(file_json, mapping))
+    return records
+
+
+def parse_excel(group, params=None):
+    """Parser for MS Excel files.
+    Will populate blocks according to mapping.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            excel (dict):
+                mapping (dict): The mapping of mdf_fields: excel_headers
+                na_values (list of str): Values to treat as N/A. Default NA_VALUES
+
+    Returns:
+    list of dict: The record(s) parsed.
+    """
+    try:
+        excel_params = params["parsers"]["excel"]
+        mapping = excel_params["mapping"]
+    except (KeyError, AttributeError):
+        return {}
+
+    records = []
+    for file_path in group:
+        df = pd.read_excel(file_path, na_values=NA_VALUES)
+        records.extend(parse_pandas(df, mapping))
+    return records
+
+
+def parse_image(group, params=None):
+    """Parse an image."""
+    records = []
+    for file_path in group:
+        try:
+            im = Image.open(data_path)
+            records.append({
+                "image": {
+                    "width": im.width,
+                    "height": im.height,
+                    "pixels": im.width * im.height,
+                    "format": im.format
+                }
+            })
+        except Exception:
+            pass
+    return records
+
+
+# List of all non-internal parsers
+ALL_PARSERS = [
+    parse_crystal_structure,
+    parse_pif,
+    parse_json,
+    parse_csv,
+    parse_yaml,
+    parse_excel,
+    parse_image
+]
+
+
+def _parse_file_info(group, params=None):
+    """File information parser.
+    Populates the "files" block.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            file (dict):
+                globus_endpoint (str): Data file endpoint.
+                http_host (str): Data file HTTP host.
+                local_path (str): The path to the root of the files on the current machine.
+                host_path (str): The path to the root on the hosting machine. Default local_path.
+
+    Returns:
+    list of dict: The record(s) parsed.
+    """
+    try:
+        file_params = params["parsers"]["file"]
+    except (KeyError, AttributeError):
+        raise ValueError("File info parser params missing")
+    try:
+        globus_endpoint = file_params["globus_endpoint"]
+    except (KeyError, AttributeError):
+        raise ValueError("File info globus_endpoint missing")
+    try:
+        http_host = file_params["http_host"]
+    except (KeyError, AttributeError):
+        raise ValueError("File info http_host missing")
+    try:
+        local_path = file_params["local_path"]
+    except (KeyError, AttributeError):
+        raise ValueError("File info local_path missing")
+    host_path = file_params.get("host_path", local_path)
+
+    files = []
+    for file_path in group:
+        host_file = file_path.replace(local_path, host_path)
+        with open(file_path, "rb") as f:
+            md = {
+                "globus": globus_endpoint + host_file,
+                "data_type": magic.from_file(file_path),
+                "mime_type": magic.from_file(file_path, mime=True),
+                "url": http_host + host_file,
+                "length": os.path.getsize(file_path),
+                "filename": os.path.basename(file_path),
+                "sha512": sha512(f.read()).hexdigest()
+            }
+        files.append(md)
+    return {
+        "files": files
+    }
+
+
+def _parse_pandas(df, mapping):
+    """Parse a Pandas DataFrame."""
+    csv_len = len(df.index)
+    df_json = json.loads(df.to_json())
+
+    records = []
+    for index in range(csv_len):
+        new_map = {}
+        for path, value in _flatten_struct(mapping):
+            new_map[path] = value + "." + str(index)
+        rec = _parse_json(df_json, new_map)
+        if rec:
+            records.append(rec)
+    return records
+
+
+def _parse_json(file_json, mapping):
+    """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
         file_json = [file_json]
 
+    records = []
     for data in file_json:
         record = {}
         # Get (path, value) pairs from the key structure
         # Loop over each
-        for mdf_path, json_path in flatten_struct(mapping):
+        for mdf_path, json_path in _flatten_struct(mapping):
             try:
-                value = follow_path(data, json_path)
+                value = _follow_path(data, json_path)
             except KeyError:
                 value = None
             # Only add value if value exists
@@ -270,45 +444,7 @@ def parse_json(file_data=None, params=None, **ignored):
     return records
 
 
-# TODO
-def parse_image(data_path=None, **ignored):
-    """Parse an image."""
-    im = Image.open(data_path)
-    return {
-        "image": {
-            "width": im.width,
-            "height": im.height,
-            "pixels": im.width * im.height,
-            "format": im.format
-        }
-    }
-
-
-# List of all user-selectable parsers
-# TODO: Repopulate
-ALL_PARSERS = [
-    parse_crystal_structure
-]
-
-
-# TODO
-def parse_pandas(df, mapping):
-    """Parse a Pandas DataFrame."""
-    csv_len = len(df.index)
-    df_json = json.loads(df.to_json())
-
-    records = []
-    for index in range(csv_len):
-        new_map = {}
-        for path, value in flatten_struct(mapping):
-            new_map[path] = value + "." + str(index)
-        rec = parse_json(df_json, new_map)
-        if rec:
-            records.append(rec)
-    return records
-
-
-def flatten_struct(struct, path=""):
+def _flatten_struct(struct, path=""):
     """Take a dict structure and flatten into dot notation.
     Path will be prepended if supplied.
 
@@ -323,13 +459,13 @@ def flatten_struct(struct, path=""):
     """
     for key, val in struct.items():
         if isinstance(val, dict):
-            for p in flatten_struct(val, path+"."+key):
+            for p in _flatten_struct(val, path+"."+key):
                 yield p
         else:
             yield ((path+"."+key).strip(". "), val)
 
 
-def follow_path(json_data, json_path):
+def _follow_path(json_data, json_path):
     """Get the value in the data pointed to by the path."""
     value = json_data
     for field in json_path.split("."):
