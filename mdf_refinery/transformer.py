@@ -15,6 +15,7 @@ from pypif.pif import dump as pif_dump
 from pypif_sdk.util import citrination as cit_utils
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
 from pypif_sdk.interop.datacite import add_datacite as add_dc
+import yaml
 
 
 # Additional NaN values for Pandas
@@ -249,7 +250,7 @@ def parse_csv(group, params=None):
     records = []
     for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
-        records.extend(parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -304,7 +305,7 @@ def parse_excel(group, params=None):
     records = []
     for file_path in group:
         df = pd.read_excel(file_path, na_values=NA_VALUES)
-        records.extend(parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -313,7 +314,7 @@ def parse_image(group, params=None):
     records = []
     for file_path in group:
         try:
-            im = Image.open(data_path)
+            im = Image.open(file_path)
             records.append({
                 "image": {
                     "width": im.width,
@@ -403,9 +404,7 @@ def _parse_pandas(df, mapping):
         new_map = {}
         for path, value in _flatten_struct(mapping):
             new_map[path] = value + "." + str(index)
-        rec = _parse_json(df_json, new_map)
-        if rec:
-            records.append(rec)
+        records.extend(_parse_json(df_json, new_map))
     return records
 
 
