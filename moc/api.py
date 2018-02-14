@@ -1,5 +1,4 @@
 from datetime import datetime, date
-from hashlib import sha512
 import json
 import os
 import tempfile
@@ -11,7 +10,6 @@ from bson import ObjectId
 from citrination_client import CitrinationClient
 from flask import jsonify, request
 import globus_sdk
-import magic
 from mdf_toolbox import toolbox
 import requests
 from werkzeug.utils import secure_filename
@@ -192,6 +190,7 @@ def moc_driver(metadata, status_id):
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
     local_path = os.path.join(app.config["LOCAL_PATH"], status_id) + "/"
+    backup_path = os.path.join(app.config["BACKUP_PATH"], status_id) + "/"
     try:
         dl_res = download_and_backup(transfer_client,
                                      metadata.pop("data", {}),
@@ -223,11 +222,18 @@ def moc_driver(metadata, status_id):
     # Pull out special fields in metadata (the rest is the dataset)
     services = metadata.pop("services", [])
     parse_params = metadata.pop("index", {})
+    # Add file info data
+    parse_params["file"] = {
+        "globus_endpoint": app.config["BACKUP_EP"],
+        "http_host": app.config["BACKUP_HOST"],
+        "local_path": local_path,
+        "host_path": backup_path
+    }
     convert_params = {
         "dataset": metadata,
         "parsers": parse_params,
         "service_data": service_data
-        }
+    }
 
     # Convert data
     stat_res = update_status(status_id, "converting", "P")
@@ -328,7 +334,7 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
                     user_ep, user_path = data_loc["globus"].split("/", 1)
                 except ValueError:
                     raise ValueError(("Globus link must be in the form "
-                                      "'[endpoint_id]/path/to/data.file"))
+                                      "'[endpoint_id]/path/to/data_directory/"))
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
                 # Transfer locally
                 toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
@@ -357,21 +363,6 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
     return {
         "success": True
         }
-
-
-def get_file_metadata(file_path, backup_path):
-    """Parses file metadata."""
-    with open(file_path, "rb") as f:
-        md = {
-            "globus": app.config["BACKUP_EP"] + backup_path,
-            "data_type": magic.from_file(file_path),
-            "mime_type": magic.from_file(file_path, mime=True),
-            "url": app.config["BACKUP_HOST"] + backup_path,
-            "length": os.path.getsize(file_path),
-            "filename": os.path.basename(file_path),
-            "sha512": sha512(f.read()).hexdigest()
-        }
-    return md
 
 
 @app.route("/ingest", methods=["POST"])
@@ -945,31 +936,80 @@ def translate_status(status):
                                                    status["title"],
                                                    status["submitter"],
                                                    status["submission_time"])
+    web_msg = []
 
     for code, step in zip(full_code, steps):
         if code == 'S':
-            usr_msg += "{} was successful.\n".format(step)
+            msg = "{} was successful.".format(step)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "success",
+                "text": msg
+            })
         elif code == 'M':
-            usr_msg += "{} was successful: {}.\n".format(step, messages.pop(0))
+            msg += "{} was successful: {}.".format(step, messages.pop(0))
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "success",
+                "text": msg
+            })
         elif code == 'F':
-            usr_msg += "{} failed: {}\n".format(step, errors.pop(0))
+            msg += "{} failed: {}.".format(step, errors.pop(0))
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "failure",
+                "text": msg
+            })
         elif code == 'R':
-            usr_msg += "{} failed (processing will continue): {}\n".format(step, errors.pop(0))
+            msg += "{} failed (processing will continue): {}.".format(step, errors.pop(0))
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "failure",
+                "text": msg
+            })
         elif code == 'N':
-            usr_msg += "{} was not requested or required.\n".format(step)
+            msg += "{} was not requested or required.".format(step)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "idle",
+                "text": msg
+            })
         elif code == 'P':
-            usr_msg += "{} is in progress.\n".format(step)
+            msg += "{} is in progress.".format(step)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "started",
+                "text": msg
+            })
         elif code == 'X':
-            usr_msg += "{} was cancelled.\n".format(step)
+            msg += "{} was cancelled.".format(step)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "idle",
+                "text": msg
+            })
         elif code == 'W':
-            usr_msg += "{} has not started yet.\n".format(step)
+            msg += "{} has not started yet.".format(step)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "idle",
+                "text": msg
+            })
         else:
-            usr_msg += "{} code: {}\n".format(step, code)
+            msg += "{} code: {}".format(step, code)
+            usr_msg += msg + "/n"
+            web_msg.append({
+                "signal": "warning",
+                "text": msg
+            })
 
     return {
         "status_id": status["status_id"],
+        "status_message": usr_msg,
+        "status_list": web_msg,
         "title": status["title"],
-        "status_message": usr_msg
+        "submitter": status["submitter"],
+        "submission_time": status["submission_time"]
         }
 
 
