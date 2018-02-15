@@ -86,7 +86,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                                                    t=type(parser_res)))
                     else:
                         pass
-                        print("DEBUG:", parser.__name__, "unable to parse", group)
+                        # print("DEBUG:", parser.__name__, "unable to parse", group)
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
