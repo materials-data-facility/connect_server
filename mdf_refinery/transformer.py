@@ -8,6 +8,7 @@ import magic
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
+import pycalphad
 import pymatgen
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg
 from pif_ingestor.manager import IngesterManager
@@ -164,6 +165,37 @@ def parse_crystal_structure(group, params=None):
                                                 "crystal_structure": crystal_structure
                                             })
     return record
+
+
+def parse_tdb(group, params=None):
+    record = {}
+
+    for data_file in group:
+        materials = {}
+        calphad = {}
+        # Attempt to read the file
+        try:
+            calphad_db = pycalphad.Database(data_file)
+            composition = ""
+            for element in calphad_db.elements:
+                if element.isalnum():
+                    element = element.lower()
+                    element = element[0].upper() + element[1:]
+                    composition += element
+
+            phases = list(calphad_db.phases.keys())
+
+            materials['composition'] = composition
+            calphad['phases'] = phases
+
+            # Add to record
+            record = toolbox.dict_merge(record, {
+                                               "materials": materials,
+                                               "calphad": calphad
+                                           })
+            return record
+        except Exception as e:
+            return {}
 
 
 def parse_pif(group, params=None):
