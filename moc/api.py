@@ -419,10 +419,13 @@ def accept_ingest():
             }), 400)
     # Get parameters
     try:
-        params = request.form
+        # requests.form is an ImmutableMultiDict
+        # flat=False returns all keys as lists
+        params = request.form.to_dict(flat=False)
         services = params.get("services", [])
-        data_loc = json.loads(params.get("data", "{}"))
-        service_data = json.loads(params.get("service_data", "{}"))
+        data_loc = json.loads(params.get("data", ["{}"])[0])
+        service_data = json.loads(params.get("service_data", ["{}"])[0])
+        status_id = params.get("status_id", [None])[0]
     except KeyError as e:
         return (jsonify({
             "success": False,
@@ -435,11 +438,10 @@ def accept_ingest():
             }), 400)
 
     # Mint or update status ID
-    if params.get("status_id"):
-        status_id = params["status_id"]
+    if status_id:
         stat_res = update_status(status_id, "ingest_start", "P")
         if not stat_res["success"]:
-            return (jsonify(stat_res), 500)
+            return (jsonify(stat_res), 400)
     else:
         status_id = str(ObjectId())
         status_info = {
@@ -630,7 +632,6 @@ def moc_ingester(base_feed_path, status_id, services, data_loc, service_loc):
                 dataset = json.loads(f.readline())
 
     # Globus Publish
-    # TODO: Test after Publish API is fixed
     if "globus_publish" in services:
         stat_res = update_status(status_id, "ingest_publish", "P")
         if not stat_res["success"]:
