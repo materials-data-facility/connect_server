@@ -346,7 +346,8 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
             res = requests.get(data_loc["zip"])
             with open(zip_path, 'wb') as out:
                 out.write(res.content)
-            zipfile.ZipFile(zip_path).extractall()
+            zipfile.ZipFile(zip_path).extractall(local_path)
+            os.remove(zip_path)
 
         elif data_loc.get("files"):
             # TODO: Implement this
