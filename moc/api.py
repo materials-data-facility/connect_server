@@ -267,9 +267,9 @@ def moc_driver(metadata, status_id):
             stock.seek(0)
             ingest_args = {
                 "status_id": status_id,
-                "data": ["globus://" + app.config["LOCAL_EP"] + local_path],
+                "data": json.dumps(["globus://" + app.config["LOCAL_EP"] + local_path]),
                 "services": services,
-                "service_data": ["globus://" + app.config["LOCAL_EP"] + service_data]
+                "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data])
             }
             headers = {}
             moc_authorizer.set_authorization_header(headers)
