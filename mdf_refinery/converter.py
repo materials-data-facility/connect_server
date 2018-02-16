@@ -68,7 +68,16 @@ def group_tree(root):
         # VASP
         # TODO: Use regex instead of exact matching
         if "OUTCAR" in files:
-            outcar_files = ["OUTCAR", "INCAR", "POSCAR", "WAVCAR"]
+            outcar_files = [
+                "OUTCAR",
+                "INCAR",
+                "POSCAR",
+                "WAVCAR",
+                "CHGCAR",
+                "CONTCAR",
+                "vasprun.xml",
+                "XDATCAR"
+            ]
             new_group = []
             for group_file in outcar_files:
                 # Remove file from list and add to group if present

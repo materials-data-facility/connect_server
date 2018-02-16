@@ -312,10 +312,7 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
 
     Arguments:
     mdf_transfer_client (TransferClient): An authenticated TransferClient.
-    data_loc (dict): The location of the data. Only one field should exist.
-        globus (str): The endpoint ID and path.
-        zip (str): The HTTP link to a zip file.
-        files: Not implemented
+    data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path ot the local storage location.
 
@@ -323,15 +320,21 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
     dict: success (bool): True on success, False on failure.
     """
     os.makedirs(local_path, exist_ok=True)
+    if not isinstance(data_loc, list):
+        raise TypeError("Data locations must be in a list")
     # Download data locally
-    try:
-        if data_loc.get("globus"):
+    for location in data_loc:
+        try:
+            protocol, data_info = location.split("://", 1)
+        except ValueError:
+            raise ValueError("Data location must be in the form [protocol]://[data_location]")
+        if protocol == "globus":
             # Check that data not already in place
-            if data_loc.get("globus") != local_ep + local_path:
+            if data_info != local_ep + local_path:
                 # Parse out EP and path
                 # Right now, path assumed to be a directory
                 try:
-                    user_ep, user_path = data_loc["globus"].split("/", 1)
+                    user_ep, user_path = data_info.split("/", 1)
                 except ValueError:
                     raise ValueError(("Globus link must be in the form "
                                       "'[endpoint_id]/path/to/data_directory/"))
@@ -340,25 +343,21 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
                 toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
                                        [(user_path, local_path)], timeout=0)
 
-        elif data_loc.get("zip"):
-            # Download and unzip
-            zip_path = os.path.join(local_path, "archive.zip")
-            res = requests.get(data_loc["zip"])
-            with open(zip_path, 'wb') as out:
-                out.write(res.content)
-            zipfile.ZipFile(zip_path).extractall(local_path)
-            os.remove(zip_path)
-
-        elif data_loc.get("files"):
-            # TODO: Implement this
-            raise NotImplementedError("Files not implemented yet")
+        elif protocol == "http" or protocol == "https":
+            # Determine file type
+            if location.endswith(".zip"):
+                # Download and unzip
+                zip_path = os.path.join(local_path, "archive.zip")
+                res = requests.get(location)
+                with open(zip_path, 'wb') as out:
+                    out.write(res.content)
+                zipfile.ZipFile(zip_path).extractall(local_path)
+                os.remove(zip_path)
 
         else:
             # Nothing to do
-            raise IOError("Invalid data location: " + str(data_loc))
+            raise IOError("Invalid data location: " + str(location))
 
-    except Exception as e:
-        raise
     print("DEBUG: Download success")
 
     return {
