@@ -76,10 +76,11 @@ def accept_convert():
         auth_head = auth_head.replace("Bearer ", "")
         auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
                                                            app.config["API_CLIENT_SECRET"])
-        auth_res = auth_client.oauth2_token_introspect(auth_head)
+        auth_res = auth_client.oauth2_token_introspect(auth_head, include="identities_set")
     except Exception as e:
         return (jsonify({
             "success": False,
+            # TODO: Check that the exception doesn't leak info
             "error": "Unacceptable auth: " + repr(e)
             }), 400)
     if not auth_res:
@@ -87,21 +88,25 @@ def accept_convert():
             "success": False,
             "error": "Token could not be validated"
             }), 401)
+    # Check that token is active
     if not auth_res["active"]:
         return (jsonify({
             "success": False,
-            "error": "Invalid authentication"
+            "error": "Token expired"
             }), 403)
-    if app.config["API_SCOPE"] not in auth_res["scope"]:
+    # Check correct scope and audience
+    if (app.config["API_SCOPE"] not in auth_res["scope"]
+        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
+
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
             }), 401)
-    if (auth_res["sub"] not in app.config["CONVERT_WHITELIST"]
-            and auth_res["sub"] not in app.config["INGEST_WHITELIST"]
-            and auth_res["sub"] not in app.config["ADMIN_WHITELIST"]):
+    # Finally, verify that user ID is in whitelist
+    # Can be any identity the user has (MOC is identity-aware)
+    if not any([uid in app.config["CONVERT_WHITELIST"] for uid in auth_res["identities_set"]]):
         # TODO: Proper logging
-        print("DEBUG: User not in whitelist:", auth_res["sub"])
+        print("DEBUG: User not in whitelist:", auth_res["username"])
         return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
@@ -374,7 +379,7 @@ def accept_ingest():
         auth_head = auth_head.replace("Bearer ", "")
         auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
                                                            app.config["API_CLIENT_SECRET"])
-        auth_res = auth_client.oauth2_token_introspect(auth_head)
+        auth_res = auth_client.oauth2_token_introspect(auth_head, include="identities_set")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -385,18 +390,25 @@ def accept_ingest():
             "success": False,
             "error": "Token could not be validated"
             }), 401)
+    # Check that token is active
     if not auth_res["active"]:
         return (jsonify({
             "success": False,
-            "error": "Invalid authentication"
+            "error": "Token expired"
             }), 403)
-    if app.config["API_SCOPE"] not in auth_res["scope"]:
+    # Check correct scope and audience
+    if (app.config["API_SCOPE"] not in auth_res["scope"]
+        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
+
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
             }), 401)
-    if (auth_res["sub"] not in app.config["INGEST_WHITELIST"]
-            and auth_res["sub"] not in app.config["ADMIN_WHITELIST"]):
+    # Finally, verify that user ID is in whitelist
+    # Can be any identity the user has (MOC is identity-aware)
+    if not any([uid in app.config["INGEST_WHITELIST"] for uid in auth_res["identities_set"]]):
+        # TODO: Proper logging
+        print("DEBUG: User not in whitelist:", auth_res["username"])
         return (jsonify({
             "success": False,
             "error": "You cannot access this service (yet)"
@@ -752,21 +764,110 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
 
 @app.route("/status/<status_id>", methods=["GET"])
 def get_status(status_id):
-    # TODO: Check auth
+    """Fetch and return status information"""
+    auth_head = request.headers.get("Authorization")
+    if not auth_head:
+        return (jsonify({
+            "success": False,
+            "error": "Not Authenticated"
+            }), 401)
+    try:
+        auth_head = auth_head.replace("Bearer ", "")
+        auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
+                                                           app.config["API_CLIENT_SECRET"])
+        auth_res = auth_client.oauth2_token_introspect(auth_head, include="identities_set")
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": "Unacceptable auth: " + repr(e)
+            }), 400)
+    if not auth_res:
+        return (jsonify({
+            "success": False,
+            "error": "Token could not be validated"
+            }), 401)
+    # Check that token is active
+    if not auth_res["active"]:
+        return (jsonify({
+            "success": False,
+            "error": "Token expired"
+            }), 403)
+    # Check correct scope and audience
+    if (app.config["API_SCOPE"] not in auth_res["scope"]
+        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
+
+        return (jsonify({
+            "success": False,
+            "error": "Not authorized to MOC scope"
+            }), 401)
+    uid_set = auth_res["identities_set"]
+
     raw_status = read_status(status_id)
-    if raw_status["success"]:
-        return (jsonify(translate_status(raw_status["status"])), 200)
+    # Failure message if status not fetched or user not allowed to view
+    # Only the user that submitted the dataset and admins can view
+    if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
+                                         or any([uid in app.config["ADMIN_WHITELIST"]
+                                                 for uid in uid_set])):
+        return (jsonify({
+            "success": False,
+            "error": "Submission {} not found, or not available".format(status_id)
+            }), 404)
     else:
-        return (jsonify(raw_status), 400)
+        return (jsonify(translate_status(raw_status["status"])), 200)
 
 
 @app.route("/status/<status_id>/raw", methods=["GET"])
 def get_raw_status(status_id):
-    return (jsonify({"success": False, "error": "Not Implemented (yet)"}), 501)
-    # TODO: Check auth
+    """Fetch and return user-inappropriate status info"""
+    auth_head = request.headers.get("Authorization")
+    if not auth_head:
+        return (jsonify({
+            "success": False,
+            "error": "Not Authenticated"
+            }), 401)
+    try:
+        auth_head = auth_head.replace("Bearer ", "")
+        auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
+                                                           app.config["API_CLIENT_SECRET"])
+        auth_res = auth_client.oauth2_token_introspect(auth_head, include="identities_set")
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": "Unacceptable auth: " + repr(e)
+            }), 400)
+    if not auth_res:
+        return (jsonify({
+            "success": False,
+            "error": "Token could not be validated"
+            }), 401)
+    # Check that token is active
+    if not auth_res["active"]:
+        return (jsonify({
+            "success": False,
+            "error": "Token expired"
+            }), 403)
+    # Check correct scope and audience
+    if (app.config["API_SCOPE"] not in auth_res["scope"]
+        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
+
+        return (jsonify({
+            "success": False,
+            "error": "Not authorized to MOC scope"
+            }), 401)
+    uid_set = auth_res["identities_set"]
+
     raw_status = read_status(status_id)
-    # TODO: Remove private information
-    return jsonify(raw_status)
+    # Failure message if status not fetched or user not allowed to view
+    # Only the user that submitted the dataset and admins can view
+    if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
+                                         or any([uid in app.config["ADMIN_WHITELIST"]
+                                                 for uid in uid_set])):
+        return (jsonify({
+            "success": False,
+            "error": "Submission {} not found, or not available".format(status_id)
+            }), 404)
+    else:
+        return (jsonify(raw_status), 200)
 
 
 def read_status(status_id):
