@@ -699,7 +699,9 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
-            stat_res = update_status(source_name, "ingest_publish", "M", text=str(fin_res))
+            print("DEBUG:", fin_res)
+            stat_text = "https://publish.globus.org/jspui/handle/ITEM/{}".format(fin_res["id"])
+            stat_res = update_status(source_name, "ingest_publish", "M", text=stat_text)
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
     else:
@@ -755,7 +757,7 @@ def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
-    return fin_res
+    return fin_res.data
 
 
 def get_publish_metadata(metadata):
