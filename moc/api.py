@@ -96,8 +96,7 @@ def accept_convert():
             }), 403)
     # Check correct scope and audience
     if (app.config["API_SCOPE"] not in auth_res["scope"]
-        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
-
+            or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
@@ -297,7 +296,8 @@ def moc_driver(metadata, source_name):
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
-            stat_res = update_status(source_name, "convert_ingest", "F", text=str(ingest_res.json()))
+            stat_res = update_status(source_name, "convert_ingest", "F",
+                                     text=str(ingest_res.json()))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
             else:
@@ -334,7 +334,7 @@ def make_source_name(title):
     if not title.isalnum():
         source_name = ""
         for char in title:
-            if char.isalnum or char == "_":
+            if char.isalnum() or char == "_":
                 source_name += char
     else:
         source_name = title
@@ -345,7 +345,7 @@ def make_source_name(title):
         # Try new source name
         new_source_name = source_name + "_v{}".format(version)
         status_res = read_status(new_source_name)
-        # If name already exists, increment verison and try again
+        # If name already exists, increment version and try again
         if status_res["success"]:
             version += 1
         # Otherwise, correct name found
@@ -444,8 +444,7 @@ def accept_ingest():
             }), 403)
     # Check correct scope and audience
     if (app.config["API_SCOPE"] not in auth_res["scope"]
-        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
-
+            or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
@@ -522,7 +521,8 @@ def accept_ingest():
 
     # Save file
     try:
-        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], secure_filename(feedstock.filename))
+        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
+                                 secure_filename(feedstock.filename))
         feedstock.save(feed_path)
         ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
                                                                              source_name,
@@ -699,9 +699,9 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
-            print("DEBUG:", fin_res)
-            stat_text = "https://publish.globus.org/jspui/handle/ITEM/{}".format(fin_res["id"])
-            stat_res = update_status(source_name, "ingest_publish", "M", text=stat_text)
+            stat_link = "https://publish.globus.org/jspui/handle/ITEM/{}".format(fin_res["id"])
+            stat_res = update_status(source_name, "ingest_publish", "L",
+                                     text=fin_res["dc.description.provenance"], link=stat_link)
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
     else:
@@ -715,7 +715,8 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         try:
-            cit_res = citrine_upload(os.path.join(service_data, "citrine"),
+            cit_path = os.path.join(service_data, "citrine")
+            cit_res = citrine_upload(cit_path,
                                      app.config["CITRINATION_API_KEY"],
                                      dataset)
         except Exception as e:
@@ -724,11 +725,19 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
                 raise ValueError(str(stat_res))
         else:
             if not cit_res["success"]:
-                stat_res = update_status(source_name, "ingest_citrine", "R", text=str(cit_res))
+                if cit_res["failure_count"]:
+                    text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
+                else:
+                    text = "No PIFs were generated"
+                stat_res = update_status(source_name, "ingest_citrine", "R", text=text)
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
             else:
-                stat_res = update_status(source_name, "ingest_citrine", "S")
+                text = "{}/{} PIFs uploaded successfully".format(cit_res["success_count"],
+                                                                 cit_res["success_count"]
+                                                                 + cit_res["failure_count"])
+                link = app.config["CITRINATION_LINK"].format(cit_ds_id=cit_res["cit_ds_id"])
+                stat_res = update_status(source_name, "ingest_citrine", "L", text=text, link=link)
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
     else:
@@ -770,7 +779,7 @@ def get_publish_metadata(metadata):
         "dc.date.issued": str(date.today().year),
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": [author.get("creatorName", "")
-                                      for author in dc_metadata.get("creators", [])],
+                                  for author in dc_metadata.get("creators", [])],
         "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
@@ -797,17 +806,25 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
     if not cit_ds_id:
         raise ValueError("Dataset name present in Citrine")
 
-    for _, _, files in os.walk(citrine_data):
+    success = 0
+    failed = 0
+    for path, _, files in os.walk(os.path.abspath(citrine_data)):
         for pif in files:
-            up_res = json.loads(cit_client.upload(cit_ds_id, pif))
-            if not up_res["success"]:
-                # TODO: Handle errors
-                print("DEBUG: Citrine upload failure:", up_res.get("status"))
+            up_res = json.loads(cit_client.upload(cit_ds_id, os.path.join(path, pif)))
+            if up_res["success"]:
+                success += 1
+            else:
+                # TODO: Log this
+                print("DEBUG: Citrine upload failure:", up_res)
+                failed += 1
     # TODO: Set share to 1 to enable public uploads
     cit_client.update_data_set(cit_ds_id, share=0)
 
     return {
-        "success": True
+        "success": bool(success),
+        "cit_ds_id": cit_ds_id,
+        "success_count": success,
+        "failure_count": failed
         }
 
 
@@ -843,8 +860,7 @@ def get_status(source_name):
             }), 403)
     # Check correct scope and audience
     if (app.config["API_SCOPE"] not in auth_res["scope"]
-        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
-
+            or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
@@ -897,8 +913,7 @@ def get_raw_status(source_name):
             }), 403)
     # Check correct scope and audience
     if (app.config["API_SCOPE"] not in auth_res["scope"]
-        or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
-
+            or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return (jsonify({
             "success": False,
             "error": "Not authorized to MOC scope"
@@ -997,7 +1012,21 @@ def create_status(status):
             }
 
 
-def update_status(source_name, step, code, text=None):
+def update_status(source_name, step, code, text=None, link=None):
+    """Update the status of a given submission.
+
+    Arguments:
+    source_name (str): The source_name of the submission.
+    step (str or int): The step of the process to update.
+    code (char): The applicable status code character.
+    text (str): The message or error text. Only used if required for the code. Default None.
+    link (str): The link to add. Only used if required for the code. Default None.
+
+    Returns:
+    dict: success (bool): Success state
+          error (str): The error. Only exists if success is False.
+          status (str): The updated status. Only exists if success is True.
+    """
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
@@ -1026,8 +1055,15 @@ def update_status(source_name, step, code, text=None):
     # If needed, update messages or errors and cancel tasks
     if code == 'M':
         status["messages"].append(text or "No message available")
+    elif code == 'L':
+        status["messages"].append((text or "No message available", link or "No link available"))
     elif code == 'F':
         status["errors"].append(text or "An error occurred and we're trying to fix it")
+        # Cancel subsequent tasks
+        code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
+    elif code == 'H':
+        status["errors"].append((text or "An error occurred and we're trying to fix it",
+                                 link or "Help may be available soon."))
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
@@ -1044,7 +1080,7 @@ def update_status(source_name, step, code, text=None):
             }
     else:
         if DEBUG_LEVEL >= 1:
-            print("STATUS {}: {}: {}, {}".format(source_name, step, code, text))
+            print("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
         return {
             "success": True,
             "status": status
@@ -1100,6 +1136,15 @@ def translate_status(status):
                 "signal": "success",
                 "text": msg
             })
+        elif code == 'L':
+            tup_msg = messages.pop(0)
+            msg = "{} was successful: {}.".format(step, tup_msg[0])
+            usr_msg += msg + " Link: {}".format(tup_msg[1])
+            web_msg.append({
+                "signal": "success",
+                "text": msg,
+                "link": tup_msg[1]
+            })
         elif code == 'F':
             msg = "{} failed: {}.".format(step, errors.pop(0))
             usr_msg += msg + "\n"
@@ -1113,6 +1158,15 @@ def translate_status(status):
             web_msg.append({
                 "signal": "failure",
                 "text": msg
+            })
+        elif code == 'H':
+            tup_msg = errors.pop(0)
+            msg = "{} failed: {}.".format(step, tup_msg[0])
+            usr_msg += msg + " Link: {}".format(tup_msg[1])
+            web_msg.append({
+                "signal": "failure",
+                "text": msg,
+                "link": tup_msg[1]
             })
         elif code == 'N':
             msg = "{} was not requested or required.".format(step)

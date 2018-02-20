@@ -4,11 +4,12 @@ import os
 from queue import Empty
 
 import ase.io
+from bson import ObjectId
 import magic
 from mdf_toolbox import toolbox
 import pandas as pd
 from PIL import Image
-#import pycalphad
+import pycalphad
 import pymatgen
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg
 from pif_ingestor.manager import IngesterManager
