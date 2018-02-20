@@ -155,7 +155,6 @@ def accept_convert():
     driver.start()
     return (jsonify({
         "success": True,
-        "source_name": source_name,
         "source_name": source_name
         }), 202)
 
