@@ -44,7 +44,7 @@ class Validator:
         title = title.strip().lower()
         # Replace words we don't want
         for stopword in stopwords:
-            title = title.replace(" " + stopword + " ", "")
+            title = title.replace(" " + stopword + " ", " ")
         # Clear double spacing
         while title.find("  ") != -1:
             title = title.replace("  ", " ")
