@@ -120,7 +120,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
 
 def parse_crystal_structure(group, params=None):
     """Parser for the crystal_structure block.
-    Will also populate materials block.
+    Will also populate material block.
 
     Arguments:
     group (list of str): The paths to grouped files.
@@ -132,7 +132,7 @@ def parse_crystal_structure(group, params=None):
     record = {}
 
     for data_file in group:
-        materials = {}
+        material = {}
         crystal_structure = {}
         # Attempt to read the file
         try:
@@ -153,8 +153,8 @@ def parse_crystal_structure(group, params=None):
                 # Can't read file
                 continue
 
-        # Parse materials block
-        materials["composition"] = pmg_s.formula.replace(" ", "")
+        # Parse material block
+        material["composition"] = pmg_s.formula.replace(" ", "")
         # Parse crystal_structure block
         crystal_structure["space_group_number"] = pmg_s.get_space_group_info()[1]
         crystal_structure["number_of_atoms"] = int(pmg_s.composition.num_atoms)
@@ -162,7 +162,7 @@ def parse_crystal_structure(group, params=None):
 
         # Add to record
         record = toolbox.dict_merge(record, {
-                                                "materials": materials,
+                                                "material": material,
                                                 "crystal_structure": crystal_structure
                                             })
     return record
@@ -172,7 +172,7 @@ def parse_tdb(group, params=None):
     record = {}
 
     for data_file in group:
-        materials = {}
+        material = {}
         calphad = {}
         # Attempt to read the file
         try:
@@ -186,12 +186,12 @@ def parse_tdb(group, params=None):
 
             phases = list(calphad_db.phases.keys())
 
-            materials['composition'] = composition
+            material['composition'] = composition
             calphad['phases'] = phases
 
             # Add to record
             record = toolbox.dict_merge(record, {
-                                               "materials": materials,
+                                               "material": material,
                                                "calphad": calphad
                                            })
             return record
