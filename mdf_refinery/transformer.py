@@ -209,7 +209,7 @@ def parse_pif(group, params=None):
     cit_path = os.path.join(params["service_data"], "citrine")
     os.makedirs(cit_path, exist_ok=True)
     cit_manager = IngesterManager()
-    mdf_pifs = []
+    mdf_records = []
 
     raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
                                           args={"quality_report": False})
@@ -221,13 +221,22 @@ def parse_pif(group, params=None):
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
-        mdf_pifs.append({"pif": pif_to_feedstock(pif)})
+        mdf_pif = _translate_pif(pif_to_feedstock(pif))
+        if mdf_pif:
+            mdf_records.append(mdf_pif)
 
         pif_name = (pif.uid or str(ObjectId())) + ".pif"
-        with open(os.path.join(cit_path, pif_name), 'w') as pif_file:
-            pif_dump(add_dc(pif, dc_md), pif_file)
+        pif_path = os.path.join(cit_path, pif_name)
+        try:
+            with open(pif_path, 'w') as pif_file:
+                pif_dump(add_dc(pif, dc_md), pif_file)
+        except Exception as e:
+            try:
+                os.remove(pif_path)
+            except FileNotFoundError:
+                pass
 
-    return mdf_pifs
+    return mdf_records
 
 
 def parse_json(group, params=None):
@@ -502,3 +511,23 @@ def _follow_path(json_data, json_path):
     for field in json_path.split("."):
         value = value[field]
     return value
+
+
+def _translate_pif(pif):
+    """Translate the dict form of a PIF into an MDF record."""
+    translations = {
+        "dft": {
+            "Converged": "converged",
+            "XC_Functional": "exchange_correlation_functional",
+            "Cutoff_Energy_eV": "cutoff_energy"
+        }
+    }
+    record = {}
+    for block, mapping in translations.items():
+        new_block = {}
+        for pif_field, mdf_field in mapping.items():
+            if pif_field in pif.keys():
+                new_block[mdf_field] = pif[pif_field]
+        if new_block:
+            record[block] = new_block
+    return record
