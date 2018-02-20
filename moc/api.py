@@ -1056,14 +1056,14 @@ def update_status(source_name, step, code, text=None, link=None):
     if code == 'M':
         status["messages"].append(text or "No message available")
     elif code == 'L':
-        status["messages"].append((text or "No message available", link or "No link available"))
+        status["messages"].append([text or "No message available", link or "No link available"])
     elif code == 'F':
         status["errors"].append(text or "An error occurred and we're trying to fix it")
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'H':
-        status["errors"].append((text or "An error occurred and we're trying to fix it",
-                                 link or "Help may be available soon."))
+        status["errors"].append([text or "An error occurred and we're trying to fix it",
+                                 link or "Help may be available soon."])
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
