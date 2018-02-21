@@ -256,6 +256,7 @@ def parse_json(group, params=None):
     """
     try:
         mapping = params["parsers"]["json"]["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -263,7 +264,7 @@ def parse_json(group, params=None):
     for file_path in group:
         with open(file_path) as f:
             file_json = json.load(f)
-        records.extend(_parse_json(file_json, mapping))
+        records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
 
@@ -286,13 +287,14 @@ def parse_csv(group, params=None):
     try:
         csv_params = params["parsers"]["csv"]
         mapping = csv_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
     records = []
     for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
-        records.extend(_parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
 
@@ -312,6 +314,7 @@ def parse_yaml(group, params=None):
     """
     try:
         mapping = params["parsers"]["yaml"]["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -319,7 +322,7 @@ def parse_yaml(group, params=None):
     for file_path in group:
         with open(file_path) as f:
             file_json = yaml.safe_load(f)
-        records.extend(_parse_json(file_json, mapping))
+        records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
 
@@ -341,13 +344,14 @@ def parse_excel(group, params=None):
     try:
         excel_params = params["parsers"]["excel"]
         mapping = excel_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
     records = []
     for file_path in group:
         df = pd.read_excel(file_path, na_values=NA_VALUES)
-        records.extend(_parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
 
@@ -436,7 +440,7 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping):
+def _parse_pandas(df, mapping, source_name=None):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
@@ -450,7 +454,7 @@ def _parse_pandas(df, mapping):
     return records
 
 
-def _parse_json(file_json, mapping):
+def _parse_json(file_json, mapping, source_name=None):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
@@ -462,6 +466,9 @@ def _parse_json(file_json, mapping):
         # Get (path, value) pairs from the key structure
         # Loop over each
         for mdf_path, json_path in _flatten_struct(mapping):
+            if source_name:
+                mdf_path = mdf_path.replace("__custom", source_name)
+                json_path = json_path.replace("__custom", source_name)
             try:
                 value = _follow_path(data, json_path)
             except KeyError:
