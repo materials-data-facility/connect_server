@@ -119,15 +119,16 @@ class Validator:
         # resource_type
         ds_md["mdf"]["resource_type"] = "dataset"
 
+        # TODO: Remove?
         # source_name
-        if not ds_md["mdf"].get("source_name"):
-            try:
-                ds_md["mdf"]["source_name"] = self.__make_source_name(
-                                                ds_md["dc"]["titles"][0]["title"])
-            except (KeyError, ValueError, IndexError):
-                # DC title is required, ds_md will fail validation
-                # Doesn't really matter what this is
-                ds_md["mdf"]["source_name"] = "unknown"
+        # if not ds_md["mdf"].get("source_name"):
+        #    try:
+        #        ds_md["mdf"]["source_name"] = self.__make_source_name(
+        #                                        ds_md["dc"]["titles"][0]["title"])
+        #    except (KeyError, ValueError, IndexError):
+        #        # DC title is required, ds_md will fail validation
+        #        # Doesn't really matter what this is
+        #        ds_md["mdf"]["source_name"] = "unknown"
 
         # acl
         if not ds_md["mdf"].get("acl"):
