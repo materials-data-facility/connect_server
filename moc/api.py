@@ -128,8 +128,17 @@ def accept_convert():
             "success": False,
             "error": "No title supplied"
             }), 400)
-    source_name = metadata.get("mdf", {}).get("source_name",
-                                              make_source_name(sub_title))
+    source_name = metadata.get("mdf", {}).get("source_name")
+    if not source_name:
+        source_name = make_source_name(sub_title)
+        try:
+            metadata["mdf"]["source_name"] = source_name
+        except Exception:
+            return (jsonify({
+                "success": False,
+                "error": "Invalid metadata: No mdf block"
+                }), 400)
+
     status_info = {
         "source_name": source_name,
         "submission_code": "C",
@@ -728,7 +737,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
                 if cit_res["failure_count"]:
                     text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
                 else:
-                    text = "No PIFs were generated"
+                    text = "No PIFs were uploaded"
                 stat_res = update_status(source_name, "ingest_citrine", "R", text=text)
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
