@@ -1,7 +1,9 @@
 from datetime import datetime, date
+import gzip
 import json
 import os
 import re
+import tarfile
 import tempfile
 from threading import Thread
 import zipfile
@@ -102,7 +104,8 @@ def accept_convert():
                         metadata.get("mdf", {}).get("source_name")
                         or sub_title)
     source_name = source_name_info["source_name"]
-    if not any([uid in source_name_info["user_id_list"] for uid in identities]):
+    if (len(source_name_info["user_id_list"]) > 0
+            and not any([uid in source_name_info["user_id_list"] for uid in identities])):
         return (jsonify({
             "success": False,
             "error": ("Your source_name or title has been submitted previously "
@@ -402,7 +405,7 @@ def make_source_name(title):
         # If name already exists, increment version and try again
         if status_res["success"]:
             version += 1
-            user_ids.add(status_res["status"]["sub"])
+            user_ids.add(status_res["status"]["user_id"])
         # Otherwise, correct name found
         else:
             source_name = new_source_name
@@ -865,7 +868,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
     except (KeyError, IndexError, TypeError):
         version = 1
 
-    if version =! 1:
+    if version != 1:
         raise ValueError("Citrine versioning not supported at this time")
 
     cit_ds_id = cit_client.create_data_set(name=cit_title,
