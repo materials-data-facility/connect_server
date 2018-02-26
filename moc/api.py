@@ -1,6 +1,7 @@
 from datetime import datetime, date
 import json
 import os
+import re
 import tempfile
 from threading import Thread
 import zipfile
@@ -82,6 +83,7 @@ def accept_convert():
     # username = auth_res["username"]
     name = auth_res["name"]
     email = auth_res["email"]
+    identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
     if not metadata:
@@ -96,16 +98,24 @@ def accept_convert():
             "success": False,
             "error": "No title supplied"
             }), 400)
-    source_name = metadata.get("mdf", {}).get("source_name")
-    if not source_name:
-        source_name = make_source_name(sub_title)
-        try:
-            metadata["mdf"]["source_name"] = source_name
-        except Exception:
-            return (jsonify({
-                "success": False,
-                "error": "Invalid metadata: No mdf block"
-                }), 400)
+    source_name_info = make_source_name(
+                        metadata.get("mdf", {}).get("source_name")
+                        or sub_title)
+    source_name = source_name_info["source_name"]
+    if not any([uid in source_name_info["user_id_list"] for uid in identities]):
+        return (jsonify({
+            "success": False,
+            "error": ("Your source_name or title has been submitted previously "
+                      "by another user.")
+            }), 400)
+    try:
+        metadata["mdf"]["source_name"] = source_name
+        metadata["mdf"]["version"] = source_name_info["version"]
+    except Exception:
+        return (jsonify({
+            "success": False,
+            "error": "Invalid metadata: No mdf block"
+            }), 400)
 
     status_info = {
         "source_name": source_name,
@@ -343,7 +353,8 @@ def authenticate_token(token, whitelist):
         "user_id": auth_res["sub"],
         "username": auth_res["username"],
         "name": auth_res["name"] or "Not given",
-        "email": auth_res["email"] or "Not given"
+        "email": auth_res["email"] or "Not given",
+        "identities_set": auth_res["identities_set"]
     }
 
 
@@ -363,6 +374,8 @@ def make_source_name(title):
         # Replace words that are by themselves
         # e.g. do not replace "and" in "random", do replace in "materials and design"
         title = title.replace(" "+dw+" ", " ")
+        # Same for underscore separation
+        title = title.replace("_"+dw+"_", "_")
     # Clear double spacing
     while title.find("  ") != -1:
         title = title.replace("  ", " ")
@@ -378,7 +391,10 @@ def make_source_name(title):
         source_name = title
 
     # Determine version number to add
+    # Remove any existing version number
+    source_name = re.sub("_v[0-9]+$", "", source_name)
     version = 1
+    user_ids = set()
     while True:
         # Try new source name
         new_source_name = source_name + "_v{}".format(version)
@@ -386,12 +402,17 @@ def make_source_name(title):
         # If name already exists, increment version and try again
         if status_res["success"]:
             version += 1
+            user_ids.add(status_res["status"]["sub"])
         # Otherwise, correct name found
         else:
             source_name = new_source_name
             break
 
-    return source_name
+    return {
+        "source_name": source_name,
+        "version": version,
+        "user_id_list": user_ids
+    }
 
 
 def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
@@ -500,13 +521,15 @@ def accept_ingest():
 
     # Mint or update status ID
     if source_name:
+        # TODO: Verify source_name ownership
         stat_res = update_status(source_name, "ingest_start", "P")
         if not stat_res["success"]:
             return (jsonify(stat_res), 400)
     else:
         # TODO: Fetch real source_name/title instead of minting ObjectId
         title = "ingested_{}".format(str(ObjectId()))
-        source_name = make_source_name(title)
+        source_name_info = make_source_name(title)
+        source_name = source_name_info["source_name"]
         status_info = {
             "source_name": source_name,
             "submission_code": "I",
@@ -798,15 +821,22 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
     cit_client = CitrinationClient(api_key)
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         cit_title = "Untitled"
     try:
         cit_desc = " ".join([desc["description"]
                              for desc in mdf_dataset["dc"]["descriptions"]])
         if not cit_desc:
             raise KeyError
-    except (KeyError, IndexError):
+    except (KeyError, IndexError, TypeError):
         cit_desc = None
+    try:
+        version = mdf_dataset["mdf"]["version"]
+    except (KeyError, IndexError, TypeError):
+        version = 1
+
+    if version =! 1:
+        raise ValueError("Citrine versioning not supported at this time")
 
     cit_ds_id = cit_client.create_data_set(name=cit_title,
                                            description=cit_desc,
@@ -851,7 +881,7 @@ def get_status(source_name):
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
 
-    uid_set = auth_res["token_info"]["identities_set"]
+    uid_set = auth_res["identities_set"]
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the user that submitted the dataset and admins can view
@@ -881,7 +911,7 @@ def get_raw_status(source_name):
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
 
-    uid_set = auth_res["token_info"]["identities_set"]
+    uid_set = auth_res["identities_set"]
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the user that submitted the dataset and admins can view
