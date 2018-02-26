@@ -452,16 +452,46 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
                                        [(user_path, local_path)], timeout=0)
 
         elif protocol == "http" or protocol == "https":
-            # Determine file type
-            if location.endswith(".zip"):
-                # Download and unzip
-                zip_path = os.path.join(local_path, "archive.zip")
-                res = requests.get(location)
-                with open(zip_path, 'wb') as out:
-                    out.write(res.content)
-                zipfile.ZipFile(zip_path).extractall(local_path)
-                os.remove(zip_path)
+            # Get extension (mostly for debugging)
+            try:
+                filename = data_info.rsplit("/", 1)[1]
+                ext = "." + filename.rsplit(".", 1)[1]
+                filename = filename.replace(ext, "")
+            except Exception:
+                ext = ".archive"
+            archive_path = os.path.join(local_path, "archive."+ext)
 
+            # Fetch file
+            res = requests.get(location)
+            with open(archive_path, 'wb') as out:
+                out.write(res.content)
+
+            # Extract if possible
+            # tar
+            if tarfile.is_tarfile(archive_path):
+                tar = tarfile.open(archive_path)
+                tar.extractall(local_path)
+                tar.close()
+                os.remove(archive_path)
+            # zip
+            elif zipfile.is_zipfile(archive_path):
+                z = zipfile.ZipFile(archive_path)
+                z.extractall(local_path)
+                z.close()
+                os.remove(archive_path)
+            # gzip
+            else:
+                try:
+                    with gzip.open(archive_path) as gz:
+                        archive_data = gz.read()
+                        with open(os.path.join(local_path, filename), 'w') as output:
+                            output.write(str(archive_data))
+                    os.remove(archive_path)
+                # An IOErrorwill occur at gz.read() if the file is not a gzip
+                except IOError:
+                    pass
+            # If the file was not extracted, it will not have been removed
+            # Therefore, it will be processed if possible
         else:
             # Nothing to do
             raise IOError("Invalid data location: " + str(location))
