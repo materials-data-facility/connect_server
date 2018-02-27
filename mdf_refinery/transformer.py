@@ -8,6 +8,7 @@ os.environ["MPLBACKEND"] = "agg"
 
 import ase.io
 from bson import ObjectId
+import hyperspy.api as hs
 import magic
 from mdf_toolbox import toolbox
 import pandas as pd
@@ -21,7 +22,6 @@ from pypif_sdk.util import citrination as cit_utils
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
 from pypif_sdk.interop.datacite import add_datacite as add_dc
 import yaml
-import hyperspy.api as hs
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
@@ -377,48 +377,45 @@ def parse_image(group, params=None):
     return records
 
 
-## Electron microscopy parsing
 def parse_electron_microscopy(group, params=None):
     """Parse an electron microscopy image with hyperspy library."""
     records = []
     for file_path in group:
         try:
-            s = hs.load(file_path)
-            records.append(convert_hyperspy(s.metadata.as_dictionary()))
-        except Exception:
-             pass
+            data = hs.load(file_path).metadata.as_dictionary()
+        except Exception as e:
+            pass
+        else:
+            em = {}
+            # Image mode is SEM, TEM, or STEM.
+            # STEM is a subset of TEM.
+            if "SEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "SEM"
+            if "TEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "TEM"
+            em['beam_current'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                      .get('beam_current'))
+            em['beam_energy'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                     .get('beam_energy'))
+            em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                       .get('magnification'))
+            em['microscope'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('microscope'))
+            em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('acquisition_mode'))
+            detector = (data.get('Acquisition_instrument', {}).get(inst, {})
+                            .get('Detector'))
+            if detector:
+                em['detector'] = next(iter(detector))
+
+            # Remove None values
+            for key, val in list(em.items()):
+                if not val:
+                    em.pop(key)
+            records.append({
+                "electron_microscopy": em
+            })
     return records
-
-def convert_hyperspy(data):
-    # metadata template for data to be extracted from hyperspy 
-    md = {
-        "image_mode":"",
-        "beam_current":0.0,
-        "beam_energy":0.0,
-        "detector":"",
-        "magnification":0,
-        "microscope":""
-    }
-
-    # Currently hyperspy supports 2 instrument types, SEM and TEM
-    acquisition_instruments = ["SEM","TEM"]
-
-    # Image mode is SEM, TEM, or STEM.
-    md['image_mode'] = list(data.get('Acquisition_instrument'))[0]
-    
-    for inst in acquisition_instruments:
-        md['beam_current'] = data.get('Acquisition_instrument',{}).get(inst,{}).get('beam_current')
-        md['beam_energy'] = data.get('Acquisition_instrument',{}).get(inst,{}).get('beam_energy')
-        md['magnification'] = data.get('Acquisition_instrument',{}).get(inst,{}).get('magnification')
-        md['microscope'] = data.get('Acquisition_instrument',{}).get(inst,{}).get('microscope')
-        md['image_mode'] = data.get('Acquisition_instrument',{}).get(inst,{}).get('acquisition_mode')
-        
-        detector = data.get('Acquisition_instrument',{}).get(inst,{}).get('Detector')
-        if detector:  
-            md['detector'] = next(iter(detector))
-    
-    return {"electron_microscopy":md}
-    
 
 
 # List of all non-internal parsers
