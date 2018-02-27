@@ -3,6 +3,9 @@ import json
 import os
 from queue import Empty
 
+# pycalphad and hyperspy imports require this env var set
+os.environ["MPLBACKEND"] = "agg"
+
 import ase.io
 from bson import ObjectId
 import magic
