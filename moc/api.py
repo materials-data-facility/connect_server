@@ -66,6 +66,11 @@ STATUS_STEPS = (
 INGEST_MARK = 4
 
 
+@app.route('/', methods=["GET"])
+def root_call():
+    return ("Service is up", 200)
+
+
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
@@ -235,7 +240,7 @@ def moc_driver(metadata, source_name):
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
     try:
-        feedstock = convert(local_path, convert_params)
+        feedstock, num_groups = convert(local_path, convert_params)
     except Exception as e:
         stat_res = update_status(source_name, "converting", "F", text=repr(e))
         if not stat_res["success"]:
@@ -244,7 +249,9 @@ def moc_driver(metadata, source_name):
             return
     else:
         stat_res = update_status(source_name, "converting", "M",
-                                 text="{} entries parsed".format(len(feedstock)))
+                                 text="{} records parsed out of {} groups"
+                                      # feedstock includes dataset entry
+                                      .format(len(feedstock)-1, num_groups))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         if DEBUG_LEVEL >= 2:
