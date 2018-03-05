@@ -8,6 +8,7 @@ os.environ["MPLBACKEND"] = "agg"
 
 import ase.io
 from bson import ObjectId
+import hyperspy.api as hs
 import magic
 from mdf_toolbox import toolbox
 import pandas as pd
@@ -21,7 +22,6 @@ from pypif_sdk.util import citrination as cit_utils
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
 from pypif_sdk.interop.datacite import add_datacite as add_dc
 import yaml
-
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
@@ -378,6 +378,50 @@ def parse_image(group, params=None):
     return records
 
 
+def parse_electron_microscopy(group, params=None):
+    """Parse an electron microscopy image with hyperspy library."""
+    records = []
+    for file_path in group:
+        try:
+            data = hs.load(file_path).metadata.as_dictionary()
+        except Exception:
+            pass
+        else:
+            em = {}
+            # Image mode is SEM, TEM, or STEM.
+            # STEM is a subset of TEM.
+            if "SEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "SEM"
+            elif "TEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "TEM"
+            else:
+                inst = "None"
+            em['beam_current'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                      .get('beam_current', None))
+            em['beam_energy'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                     .get('beam_energy', None))
+            em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                       .get('magnification', None))
+            em['microscope'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('microscope', None))
+            em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('acquisition_mode', None))
+            detector = (data.get('Acquisition_instrument', {}).get(inst, {})
+                            .get('Detector', None))
+            if detector:
+                em['detector'] = next(iter(detector))
+
+            # Remove None values
+            for key, val in list(em.items()):
+                if val is None:
+                    em.pop(key)
+            if em:
+                records.append({
+                    "electron_microscopy": em
+                })
+    return records
+
+
 # List of all non-internal parsers
 ALL_PARSERS = [
     parse_crystal_structure,
@@ -386,7 +430,8 @@ ALL_PARSERS = [
     parse_csv,
     parse_yaml,
     parse_excel,
-    parse_image
+    parse_image,
+    parse_electron_microscopy
 ]
 
 

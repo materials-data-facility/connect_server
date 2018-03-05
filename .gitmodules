@@ -1,0 +1,3 @@
+[submodule "mdf_refinery/schemas"]
+	path = mdf_refinery/schemas
+	url = https://github.com/materials-data-facility/data-schemas.git
