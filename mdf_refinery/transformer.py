@@ -383,11 +383,9 @@ def parse_electron_microscopy(group, params=None):
     for file_path in group:
         try:
             data = hs.load(file_path).metadata.as_dictionary()
-        except Exception as e:
-            print(repr(e))
+        except Exception:
             pass
         else:
-            print(data)
             em = {}
             # Image mode is SEM, TEM, or STEM.
             # STEM is a subset of TEM.
