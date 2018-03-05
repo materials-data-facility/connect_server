@@ -6,7 +6,7 @@ from queue import Empty
 
 from mdf_refinery import transform
 
-NUM_TRANSFORMERS = 5
+NUM_TRANSFORMERS = 1
 
 
 def convert(root_path, convert_params):
@@ -36,17 +36,16 @@ def convert(root_path, convert_params):
     print("DEBUG: Transformers started")
 
     # Populate input queue
-    [input_queue.put(group) for group in group_tree(root_path)]
+    num_groups = 0
+    for group in group_tree(root_path):
+        input_queue.put(group)
+        num_groups += 1
     # Mark that input is finished
     input_complete.value = True
     print("DEBUG: Input complete")
 
     # TODO: Process dataset entry
     full_dataset = convert_params["dataset"]
-
-    # Wait for transformers
-    [t.join() for t in transformers]
-    print("DEBUG: Transformers joined")
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -55,9 +54,13 @@ def convert(root_path, convert_params):
             record = output_queue.get(timeout=1)
             feedstock.append(json.loads(record))
         except Empty:
-            break
+            if any([t.is_alive() for t in transformers]):
+                [t.join(timeout=1) for t in transformers]
+            else:
+                print("DEBUG: Transformers joined")
+                break
 
-    return feedstock
+    return (feedstock, num_groups)
 
 
 def group_tree(root):
