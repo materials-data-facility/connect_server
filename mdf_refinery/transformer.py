@@ -118,7 +118,6 @@ def transform(input_queue, output_queue, queue_done, parse_params):
     except Exception as e:
         print("DEBUG: Transformer error:", repr(e))
 
-    print("DEBUG: Transformer returning")
     return
 
 
