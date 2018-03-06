@@ -81,10 +81,10 @@ class Validator:
         self.__finished = False
 
         # Load schema
-        with open(os.path.join(self.__schema_dir, "dataset_schema.json")) as schema_file:
+        with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
             schema = json.load(schema_file)
         # Load MDF block
-        with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
+        with open(os.path.join(self.__schema_dir, "mdf.json")) as mdf_file:
             schema["properties"]["mdf"] = json.load(mdf_file)
 
 #        if not ds_md.get("dc") or not isinstance(ds_md["dc"], dict):
@@ -212,10 +212,10 @@ class Validator:
                 }
 
         # Load schema
-        with open(os.path.join(self.__schema_dir, "record_schema.json")) as schema_file:
+        with open(os.path.join(self.__schema_dir, "record.json")) as schema_file:
             schema = json.load(schema_file)
         # Load MDF block
-        with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
+        with open(os.path.join(self.__schema_dir, "mdf.json")) as mdf_file:
             schema["properties"]["mdf"] = json.load(mdf_file)
 
         # Add any missing blocks
