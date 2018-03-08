@@ -205,7 +205,6 @@ def parse_tdb(group, params=None):
 def parse_pif(group, params=None):
     """Use Citrine's parsers."""
     if not params:
-        print("DEBUG: PIF no params")
         return {}
 
     # Setup
