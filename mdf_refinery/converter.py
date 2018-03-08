@@ -8,6 +8,24 @@ from mdf_refinery import transform
 
 NUM_TRANSFORMERS = 1
 
+GROUPING_RULES = {
+    "vasp": [
+        "outcar",
+        "incar",
+        "chgcar",
+        "wavecar",
+        "wavcar",
+        "ozicar",
+        "ibzcar",
+        "kpoints",
+        "doscar",
+        "poscar",
+        "contcar",
+        "vasp_run.xml",
+        "xdatcar"
+    ]
+}
+
 
 def convert(root_path, convert_params):
     """Convert files under the root path into feedstock.
@@ -67,35 +85,31 @@ def group_tree(root):
     """Group files based on format-specific rules."""
     for path, dirs, files in os.walk(os.path.abspath(root)):
         groups = []
-        # TODO: Expand list of triggers
-        # VASP
-        # TODO: Use regex instead of exact matching
-        if "OUTCAR" in files:
-            outcar_files = [
-                "OUTCAR",
-                "INCAR",
-                "POSCAR",
-                "WAVCAR",
-                "CHGCAR",
-                "CONTCAR",
-                "vasprun.xml",
-                "XDATCAR"
-            ]
-            new_group = []
-            for group_file in outcar_files:
-                # Remove file from list and add to group if present
-                # If not present, noop
-                try:
-                    files.remove(group_file)
-                except ValueError:
-                    pass
-                else:
-                    new_group.append(group_file)
-            if new_group:  # Should always be present
-                groups.append(new_group)
+        # TODO: Expand grouping formats
+        # File-matching groups
+        # Each format specified in the rules
+        for format_type, format_name_list in GROUPING_RULES.items():
+            format_groups = {}
+            # Check each file for rule matching
+            # Match to appropriate group (with same pre/post pattern)
+            #   eg a_[match]_b groups with a_[other match]_b but not c_[other match]_d
+            for f in files:
+                fname = f.lower().strip()
+                for format_name in format_name_list:
+                    if format_name in fname:
+                        pre_post_pattern = fname.replace(format_name, "")
+                        if not format_groups.get(pre_post_pattern):
+                            format_groups[pre_post_pattern] = []
+                        format_groups[pre_post_pattern].append(f)
+                        break
+            # Remove grouped files from the file list and add groups to the group list
+            for g in format_groups.values():
+                for f in g:
+                    files.remove(f)
+                groups.append(g)
 
         # NOTE: Keep this grouping last!
-        # Each file group
+        # Default grouping: Each file is a group
         groups.extend([[f] for f in files])
 
         # Add path to filenames and yield each group
