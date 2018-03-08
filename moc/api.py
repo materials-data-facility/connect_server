@@ -13,6 +13,7 @@ from bson import ObjectId
 from citrination_client import CitrinationClient
 from flask import jsonify, request
 import globus_sdk
+import jsonschema
 from mdf_toolbox import toolbox
 import requests
 from werkzeug.utils import secure_filename
@@ -98,13 +99,9 @@ def accept_convert():
             "success": False,
             "error": "POST data empty or not JSON"
             }), 400)
-    try:
-        sub_title = metadata["dc"]["titles"][0]["title"]
-    except (KeyError, ValueError):
-        return (jsonify({
-            "success": False,
-            "error": "No title supplied"
-            }), 400)
+    #TODO: Jsonschema validation
+
+    sub_title = metadata["dc"]["titles"][0]["title"]
     source_name_info = make_source_name(
                         metadata.get("mdf", {}).get("source_name")
                         or sub_title)
@@ -116,14 +113,10 @@ def accept_convert():
             "error": ("Your source_name or title has been submitted previously "
                       "by another user.")
             }), 400)
-    try:
-        metadata["mdf"]["source_name"] = source_name
-        metadata["mdf"]["version"] = source_name_info["version"]
-    except Exception:
-        return (jsonify({
-            "success": False,
-            "error": "Invalid metadata: No mdf block"
-            }), 400)
+    if not metadata.get("mdf"):
+        metadata["mdf"] = {}
+    metadata["mdf"]["source_name"] = source_name
+    metadata["mdf"]["version"] = source_name_info["version"]
 
     status_info = {
         "source_name": source_name,
@@ -135,7 +128,6 @@ def accept_convert():
         "user_email": email
         }
     try:
-        # TODO: Better metadata validation
         status_res = create_status(status_info)
     except Exception as e:
         return (jsonify({
