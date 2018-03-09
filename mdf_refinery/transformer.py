@@ -367,7 +367,6 @@ def parse_image(group, params=None):
                 "image": {
                     "width": im.width,
                     "height": im.height,
-                    "pixels": im.width * im.height,
                     "format": im.format
                 }
             })
