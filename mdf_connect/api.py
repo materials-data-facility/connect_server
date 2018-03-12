@@ -18,8 +18,7 @@ from mdf_toolbox import toolbox
 import requests
 from werkzeug.utils import secure_filename
 
-from mdf_refinery import convert, search_ingest
-from moc import app
+from mdf_connect import app, convert, search_ingest
 
 # Frequency of status messages printed to console
 # Level 0: No messages
