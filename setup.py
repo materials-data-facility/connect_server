@@ -2,10 +2,10 @@ from setuptools import setup, find_packages
 
 
 setup(
-    name='mdf_refinery',
-    version='0.2.0',
+    name='mdf_connect',
+    version='0.3.0',
     packages=find_packages(),
-    description='Materials Data Facility python package',
+    description='Materials Data Facility Connect infrastructure',
     install_requires=[
         "ase>=3.15.0",
         "boto3>=1.5.22",
@@ -24,6 +24,5 @@ setup(
         "pypif-sdk",
         "python-magic>=0.4.13",
         "requests>=2.18.4"
-    ],
-    package_data={'mdf_refinery': ['schemas/*.schema']}
+    ]
 )

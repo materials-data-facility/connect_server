@@ -1,5 +1,5 @@
-# Refinery
-Refinery is the ETL flow to deeply index datasets into MDF Search
+# MDF Connect
+The Materials Data Facility Connect service is the ETL flow to deeply index datasets into MDF Search
 
 
 # Support
