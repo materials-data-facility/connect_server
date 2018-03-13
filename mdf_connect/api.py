@@ -75,8 +75,7 @@ def root_call():
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"),
-                                      app.config["CONVERT_WHITELIST"])
+        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -98,7 +97,21 @@ def accept_convert():
             "success": False,
             "error": "POST data empty or not JSON"
             }), 400)
-    #TODO: Jsonschema validation
+
+    # Validate input JSON
+    with open(os.path.join(os.path.dirname(__file__),
+                           "schemas", "moc_convert.json")) as schema_file:
+        schema = json.load(schema_file)
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir), 
+                                      referrer=schema)
+    try:
+        jsonschema.validate(metadata, schema, resolver=resolver)
+    except jsonschema.ValidationError as e:
+        return (jsonify({
+            "success": False,
+            "error": "Invalid submission: " + str(e).split("\n")[0],
+            "details": str(e)
+            }), 400)
 
     sub_title = metadata["dc"]["titles"][0]["title"]
     source_name_info = make_source_name(
@@ -297,7 +310,7 @@ def moc_driver(metadata, source_name):
         }
 
 
-def authenticate_token(token, whitelist):
+def authenticate_token(token, auth_level):
     """Auth a token"""
     if not token:
         return {
@@ -340,6 +353,17 @@ def authenticate_token(token, whitelist):
         }
     # Finally, verify that user ID is in whitelist
     # Can be any identity the user has (MOC is identity-aware)
+    whitelist = []
+    if auth_level == "admin" or auth_level == "ingest" or auth_level == "convert":
+        with open(app.config("ADMIN_WHITELIST") as f:
+            whitelist.extend(json.load(f).values())
+    if auth_level == "ingest" or auth_level == "convert":
+        with open(app.config("INGEST_WHITELIST") as f:
+            whitelist.extend(json.load(f).values())
+    if auth_level == "convert":
+        with open(app.config("CONVERT_WHITELIST") as f:
+            whitelist.extend(json.load(f).values())
+
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
         # TODO: Proper logging
         print("DEBUG: User not in whitelist:", auth_res["username"])
@@ -506,8 +530,7 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"),
-                                      app.config["INGEST_WHITELIST"])
+        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="ingest")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -901,8 +924,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
 def get_status(source_name):
     """Fetch and return status information"""
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"),
-                                      app.config["CONVERT_WHITELIST"])
+        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -916,8 +938,10 @@ def get_status(source_name):
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the user that submitted the dataset and admins can view
+    with open(app.config["ADMIN_WHITELIST"]) as f:
+        admin_whitelist = list(json.load(f).values())
     if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
-                                         or any([uid in app.config["ADMIN_WHITELIST"]
+                                         or any([uid in admin_whitelist
                                                  for uid in uid_set])):
         return (jsonify({
             "success": False,
@@ -931,8 +955,7 @@ def get_status(source_name):
 def get_raw_status(source_name):
     """Fetch and return user-inappropriate status info"""
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"),
-                                      app.config["CONVERT_WHITELIST"])
+        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -946,8 +969,10 @@ def get_raw_status(source_name):
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the user that submitted the dataset and admins can view
+    with open(app.config["ADMIN_WHITELIST"]) as f:
+        admin_whitelist = list(json.load(f).values())
     if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
-                                         or any([uid in app.config["ADMIN_WHITELIST"]
+                                         or any([uid in admin_whitelist
                                                  for uid in uid_set])):
         return (jsonify({
             "success": False,
