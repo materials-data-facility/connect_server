@@ -3,6 +3,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 from threading import Thread
@@ -477,10 +478,10 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     raise ValueError(("Globus link must be in the form "
                                       "'[endpoint_id]/path/to/data_directory/"))
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
+
                 # Transfer locally
                 mdf_toolbox.quick_transfer(mdf_transfer_client, user_ep, local_ep,
                                            [(user_path, local_path)], timeout=0)
-
         elif protocol == "http" or protocol == "https":
             # Get extension (mostly for debugging)
             try:
@@ -682,7 +683,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             return
         else:
             # If all locations are Globus, don't need to download locally
-            if all([loc.startswith("globus://") for loc in data_loc):
+            if all([loc.startswith("globus://") for loc in data_loc]):
                 local_path = None
                 stat_res = update_status(source_name, "ingest_download", "N")
                 if not stat_res["success"]:
@@ -791,6 +792,21 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         if services:
             with open(final_feed_path) as f:
                 dataset = json.loads(f.readline())
+        # Back up feedstock
+        backup_feed_path = os.path.join(app.config["BACKUP_FEEDSTOCK"],
+                                        source_name + "_final.json")
+        try:
+            mdf_toolbox.quick_transfer(transfer_client,
+                                       app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                                       [(final_feed_path, backup_feed_path)],
+                                       timeout=0)
+        except Exception as e:
+            stat_res = update_status(source_name, "ingest_search", "R",
+                                     text="Feedstock backup failed: {}".format(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+        else:
+            os.remove(final_feed_path)
 
     # Globus Publish
     if "globus_publish" in services:
@@ -850,6 +866,18 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         stat_res = update_status(source_name, "ingest_citrine", "N")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
+
+    # Cleanup
+    cleanups = [
+        os.path.join(app.config["LOCAL_PATH"], source_name) + "/",
+        os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
+    ]
+    for cleanup_path in cleanups:
+        if os.path.exists(cleanup_path):
+            try:
+                shutil.rmtree(cleanup_path)
+            except Exception as e:
+                print("Error: Could not remove data:", str(e))
 
     if DEBUG_LEVEL >= 2:
         print("{}: Ingest complete".format(source_name))
