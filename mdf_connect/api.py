@@ -467,6 +467,19 @@ def download_and_backup(mdf_transfer_client, data_loc,
             protocol, data_info = location.split("://", 1)
         except ValueError:
             raise ValueError("Data location must be in the form [protocol]://[data_location]")
+        if ((protocol == "http" or protocol == "https")
+                and data_loc.startswith("www.globus.org/app/transfer")):
+            raise NotImplementedError("Feature in progress")
+            ep_start = data_loc.find("origin_id=")
+            if ep_start < 0:
+                ep_start = data_loc.find("destination_id")
+                if ep_start < 0:
+                    raise ValueError("Invalid Globus Transfer UI link")
+            ep_start += len("origin_id=")
+            ep_end = data_loc.find("&")
+            if ep_end < 0:
+                ep_end = len(data_loc) - 1
+
         if protocol == "globus":
             # Check that data not already in place
             if data_info != local_ep + local_path:
@@ -684,8 +697,9 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         else:
             # If all locations are Globus, don't need to download locally
             if all([loc.startswith("globus://") for loc in data_loc]):
-                local_path = None
                 stat_res = update_status(source_name, "ingest_download", "N")
+                data_ep = None
+                data_path = None
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
             else:
@@ -693,12 +707,13 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
                 # Will not transfer anything if already in place
-                local_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
+                data_ep = app.config["LOCAL_EP"]
+                data_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
                 try:
                     dl_res = download_and_backup(transfer_client,
                                                  data_loc,
-                                                 app.config["LOCAL_EP"],
-                                                 local_path)
+                                                 data_ep,
+                                                 data_path)
                 except Exception as e:
                     stat_res = update_status(source_name, "ingest_download", "F", text=repr(e))
                     if not stat_res["success"]:
@@ -815,7 +830,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             raise ValueError(str(stat_res))
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
-                                          dataset, local_path)
+                                          dataset, data_ep, data_path, data_loc)
         except Exception as e:
             stat_res = update_status(source_name, "ingest_publish", "R", text=repr(e))
             if not stat_res["success"]:
@@ -887,7 +902,14 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         }
 
 
-def globus_publish_data(publish_client, transfer_client, metadata, local_path):
+def globus_publish_data(publish_client, transfer_client, metadata,
+                        data_ep=None, data_path=None, data_loc=None):
+    if not data_loc:
+        if not data_ep or not data_path:
+            raise ValueError("Ivalid call to globus_publish_data()")
+        data_loc = []
+    if data_ep and data_path:
+        data_loc.append("globus://{}{}".format(data_ep, data_path))
     # Submit metadata
     pub_md = get_publish_metadata(metadata)
     md_result = publish_client.push_metadata(pub_md.pop("collection_id"), pub_md)
@@ -895,8 +917,12 @@ def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
     submission_id = md_result["id"]
     # Transfer data
-    mdf_toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
-                               pub_endpoint, [(local_path, pub_path)], timeout=0)
+    for loc in data_loc:
+        loc = loc.replace("globus://", "")
+        ep, path = loc.split("/", 1)
+        path = "/" + path + ("/" if not path.endswith("/") else "")
+        mdf_toolbox.quick_transfer(transfer_client, ep, pub_endpoint,
+                                   [(path, pub_path)], timeout=0)
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
