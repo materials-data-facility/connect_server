@@ -99,10 +99,10 @@ def accept_convert():
             }), 400)
 
     # Validate input JSON
-    with open(os.path.join(os.path.dirname(__file__),
-                           "schemas", "moc_convert.json")) as schema_file:
+    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
+    with open(os.path.join(schema_dir, "moc_convert.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir), 
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir), 
                                       referrer=schema)
     try:
         jsonschema.validate(metadata, schema, resolver=resolver)
@@ -357,13 +357,13 @@ def authenticate_token(token, auth_level):
     # Can be any identity the user has (MOC is identity-aware)
     whitelist = []
     if auth_level == "admin" or auth_level == "ingest" or auth_level == "convert":
-        with open(app.config("ADMIN_WHITELIST") as f:
+        with open(app.config["ADMIN_WHITELIST"]) as f:
             whitelist.extend(json.load(f).values())
     if auth_level == "ingest" or auth_level == "convert":
-        with open(app.config("INGEST_WHITELIST") as f:
+        with open(app.config["INGEST_WHITELIST"]) as f:
             whitelist.extend(json.load(f).values())
     if auth_level == "convert":
-        with open(app.config("CONVERT_WHITELIST") as f:
+        with open(app.config["CONVERT_WHITELIST"]) as f:
             whitelist.extend(json.load(f).values())
 
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
