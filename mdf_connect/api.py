@@ -14,7 +14,7 @@ from citrination_client import CitrinationClient
 from flask import jsonify, request
 import globus_sdk
 import jsonschema
-from mdf_toolbox import toolbox
+import mdf_toolbox
 import requests
 from werkzeug.utils import secure_filename
 
@@ -176,7 +176,7 @@ def moc_driver(metadata, source_name):
         "services": ["transfer", "moc"]
         }
     try:
-        clients = toolbox.confidential_login(creds)
+        clients = mdf_toolbox.confidential_login(creds)
         transfer_client = clients["transfer"]
         moc_authorizer = clients["moc"]
     except Exception as e:
@@ -199,7 +199,9 @@ def moc_driver(metadata, source_name):
         dl_res = download_and_backup(transfer_client,
                                      metadata.pop("data", {}),
                                      app.config["LOCAL_EP"],
-                                     local_path)
+                                     local_path,
+                                     app.config["BACKUP_EP"],
+                                     backup_path)
     except Exception as e:
         stat_res = update_status(source_name, "convert_download", "F", text=repr(e))
         if not stat_res["success"]:
@@ -440,14 +442,17 @@ def make_source_name(title):
     }
 
 
-def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
+def download_and_backup(mdf_transfer_client, data_loc,
+                        local_ep, local_path, backup_ep=None, backup_path=None):
     """Download data from a remote host to the configured machine.
 
     Arguments:
     mdf_transfer_client (TransferClient): An authenticated TransferClient.
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
-    local_path (str): The path ot the local storage location.
+    local_path (str): The path to the local storage location.
+    backup_ep (str): The backup machine's endpoint ID. Default None for no backup.
+    backup_path (str): The path to the backup storage location Default None for no backup.
 
     Returns:
     dict: success (bool): True on success, False on failure.
@@ -473,8 +478,8 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
                                       "'[endpoint_id]/path/to/data_directory/"))
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
                 # Transfer locally
-                toolbox.quick_transfer(mdf_transfer_client, user_ep, app.config["LOCAL_EP"],
-                                       [(user_path, local_path)], timeout=0)
+                mdf_toolbox.quick_transfer(mdf_transfer_client, user_ep, local_ep,
+                                           [(user_path, local_path)], timeout=0)
 
         elif protocol == "http" or protocol == "https":
             # Get extension (mostly for debugging)
@@ -521,6 +526,10 @@ def download_and_backup(mdf_transfer_client, data_loc, local_ep, local_path):
             # Nothing to do
             raise IOError("Invalid data location: " + str(location))
 
+    # Back up data
+    if backup_ep and backup_path:
+        mdf_toolbox.quick_transfer(mdf_transfer_client, local_ep, backup_ep,
+                                   [(local_path, backup_path)], timeout=0)
     return {
         "success": True
         }
@@ -640,7 +649,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         "services": ["search_ingest", "publish", "transfer"]
         }
     try:
-        clients = toolbox.confidential_login(creds)
+        clients = mdf_toolbox.confidential_login(creds)
         search_client = clients["search_ingest"]
         publish_client = clients["publish"]
         transfer_client = clients["transfer"]
@@ -658,94 +667,106 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         raise ValueError(str(stat_res))
 
     # If the data should be local, make sure it is
-    if data_loc:
-        stat_res = update_status(source_name, "ingest_download", "P")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        # Will not transfer anything if already in place
-        local_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
-        try:
-            dl_res = download_and_backup(transfer_client,
-                                         data_loc,
-                                         app.config["LOCAL_EP"],
-                                         local_path)
-        except Exception as e:
-            stat_res = update_status(source_name, "ingest_download", "F", text=repr(e))
+    # Currently only Publish needs the data
+    if "globus_publish" in services:
+        if not data_loc:
+            stat_res = update_status(source_name, "ingest_download", "F",
+                                     text=("Globus Publish integration was selected, "
+                                           "but the data location was not provided."))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            else:
-                return
-        if not dl_res["success"]:
-            stat_res = update_status(source_name, "ingest_download", "F", text=str(dl_res))
+            stat_res = update_status(source_name, "ingest_publish", "F",
+                                     text="Unable to publish data without location.")
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            else:
-                return
+            return
         else:
-            stat_res = update_status(source_name, "ingest_download", "S")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            if DEBUG_LEVEL >= 2:
-                print("{}: Ingest data downloaded".format(source_name))
-    # If the data aren't local, but need to be, error
-    elif "globus_publish" in services:
-        stat_res = update_status(source_name, "ingest_download", "F",
-                                 text=("Globus Publish integration was selected, "
-                                       "but the data location was not provided."))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        stat_res = update_status(source_name, "ingest_publish", "F",
-                                 text="Unable to publish data without location.")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        return
+            # If all locations are Globus, don't need to download locally
+            if all([loc.startswith("globus://") for loc in data_loc):
+                local_path = None
+                stat_res = update_status(source_name, "ingest_download", "N")
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+            else:
+                stat_res = update_status(source_name, "ingest_download", "P")
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+                # Will not transfer anything if already in place
+                local_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
+                try:
+                    dl_res = download_and_backup(transfer_client,
+                                                 data_loc,
+                                                 app.config["LOCAL_EP"],
+                                                 local_path)
+                except Exception as e:
+                    stat_res = update_status(source_name, "ingest_download", "F", text=repr(e))
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+                    else:
+                        return
+                if not dl_res["success"]:
+                    stat_res = update_status(source_name, "ingest_download", "F", text=str(dl_res))
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+                    else:
+                        return
+                else:
+                    stat_res = update_status(source_name, "ingest_download", "S")
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+                    if DEBUG_LEVEL >= 2:
+                        print("{}: Ingest data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_download", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Same for integrated service data
-    if service_loc:
-        stat_res = update_status(source_name, "ingest_integration", "P")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        # Will not transfer anything if already in place
-        service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
-        try:
-            dl_res = download_and_backup(transfer_client,
-                                         service_loc,
-                                         app.config["LOCAL_EP"],
-                                         service_data)
-        except Exception as e:
-            stat_res = update_status(source_name, "ingest_integration", "F", text=repr(e))
+    if "citrine" in services:
+        if not service_loc:
+            stat_res = update_status(source_name, "ingest_integration", "F",
+                                     text=("Citrine integration was selected, but the"
+                                           "integration data location was not provided."))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            else:
-                return
-        if not dl_res["success"]:
-            stat_res = update_status(source_name, "ingest_integration", "F", text=str(dl_res))
+            stat_res = update_status(source_name, "ingest_citrine", "F",
+                                     text="Unable to upload PIFs without location.")
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            else:
-                return
+            return
         else:
-            stat_res = update_status(source_name, "ingest_integration", "S")
+            stat_res = update_status(source_name, "ingest_integration", "P")
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            if DEBUG_LEVEL >= 2:
-                print("{}: Integration data downloaded".format(source_name))
-    # If the data aren't local, but need to be, error
-    elif "citrine" in services:
-        stat_res = update_status(source_name, "ingest_integration", "F",
-                                 text=("Citrine integration was selected, but the"
-                                       "integration data location was not provided."))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        stat_res = update_status(source_name, "ingest_citrine", "F",
-                                 text="Unable to upload PIFs without location.")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        return
+            # Will not transfer anything if already in place
+            service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
+            try:
+                dl_res = download_and_backup(transfer_client,
+                                             service_loc,
+                                             app.config["LOCAL_EP"],
+                                             service_data)
+            except Exception as e:
+                stat_res = update_status(source_name, "ingest_integration", "F", text=repr(e))
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+                else:
+                    return
+            if not dl_res["success"]:
+                stat_res = update_status(source_name, "ingest_integration", "F", text=str(dl_res))
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+                else:
+                    return
+            else:
+                stat_res = update_status(source_name, "ingest_integration", "S")
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+                if DEBUG_LEVEL >= 2:
+                    print("{}: Integration data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_integration", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Integrations
 
@@ -846,8 +867,8 @@ def globus_publish_data(publish_client, transfer_client, metadata, local_path):
     pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
     submission_id = md_result["id"]
     # Transfer data
-    toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
-                           pub_endpoint, [(local_path, pub_path)], timeout=0)
+    mdf_toolbox.quick_transfer(transfer_client, app.config["LOCAL_EP"],
+                               pub_endpoint, [(local_path, pub_path)], timeout=0)
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
