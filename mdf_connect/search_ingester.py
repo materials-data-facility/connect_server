@@ -5,7 +5,7 @@ import os
 from queue import Empty
 
 from globus_sdk import GlobusAPIError
-from mdf_toolbox import toolbox
+import mdf_toolbox
 
 from mdf_connect import Validator
 
@@ -27,6 +27,7 @@ def search_ingest(ingest_client, feedstocks, index, batch_size=100,
     """
     if type(feedstocks) is str:
         feedstocks = [feedstocks]
+    index = mdf_toolbox.translate_index(index)
 
     # Validate feedstock
     all_validators = []
@@ -64,18 +65,18 @@ def search_ingest(ingest_client, feedstocks, index, batch_size=100,
                 json.dump(entry, save_loc)
                 save_loc.write("\n")
                 # Add gmeta-formatted entry to batch
-                batch.append(toolbox.format_gmeta(entry))
+                batch.append(mdf_toolbox.format_gmeta(entry))
 
                 # If batch is appropriate size
                 if batch_size > 0 and len(batch) >= batch_size:
                     # Format batch into gmeta and put in queue
-                    full_ingest = toolbox.format_gmeta(batch)
+                    full_ingest = mdf_toolbox.format_gmeta(batch)
                     ingest_queue.put(json.dumps(full_ingest))
                     batch.clear()
 
         # Ingest partial batch if needed
         if batch:
-            full_ingest = toolbox.format_gmeta(batch)
+            full_ingest = mdf_toolbox.format_gmeta(batch)
             ingest_queue.put(json.dumps(full_ingest))
             batch.clear()
         input_done.value = True

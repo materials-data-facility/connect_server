@@ -14,7 +14,7 @@ setup(
         "flask>=0.12.2",
         "globus-sdk>=1.4.1",
         "jsonschema>=2.6.0",
-        "mdf-toolbox>=0.1.5",
+        "mdf-toolbox>=0.1.7",
         "pandas>=0.20.3",
         "pif-ingestor",
         "Pillow>=3.1.2",
