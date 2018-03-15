@@ -7,6 +7,7 @@ import shutil
 import tarfile
 import tempfile
 from threading import Thread
+import urllib
 import zipfile
 
 import boto3
@@ -467,18 +468,43 @@ def download_and_backup(mdf_transfer_client, data_loc,
             protocol, data_info = location.split("://", 1)
         except ValueError:
             raise ValueError("Data location must be in the form [protocol]://[data_location]")
+        # Special case: Globus UI link can be parsed into globus:// protocol
         if ((protocol == "http" or protocol == "https")
-                and data_loc.startswith("www.globus.org/app/transfer")):
-            raise NotImplementedError("Feature in progress")
-            ep_start = data_loc.find("origin_id=")
+                and data_info.startswith("www.globus.org/app/transfer")):
+            data_info = urllib.parse.unquote(data_info)
+            # EP ID is in origin or dest
+            ep_start = data_info.find("origin_id=")
             if ep_start < 0:
-                ep_start = data_loc.find("destination_id")
+                ep_start = data_info.find("destination_id=")
                 if ep_start < 0:
                     raise ValueError("Invalid Globus Transfer UI link")
-            ep_start += len("origin_id=")
-            ep_end = data_loc.find("&")
+                else:
+                    ep_start += len("destination_id=")
+            else:
+                ep_start += len("origin_id=")
+            ep_end = data_info.find("&", ep_start)
             if ep_end < 0:
-                ep_end = len(data_loc) - 1
+                ep_end = len(data_info)
+            ep_id = data_info[ep_start:ep_end]
+
+            # Same for path
+            path_start = data_info.find("origin_path=")
+            if path_start < 0:
+                path_start = data_info.find("destination_path=")
+                if path_start < 0:
+                    raise ValueError("Invalid Globus Transfer UI link")
+                else:
+                    path_start += len("destination_path=")
+            else:
+                path_start += len("origin_path=")
+            path_end = data_info.find("&", path_start)
+            if path_end < 0:
+                path_end = len(data_info)
+            path = data_info[path_start:path_end]
+
+            # Make new location
+            location = "globus://{}{}".format(ep_id, path)
+            protocol, data_info = location.split("://", 1)
 
         if protocol == "globus":
             # Check that data not already in place
