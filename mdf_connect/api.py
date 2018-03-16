@@ -104,7 +104,7 @@ def accept_convert():
     schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
     with open(os.path.join(schema_dir, "moc_convert.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir), 
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
                                       referrer=schema)
     try:
         jsonschema.validate(metadata, schema, resolver=resolver)
@@ -877,18 +877,38 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         stat_res = update_status(source_name, "ingest_citrine", "P")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
+
+        # Check if this is a new version
+        version = dataset.get("mdf", {}).get("version", 1)
+        old_citrine_id = None
+        # Get base (no version) source_name by removing _v#
+        base_source_name = source_name.rsplit("_v"+str(version), 1)[0]
+        # Find the last version uploaded to Citrine, if there was one
+        while version > 1 and not old_citrine_id:
+            # Get the old source name by adding the old version
+            version -= 1
+            old_source_name = base_source_name + "_v" + str(version)
+            # Get the old version's citrine_id
+            old_status = read_status(old_source_name)
+            if not old_status["success"]:
+                raise ValueError(str(old_status))
+            old_citrine_id = old_status["status"].get("citrine_id", None)
+
         try:
             cit_path = os.path.join(service_data, "citrine")
             cit_res = citrine_upload(cit_path,
                                      app.config["CITRINATION_API_KEY"],
-                                     dataset)
+                                     dataset,
+                                     old_citrine_id)
         except Exception as e:
             stat_res = update_status(source_name, "ingest_citrine", "R", text=repr(e))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
             if not cit_res["success"]:
-                if cit_res["failure_count"]:
+                if cit_res["error"]:
+                    text = cit_res["error"]
+                elif cit_res["failure_count"]:
                     text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
                 else:
                     text = "No PIFs were uploaded"
@@ -903,6 +923,10 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
                 stat_res = update_status(source_name, "ingest_citrine", "L", text=text, link=link)
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
+                stat_res_2 = modify_status_entry(source_name,
+                                                 {"citrine_id": cit_res["cit_ds_id"]})
+                if not stat_res_2["success"]:
+                    raise ValueError(str(stat_res_2))
     else:
         stat_res = update_status(source_name, "ingest_citrine", "N")
         if not stat_res["success"]:
@@ -972,7 +996,7 @@ def get_publish_metadata(metadata):
     return pub_metadata
 
 
-def citrine_upload(citrine_data, api_key, mdf_dataset):
+def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None):
     cit_client = CitrinationClient(api_key)
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
@@ -985,19 +1009,38 @@ def citrine_upload(citrine_data, api_key, mdf_dataset):
             raise KeyError
     except (KeyError, IndexError, TypeError):
         cit_desc = None
-    try:
-        version = mdf_dataset["mdf"]["version"]
-    except (KeyError, IndexError, TypeError):
-        version = 1
 
-    if version != 1:
-        raise ValueError("Citrine versioning not supported at this time")
-
-    cit_ds_id = cit_client.create_data_set(name=cit_title,
-                                           description=cit_desc,
-                                           share=0).json()["id"]
-    if not cit_ds_id:
-        raise ValueError("Dataset name present in Citrine")
+    # Create new version if dataset previously created
+    if previous_id:
+        try:
+            rev_res = cit_client.create_data_set_version(previous_id).json()
+            assert rev_res["dataset_id"] == previous_id
+        except Exception:
+            previous_id = "INVALID"
+        else:
+            cit_ds_id = previous_id
+            cit_client.update_data_set(cit_ds_id,
+                                       name=cit_title,
+                                       description=cit_desc,
+                                       share=0)
+    # Create new dataset if not created
+    if not previous_id or previous_id == "INVALID":
+        try:
+            cit_ds_id = cit_client.create_data_set(name=cit_title,
+                                                   description=cit_desc,
+                                                   share=0).json()["id"]
+            assert cit_ds_id > 0
+        except Exception:
+            if previous_id == "INVALID":
+                return {
+                    "success": False,
+                    "error": "Unable to create revision or new dataset in Citrine"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Unable to create Citrine dataset, possibly due to duplicate entry"
+                }
 
     success = 0
     failed = 0
@@ -1230,6 +1273,49 @@ def update_status(source_name, step, code, text=None, link=None):
     else:
         if DEBUG_LEVEL >= 1:
             print("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
+        return {
+            "success": True,
+            "status": status
+            }
+
+
+def modify_status_entry(source_name, modifications):
+    """Change the status entry of a given submission.
+    This is a generalized (and more powerful) version of update_status.
+    This function should be used carefully, as most fields in the status DB should never change.
+
+    Arguments:
+    source_name (str): The source_name of the submission.
+    modifications (dict): The keys and values to update.
+
+    Returns:
+    dict: success (bool): Success state
+          error (str): The error. Only exists if success is False.
+          status (str): The updated status. Only exists if success is True.
+    """
+    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+    # TODO: Validate status
+    # Get old status
+    old_status = read_status(source_name)
+    if not old_status["success"]:
+        return old_status
+    status = old_status["status"]
+
+    # Overwrite old status
+    status = mdf_toolbox.dict_merge(modifications, status)
+
+    try:
+        # put_item will overwrite
+        table.put_item(Item=status)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+            }
+    else:
         return {
             "success": True,
             "status": status
