@@ -13,7 +13,7 @@ import zipfile
 import boto3
 from bson import ObjectId
 from citrination_client import CitrinationClient
-from flask import jsonify, request
+from flask import jsonify, request, redirect
 import globus_sdk
 import jsonschema
 import mdf_toolbox
@@ -60,7 +60,8 @@ STATUS_STEPS = (
     ("ingest_integration", "Integration data download"),
     ("ingest_search", "Globus Search ingestion"),
     ("ingest_publish", "Globus Publish publication"),
-    ("ingest_citrine", "Citrine upload")
+    ("ingest_citrine", "Citrine upload"),
+    ("ingest_mrr", "Materials Resource Registration")
 )
 # This is the start of ingest steps in STATUS_STEPS
 # In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
@@ -68,9 +69,9 @@ STATUS_STEPS = (
 INGEST_MARK = 4
 
 
-@app.route('/', methods=["GET"])
+@app.route('/', methods=["GET", "POST"])
 def root_call():
-    return ("Service is up", 200)
+    return redirect(app.config["FORM_URL"], code=302)
 
 
 @app.route('/convert', methods=["POST"])
@@ -115,10 +116,11 @@ def accept_convert():
             "details": str(e)
             }), 400)
 
+    test = metadata.get("test", False)
+
     sub_title = metadata["dc"]["titles"][0]["title"]
     source_name_info = make_source_name(
-                        metadata.get("mdf", {}).get("source_name")
-                        or sub_title)
+                        metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
     source_name = source_name_info["source_name"]
     if (len(source_name_info["user_id_list"]) > 0
             and not any([uid in source_name_info["user_id_list"] for uid in identities])):
@@ -131,6 +133,8 @@ def accept_convert():
         metadata["mdf"] = {}
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = source_name_info["version"]
+    if not metadata["mdf"].get("acl"):
+        metadata["mdf"]["acl"] = ["public"]
 
     status_info = {
         "source_name": source_name,
@@ -139,7 +143,9 @@ def accept_convert():
         "submitter": name,
         "title": sub_title,
         "user_id": user_id,
-        "user_email": email
+        "user_email": email,
+        "acl": metadata["mdf"]["acl"],
+        "test": test
         }
     try:
         status_res = create_status(status_info)
@@ -166,9 +172,6 @@ def moc_driver(metadata, source_name):
     Arguments:
     metadata (dict): The JSON passed to /convert.
     source_name (str): The source name of this submission.
-
-    Returns:
-    dict: success (bool): True on success, False on failure.
     """
     # Setup
     creds = {
@@ -187,6 +190,7 @@ def moc_driver(metadata, source_name):
             raise ValueError(str(stat_res))
         else:
             return
+    test = metadata.pop("test", False)
     stat_res = update_status(source_name, "convert_start", "S")
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
@@ -202,8 +206,8 @@ def moc_driver(metadata, source_name):
                                      metadata.pop("data", {}),
                                      app.config["LOCAL_EP"],
                                      local_path,
-                                     app.config["BACKUP_EP"],
-                                     backup_path)
+                                     app.config["BACKUP_EP"] if not test else None,
+                                     backup_path if not test else None)
     except Exception as e:
         stat_res = update_status(source_name, "convert_download", "F", text=repr(e))
         if not stat_res["success"]:
@@ -228,7 +232,7 @@ def moc_driver(metadata, source_name):
     os.makedirs(service_data)
 
     # Pull out special fields in metadata (the rest is the dataset)
-    services = metadata.pop("services", [])
+    services = metadata.pop("services", {})
     parse_params = metadata.pop("index", {})
     # Add file info data
     parse_params["file"] = {
@@ -256,12 +260,31 @@ def moc_driver(metadata, source_name):
         else:
             return
     else:
-        stat_res = update_status(source_name, "converting", "M",
-                                 text="{} records parsed out of {} groups"
-                                      # feedstock includes dataset entry
-                                      .format(len(feedstock)-1, num_groups))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        # feedstock minus dataset entry is records
+        num_parsed = len(feedstock) - 1
+        # If nothing in feedstock, panic
+        if num_parsed < 0:
+            stat_res = update_status(source_name, "converting", "F",
+                                     text="Could not parse dataset entry")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+        # If no records, warn user
+        elif num_parsed == 0:
+            stat_res = update_status(source_name, "converting", "F",  # "U",
+                                     text=("No records were parsed out of {} groups"
+                                           .format(num_groups)))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+        else:
+            stat_res = update_status(source_name, "converting", "M",
+                                     text=("{} records parsed out of {} groups"
+                                           .format(num_parsed, num_groups)))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
         if DEBUG_LEVEL >= 2:
             print("{}: {} entries parsed".format(source_name, len(feedstock)))
 
@@ -279,7 +302,8 @@ def moc_driver(metadata, source_name):
                 "source_name": source_name,
                 "data": json.dumps(["globus://" + app.config["LOCAL_EP"] + local_path]),
                 "services": services,
-                "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data])
+                "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data]),
+                "test": test
             }
             headers = {}
             moc_authorizer.set_authorization_header(headers)
@@ -387,7 +411,7 @@ def authenticate_token(token, auth_level):
     }
 
 
-def make_source_name(title):
+def make_source_name(title, test=False):
     """Make a source name out of a title."""
     delete_words = [
         "and",
@@ -418,6 +442,9 @@ def make_source_name(title):
                 source_name += char
     else:
         source_name = title
+    # Add test flag if necessary
+    if test:
+        source_name = "_test_" + source_name
 
     # Determine version number to add
     # Remove any existing version number
@@ -607,10 +634,11 @@ def accept_ingest():
         # requests.form is an ImmutableMultiDict
         # flat=False returns all keys as lists
         params = request.form.to_dict(flat=False)
-        services = params.get("services", [])
+        services = params.get("services", {})
         data_loc = json.loads(params.get("data", ["{}"])[0])
         service_data = json.loads(params.get("service_data", ["{}"])[0])
         source_name = params.get("source_name", [None])[0]
+        test = params.get("test", False)
     except KeyError as e:
         return (jsonify({
             "success": False,
@@ -640,7 +668,8 @@ def accept_ingest():
             "submitter": name,
             "title": title,
             "user_id": user_id,
-            "user_email": email
+            "user_email": email,
+            "test": test
             }
         try:
             # TODO: Better metadata validation
@@ -652,6 +681,25 @@ def accept_ingest():
                 }), 500)
         if not status_res["success"]:
             return (jsonify(status_res), 500)
+
+    if test:
+        services["mdf_search"] = {
+            "index": app.config["INGEST_TEST_INDEX"]
+        }
+        if services.get("globus_publish"):
+            services["globus_publish"] = {
+                "collection_id": app.config["TEST_PUBLISH_COLLECTION"]
+            }
+        if services.get("citrine"):
+            services["citrine"] = {
+                "public": False
+            }
+    # TODO: Remove this when we can verify user is allowed to Publish into collections
+    else:
+        if services.get("globus_publish"):
+            services["globus_publish"] = {
+                "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
+            }
 
     # Save file
     try:
@@ -708,7 +756,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
 
     # If the data should be local, make sure it is
     # Currently only Publish needs the data
-    if "globus_publish" in services:
+    if services.get("globus_publish"):
         if not data_loc:
             stat_res = update_status(source_name, "ingest_download", "F",
                                      text=("Globus Publish integration was selected, "
@@ -764,7 +812,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             raise ValueError(str(stat_res))
 
     # Same for integrated service data
-    if "citrine" in services:
+    if services.get("citrine"):
         if not service_loc:
             stat_res = update_status(source_name, "ingest_integration", "F",
                                      text=("Citrine integration was selected, but the"
@@ -812,12 +860,14 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
 
     # Integrations
 
-    # Globus Search (mandatory)
+    # MDF Search (mandatory)
     stat_res = update_status(source_name, "ingest_search", "P")
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
+    search_config = services.get("mdf_search", {})
     try:
-        search_ingest(search_client, base_feed_path, index=app.config["INGEST_INDEX"],
+        search_ingest(search_client, base_feed_path,
+                      index=search_config.get("index", app.config["INGEST_INDEX"]),
                       feedstock_save=final_feed_path)
     except Exception as e:
         stat_res = update_status(source_name, "ingest_search", "F", text=repr(e))
@@ -850,13 +900,21 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             os.remove(final_feed_path)
 
     # Globus Publish
-    if "globus_publish" in services:
+    if services.get("globus_publish"):
         stat_res = update_status(source_name, "ingest_publish", "P")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
+        if isinstance(services["globus_publish"], dict):
+            # collection should be in id or name
+            collection = (services["globus_publish"].get("collection_id")
+                          or services["globus_publish"].get("collection_name")
+                          or app.config["DEFAULT_PUBLISH_COLLECTION"])
+        else:
+            collection = app.config["DEFAULT_PUBLISH_COLLECTION"]
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
-                                          dataset, data_ep, data_path, data_loc)
+                                          dataset, collection,
+                                          data_ep, data_path, data_loc)
         except Exception as e:
             stat_res = update_status(source_name, "ingest_publish", "R", text=repr(e))
             if not stat_res["success"]:
@@ -873,7 +931,7 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             raise ValueError(str(stat_res))
 
     # Citrine
-    if "citrine" in services:
+    if services.get("citrine"):
         stat_res = update_status(source_name, "ingest_citrine", "P")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
@@ -899,7 +957,8 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             cit_res = citrine_upload(cit_path,
                                      app.config["CITRINATION_API_KEY"],
                                      dataset,
-                                     old_citrine_id)
+                                     old_citrine_id,
+                                     public=services["citrine"].get("public", True))
         except Exception as e:
             stat_res = update_status(source_name, "ingest_citrine", "R", text=repr(e))
             if not stat_res["success"]:
@@ -932,6 +991,10 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
 
+    # MRR
+    # TODO
+    stat_res = update_status(source_name, "ingest_mrr", "N")
+
     # Cleanup
     cleanups = [
         os.path.join(app.config["LOCAL_PATH"], source_name) + "/",
@@ -952,17 +1015,19 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         }
 
 
-def globus_publish_data(publish_client, transfer_client, metadata,
+def globus_publish_data(publish_client, transfer_client, metadata, collection,
                         data_ep=None, data_path=None, data_loc=None):
     if not data_loc:
         if not data_ep or not data_path:
-            raise ValueError("Ivalid call to globus_publish_data()")
+            raise ValueError("Invalid call to globus_publish_data()")
         data_loc = []
     if data_ep and data_path:
         data_loc.append("globus://{}{}".format(data_ep, data_path))
+    # Format collection
+    collection_id = publish_collection_lookup(publish_client, collection)
     # Submit metadata
     pub_md = get_publish_metadata(metadata)
-    md_result = publish_client.push_metadata(pub_md.pop("collection_id"), pub_md)
+    md_result = publish_client.push_metadata(collection_id, pub_md)
     pub_endpoint = md_result['globus.shared_endpoint.name']
     pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
     submission_id = md_result["id"]
@@ -977,6 +1042,24 @@ def globus_publish_data(publish_client, transfer_client, metadata,
     fin_res = publish_client.complete_submission(submission_id)
 
     return fin_res.data
+
+
+def publish_collection_lookup(publish_client, collection):
+    valid_cols = publish_client.list_collections().data
+    try:
+        collection_id = int(collection)
+    except ValueError:
+        collection_id = 0
+        for coll in valid_cols:
+            if collection.replace(" ", "").lower() == coll["name"].replace(" ", "").lower():
+                if collection_id:
+                    raise ValueError("Collection name '{}' has multiple matches"
+                                     .format(collection))
+                collection_id = coll["id"]
+    if not any([col["id"] == collection_id for col in valid_cols]):
+        raise ValueError("Collection not found")
+
+    return collection_id
 
 
 def get_publish_metadata(metadata):
@@ -996,7 +1079,7 @@ def get_publish_metadata(metadata):
     return pub_metadata
 
 
-def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None):
+def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None, public=True):
     cit_client = CitrinationClient(api_key)
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
@@ -1053,8 +1136,8 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None):
                 # TODO: Log this
                 print("DEBUG: Citrine upload failure:", up_res)
                 failed += 1
-    # TODO: Set share to 1 to enable public uploads
-    cit_client.update_data_set(cit_ds_id, share=0)
+
+    cit_client.update_data_set(cit_ds_id, share=1 if public else 0)
 
     return {
         "success": bool(success),
@@ -1081,49 +1164,25 @@ def get_status(source_name):
     uid_set = auth_res["identities_set"]
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
-    # Only the user that submitted the dataset and admins can view
+    # Only the submitter, ACL users, and admins can view
     with open(app.config["ADMIN_WHITELIST"]) as f:
         admin_whitelist = list(json.load(f).values())
-    if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
-                                         or any([uid in admin_whitelist
-                                                 for uid in uid_set])):
+    # If actually not found
+    if (not raw_status["success"]
+        # or dataset not public
+        or (raw_status["status"]["acl"] != ["public"]
+            # and user was not submitter
+            and not (raw_status["status"]["user_id"] in uid_set
+                # user is not in ACL
+                or any([uid in raw_status["status"]["acl"] for uid in uid_set])
+                # user is not admin
+                or any([uid in admin_whitelist for uid in uid_set])))):
         return (jsonify({
             "success": False,
             "error": "Submission {} not found, or not available".format(source_name)
             }), 404)
     else:
         return (jsonify(translate_status(raw_status["status"])), 200)
-
-
-@app.route("/status/<source_name>/raw", methods=["GET"])
-def get_raw_status(source_name):
-    """Fetch and return user-inappropriate status info"""
-    try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
-    if not auth_res["success"]:
-        error_code = auth_res.pop("error_code")
-        return (jsonify(auth_res), error_code)
-
-    uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_name)
-    # Failure message if status not fetched or user not allowed to view
-    # Only the user that submitted the dataset and admins can view
-    with open(app.config["ADMIN_WHITELIST"]) as f:
-        admin_whitelist = list(json.load(f).values())
-    if not raw_status["success"] or not (raw_status["status"]["user_id"] in uid_set
-                                         or any([uid in admin_whitelist
-                                                 for uid in uid_set])):
-        return (jsonify({
-            "success": False,
-            "error": "Submission {} not found, or not available".format(source_name)
-            }), 404)
-    else:
-        return (jsonify(raw_status), 200)
 
 
 def read_status(source_name):
@@ -1260,6 +1319,8 @@ def update_status(source_name, step, code, text=None, link=None):
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
         status["errors"].append(text or "An error occurred but we're recovering")
+    elif code == 'U':
+        status["messages"].append(text or "Processing will continue")
     status["code"] = "".join(code_list)
 
     try:
@@ -1348,8 +1409,9 @@ def translate_status(status):
         steps = []
         subm = "unknown submission type '{}'".format(sub_type)
 
-    usr_msg = ("Status of {} submission {} ({})\n"
-               "Submitted by {} at {}\n\n").format(subm,
+    usr_msg = ("Status of {} {} submission {} ({})\n"
+               "Submitted by {} at {}\n\n").format("TEST" if status["test"] else "",
+                                                   subm,
                                                    status["source_name"],
                                                    status["title"],
                                                    status["submitter"],
@@ -1394,6 +1456,13 @@ def translate_status(status):
                 "signal": "failure",
                 "text": msg
             })
+        elif code == 'U':
+            msg = "{} was unsuccessful: {}.".format(step, messages.pop(0))
+            usr_msg += msg + "\n"
+            web_msg.append({
+                "signal": "warning",
+                "text": msg
+            })
         elif code == 'H':
             tup_msg = errors.pop(0)
             msg = "{} failed: {}.".format(step, tup_msg[0])
@@ -1432,7 +1501,7 @@ def translate_status(status):
                 "text": msg
             })
         else:
-            msg = "{} code: {}".format(step, code)
+            msg = "{} is unknown. Code: {}".format(step, code)
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",
@@ -1445,7 +1514,8 @@ def translate_status(status):
         "status_list": web_msg,
         "title": status["title"],
         "submitter": status["submitter"],
-        "submission_time": status["submission_time"]
+        "submission_time": status["submission_time"],
+        "test": status["test"]
         }
 
 
