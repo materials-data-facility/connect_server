@@ -301,9 +301,9 @@ def moc_driver(metadata, source_name):
             ingest_args = {
                 "source_name": source_name,
                 "data": json.dumps(["globus://" + app.config["LOCAL_EP"] + local_path]),
-                "services": services,
+                "services": json.dumps(services),
                 "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data]),
-                "test": test
+                "test": json.dumps(test)
             }
             headers = {}
             moc_authorizer.set_authorization_header(headers)
@@ -634,11 +634,11 @@ def accept_ingest():
         # requests.form is an ImmutableMultiDict
         # flat=False returns all keys as lists
         params = request.form.to_dict(flat=False)
-        services = params.get("services", {})
+        services = json.loads(params.get("services", ["{}"])[0])
         data_loc = json.loads(params.get("data", ["{}"])[0])
         service_data = json.loads(params.get("service_data", ["{}"])[0])
         source_name = params.get("source_name", [None])[0]
-        test = params.get("test", False)
+        test = json.loads(params.get("test", ["false"])[0])
     except KeyError as e:
         return (jsonify({
             "success": False,
@@ -1073,13 +1073,13 @@ def get_publish_metadata(metadata):
         "dc.publisher": "Materials Data Facility",
         "dc.contributor.author": [author.get("creatorName", "")
                                   for author in dc_metadata.get("creators", [])],
-        "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"],
         "accept_license": True
     }
     return pub_metadata
 
 
-def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None, public=True):
+def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
+                   public=app.config["DEFAULT_CITRINATION_PUBLIC"]):
     cit_client = CitrinationClient(api_key)
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
@@ -1239,7 +1239,7 @@ def create_status(status):
     # Create defaults
     status["messages"] = []
     status["errors"] = []
-    status["code"] = "WWWWWWWWWW"
+    status["code"] = "W" * len(STATUS_STEPS)
 
     # Check that status does not already exist
     if read_status(status["source_name"])["success"]:
