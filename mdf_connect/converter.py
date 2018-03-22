@@ -64,9 +64,6 @@ def convert(root_path, convert_params):
 
     # TODO: Process dataset entry
     full_dataset = convert_params["dataset"]
-    full_dataset["file_bags"] = {
-        "current": "Bag functionality coming soon."
-    }
 
     # Create complete feedstock
     feedstock = [full_dataset]
