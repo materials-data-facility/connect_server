@@ -63,8 +63,6 @@ class Validator:
 #            ds_md["dc"] = {}
         if not ds_md.get("mdf") or not isinstance(ds_md["mdf"], dict):
             ds_md["mdf"] = {}
-        if not ds_md.get("file_bags") or not isinstance(ds_md["file_bags"], dict):
-            ds_md["file_bags"] = {}
 #        if not ds_md.get("publications") or not isinstance(ds_md["publications"], list):
 #            ds_md["publications"] = []
 #        if not ds_md.get("mrr") or not isinstance(ds_md["mrr"], dict):
@@ -99,9 +97,6 @@ class Validator:
         # version
         if not ds_md["mdf"].get("version"):
             ds_md["mdf"]["version"] = 1
-
-        # BLOCK: file_bags
-        # TODO
 
         # BLOCK: publications
         new_pubs = []
