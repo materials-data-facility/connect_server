@@ -1173,10 +1173,10 @@ def get_status(source_name):
         or (raw_status["status"]["acl"] != ["public"]
             # and user was not submitter
             and not (raw_status["status"]["user_id"] in uid_set
-                # user is not in ACL
-                or any([uid in raw_status["status"]["acl"] for uid in uid_set])
-                # user is not admin
-                or any([uid in admin_whitelist for uid in uid_set])))):
+                     # user is not in ACL
+                     or any([uid in raw_status["status"]["acl"] for uid in uid_set])
+                     # user is not admin
+                     or any([uid in admin_whitelist for uid in uid_set])))):
         return (jsonify({
             "success": False,
             "error": "Submission {} not found, or not available".format(source_name)

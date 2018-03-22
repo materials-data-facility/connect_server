@@ -472,7 +472,7 @@ def _parse_file_info(group, params=None):
         host_file = file_path.replace(local_path, host_path)
         with open(file_path, "rb") as f:
             md = {
-                "globus": globus_endpoint + host_file,
+                "globus": "globus://" + globus_endpoint + host_file,
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
                 "url": http_host + host_file,
