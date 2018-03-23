@@ -1512,6 +1512,7 @@ def translate_status(status):
         "source_name": status["source_name"],
         "status_message": usr_msg,
         "status_list": web_msg,
+        "status_code": status["code"],
         "title": status["title"],
         "submitter": status["submitter"],
         "submission_time": status["submission_time"],
