@@ -31,36 +31,6 @@ class Validator:
         else:
             self.__schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
 
-    def __make_source_name(self, title):
-        """Make a source_name out of a title."""
-        stopwords = [
-            "and",
-            "or",
-            "the",
-            "a",
-            "an",
-            "of"
-        ]
-        title = title.strip().lower()
-        # Replace words we don't want
-        for stopword in stopwords:
-            title = title.replace(" " + stopword + " ", " ")
-        # Clear double spacing
-        while title.find("  ") != -1:
-            title = title.replace("  ", " ")
-        # Replace spaces with underscores
-        title = title.replace(" ", "_")
-        # Replace characters we don't want/can't use
-        if not title.isalnum():
-            source_name = ""
-            for char in title:
-                if char.isalnum() or char == " ":
-                    source_name += char
-        else:
-            source_name = title
-
-        return source_name
-
     def start_dataset(self, ds_md):
         """Validate a dataset against the MDF schema.
 
@@ -81,25 +51,26 @@ class Validator:
         self.__finished = False
 
         # Load schema
-        with open(os.path.join(self.__schema_dir, "dataset_schema.json")) as schema_file:
+        with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
             schema = json.load(schema_file)
-        # Load MDF block
-        with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
-            schema["properties"]["mdf"] = json.load(mdf_file)
+        # Replace __custom
+        schema["properties"][ds_md.get("mdf", {}).get("source_name", "__custom")] \
+            = schema["properties"].pop("__custom")
+        resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
+                                          referrer=schema)
 
 #        if not ds_md.get("dc") or not isinstance(ds_md["dc"], dict):
 #            ds_md["dc"] = {}
         if not ds_md.get("mdf") or not isinstance(ds_md["mdf"], dict):
             ds_md["mdf"] = {}
-        if not ds_md.get("file_bags") or not isinstance(ds_md["file_bags"], dict):
-            ds_md["file_bags"] = {}
 #        if not ds_md.get("publications") or not isinstance(ds_md["publications"], list):
 #            ds_md["publications"] = []
 #        if not ds_md.get("mrr") or not isinstance(ds_md["mrr"], dict):
 #            ds_md["mrr"] = {}
 
         # Add fields
-        # TODO: dc?
+        # BLOCK: dc
+        # TODO
 
         # BLOCK: mdf
         # mdf_id
@@ -119,17 +90,6 @@ class Validator:
         # resource_type
         ds_md["mdf"]["resource_type"] = "dataset"
 
-        # TODO: Remove?
-        # source_name
-        # if not ds_md["mdf"].get("source_name"):
-        #    try:
-        #        ds_md["mdf"]["source_name"] = self.__make_source_name(
-        #                                        ds_md["dc"]["titles"][0]["title"])
-        #    except (KeyError, ValueError, IndexError):
-        #        # DC title is required, ds_md will fail validation
-        #        # Doesn't really matter what this is
-        #        ds_md["mdf"]["source_name"] = "unknown"
-
         # acl
         if not ds_md["mdf"].get("acl"):
             ds_md["mdf"]["acl"] = ["public"]
@@ -137,9 +97,6 @@ class Validator:
         # version
         if not ds_md["mdf"].get("version"):
             ds_md["mdf"]["version"] = 1
-
-        # BLOCK: file_bags
-        # None?
 
         # BLOCK: publications
         new_pubs = []
@@ -163,11 +120,11 @@ class Validator:
             ds_md["publications"] = new_pubs
 
         # BLOCK: mrr
-        # None?
+        # TODO
 
         # Validate against schema
         try:
-            jsonschema.validate(ds_md, schema)
+            jsonschema.validate(ds_md, schema, resolver=resolver)
         except jsonschema.ValidationError as e:
             return {
                 "success": False,
@@ -212,11 +169,13 @@ class Validator:
                 }
 
         # Load schema
-        with open(os.path.join(self.__schema_dir, "record_schema.json")) as schema_file:
+        with open(os.path.join(self.__schema_dir, "record.json")) as schema_file:
             schema = json.load(schema_file)
-        # Load MDF block
-        with open(os.path.join(self.__schema_dir, "mdf_schema.json")) as mdf_file:
-            schema["properties"]["mdf"] = json.load(mdf_file)
+        # Replace __custom
+        schema["properties"][self.__dataset["mdf"]["source_name"]] \
+            = schema["properties"].pop("__custom")
+        resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
+                                          referrer=schema)
 
         # Add any missing blocks
         if not rc_md.get("mdf"):
@@ -253,12 +212,6 @@ class Validator:
         if not rc_md["mdf"].get("acl"):
             rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
 
-        # landing_page
-        if not rc_md["mdf"].get("landing_page"):
-            rc_md["mdf"]["landing_page"] = (self.__dataset["mdf"]["landing_page"]
-                                            + "#"
-                                            + str(rc_md["mdf"]["scroll_id"]))
-
         # BLOCK: files
         # Add file data to dataset
         if rc_md["files"]:
@@ -292,7 +245,7 @@ class Validator:
 
         # Validate against schema
         try:
-            jsonschema.validate(rc_md, schema)
+            jsonschema.validate(rc_md, schema, resolver=resolver)
         except jsonschema.ValidationError as e:
             return {
                 "success": False,

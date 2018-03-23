@@ -3,8 +3,12 @@ import json
 import os
 from queue import Empty
 
+# pycalphad and hyperspy imports require this env var set
+os.environ["MPLBACKEND"] = "agg"
+
 import ase.io
 from bson import ObjectId
+import hyperspy.api as hs
 import magic
 from mdf_toolbox import toolbox
 import pandas as pd
@@ -18,7 +22,6 @@ from pypif_sdk.util import citrination as cit_utils
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
 from pypif_sdk.interop.datacite import add_datacite as add_dc
 import yaml
-
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
@@ -202,7 +205,6 @@ def parse_tdb(group, params=None):
 def parse_pif(group, params=None):
     """Use Citrine's parsers."""
     if not params:
-        print("DEBUG: PIF no params")
         return {}
 
     # Setup
@@ -256,6 +258,7 @@ def parse_json(group, params=None):
     """
     try:
         mapping = params["parsers"]["json"]["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -263,7 +266,7 @@ def parse_json(group, params=None):
     for file_path in group:
         with open(file_path) as f:
             file_json = json.load(f)
-        records.extend(_parse_json(file_json, mapping))
+        records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
 
@@ -286,13 +289,14 @@ def parse_csv(group, params=None):
     try:
         csv_params = params["parsers"]["csv"]
         mapping = csv_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
     records = []
     for file_path in group:
         df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
-        records.extend(_parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
 
@@ -312,6 +316,7 @@ def parse_yaml(group, params=None):
     """
     try:
         mapping = params["parsers"]["yaml"]["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -319,7 +324,7 @@ def parse_yaml(group, params=None):
     for file_path in group:
         with open(file_path) as f:
             file_json = yaml.safe_load(f)
-        records.extend(_parse_json(file_json, mapping))
+        records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
 
@@ -341,13 +346,14 @@ def parse_excel(group, params=None):
     try:
         excel_params = params["parsers"]["excel"]
         mapping = excel_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
     records = []
     for file_path in group:
         df = pd.read_excel(file_path, na_values=NA_VALUES)
-        records.extend(_parse_pandas(df, mapping))
+        records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
 
@@ -361,12 +367,55 @@ def parse_image(group, params=None):
                 "image": {
                     "width": im.width,
                     "height": im.height,
-                    "pixels": im.width * im.height,
                     "format": im.format
                 }
             })
         except Exception:
             pass
+    return records
+
+
+def parse_electron_microscopy(group, params=None):
+    """Parse an electron microscopy image with hyperspy library."""
+    records = []
+    for file_path in group:
+        try:
+            data = hs.load(file_path).metadata.as_dictionary()
+        except Exception:
+            pass
+        else:
+            em = {}
+            # Image mode is SEM, TEM, or STEM.
+            # STEM is a subset of TEM.
+            if "SEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "SEM"
+            elif "TEM" in data.get('Acquisition_instrument', {}).keys():
+                inst = "TEM"
+            else:
+                inst = "None"
+            em['beam_current'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                      .get('beam_current', None))
+            em['beam_energy'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                     .get('beam_energy', None))
+            em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                       .get('magnification', None))
+            em['microscope'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('microscope', None))
+            em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                    .get('acquisition_mode', None))
+            detector = (data.get('Acquisition_instrument', {}).get(inst, {})
+                            .get('Detector', None))
+            if detector:
+                em['detector'] = next(iter(detector))
+
+            # Remove None values
+            for key, val in list(em.items()):
+                if val is None:
+                    em.pop(key)
+            if em:
+                records.append({
+                    "electron_microscopy": em
+                })
     return records
 
 
@@ -378,7 +427,8 @@ ALL_PARSERS = [
     parse_csv,
     parse_yaml,
     parse_excel,
-    parse_image
+    parse_image,
+    parse_electron_microscopy
 ]
 
 
@@ -422,7 +472,7 @@ def _parse_file_info(group, params=None):
         host_file = file_path.replace(local_path, host_path)
         with open(file_path, "rb") as f:
             md = {
-                "globus": globus_endpoint + host_file,
+                "globus": "globus://" + globus_endpoint + host_file,
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
                 "url": http_host + host_file,
@@ -436,7 +486,7 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping):
+def _parse_pandas(df, mapping, source_name=None):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
@@ -450,7 +500,7 @@ def _parse_pandas(df, mapping):
     return records
 
 
-def _parse_json(file_json, mapping):
+def _parse_json(file_json, mapping, source_name=None):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
@@ -462,6 +512,9 @@ def _parse_json(file_json, mapping):
         # Get (path, value) pairs from the key structure
         # Loop over each
         for mdf_path, json_path in _flatten_struct(mapping):
+            if source_name:
+                mdf_path = mdf_path.replace("__custom", source_name)
+                json_path = json_path.replace("__custom", source_name)
             try:
                 value = _follow_path(data, json_path)
             except KeyError:
