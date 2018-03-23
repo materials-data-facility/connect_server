@@ -4,9 +4,27 @@ import multiprocessing
 import os
 from queue import Empty
 
-from mdf_refinery import transform
+from mdf_connect import transform
 
-NUM_TRANSFORMERS = 5
+NUM_TRANSFORMERS = 1
+
+GROUPING_RULES = {
+    "vasp": [
+        "outcar",
+        "incar",
+        "chgcar",
+        "wavecar",
+        "wavcar",
+        "ozicar",
+        "ibzcar",
+        "kpoints",
+        "doscar",
+        "poscar",
+        "contcar",
+        "vasp_run.xml",
+        "xdatcar"
+    ]
+}
 
 
 def convert(root_path, convert_params):
@@ -36,17 +54,16 @@ def convert(root_path, convert_params):
     print("DEBUG: Transformers started")
 
     # Populate input queue
-    [input_queue.put(group) for group in group_tree(root_path)]
+    num_groups = 0
+    for group in group_tree(root_path):
+        input_queue.put(group)
+        num_groups += 1
     # Mark that input is finished
     input_complete.value = True
     print("DEBUG: Input complete")
 
     # TODO: Process dataset entry
     full_dataset = convert_params["dataset"]
-
-    # Wait for transformers
-    [t.join() for t in transformers]
-    print("DEBUG: Transformers joined")
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -55,44 +72,44 @@ def convert(root_path, convert_params):
             record = output_queue.get(timeout=1)
             feedstock.append(json.loads(record))
         except Empty:
-            break
+            if any([t.is_alive() for t in transformers]):
+                [t.join(timeout=1) for t in transformers]
+            else:
+                print("DEBUG: Transformers joined")
+                break
 
-    return feedstock
+    return (feedstock, num_groups)
 
 
 def group_tree(root):
     """Group files based on format-specific rules."""
     for path, dirs, files in os.walk(os.path.abspath(root)):
         groups = []
-        # TODO: Expand list of triggers
-        # VASP
-        # TODO: Use regex instead of exact matching
-        if "OUTCAR" in files:
-            outcar_files = [
-                "OUTCAR",
-                "INCAR",
-                "POSCAR",
-                "WAVCAR",
-                "CHGCAR",
-                "CONTCAR",
-                "vasprun.xml",
-                "XDATCAR"
-            ]
-            new_group = []
-            for group_file in outcar_files:
-                # Remove file from list and add to group if present
-                # If not present, noop
-                try:
-                    files.remove(group_file)
-                except ValueError:
-                    pass
-                else:
-                    new_group.append(group_file)
-            if new_group:  # Should always be present
-                groups.append(new_group)
+        # TODO: Expand grouping formats
+        # File-matching groups
+        # Each format specified in the rules
+        for format_type, format_name_list in GROUPING_RULES.items():
+            format_groups = {}
+            # Check each file for rule matching
+            # Match to appropriate group (with same pre/post pattern)
+            #   eg a_[match]_b groups with a_[other match]_b but not c_[other match]_d
+            for f in files:
+                fname = f.lower().strip()
+                for format_name in format_name_list:
+                    if format_name in fname:
+                        pre_post_pattern = fname.replace(format_name, "")
+                        if not format_groups.get(pre_post_pattern):
+                            format_groups[pre_post_pattern] = []
+                        format_groups[pre_post_pattern].append(f)
+                        break
+            # Remove grouped files from the file list and add groups to the group list
+            for g in format_groups.values():
+                for f in g:
+                    files.remove(f)
+                groups.append(g)
 
         # NOTE: Keep this grouping last!
-        # Each file group
+        # Default grouping: Each file is a group
         groups.extend([[f] for f in files])
 
         # Add path to filenames and yield each group
