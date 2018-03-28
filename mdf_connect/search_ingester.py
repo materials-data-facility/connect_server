@@ -34,9 +34,27 @@ def search_ingest(ingest_client, feedstocks, index, batch_size=100,
     for feed_path in feedstocks:
         with open(feed_path) as stock:
             val = Validator()
-            ds_res = val.start_dataset(json.loads(next(stock)))
+            dataset_entry = json.loads(next(stock))
+            ds_res = val.start_dataset(dataset_entry)
             if not ds_res.get("success"):
                 raise ValueError("Feedstock '{}' invalid: {}".format(feed_path, str(ds_res)))
+
+            # Delete previous version of this dataset in Search
+            version = dataset_entry["mdf"]["version"]
+            # Find previous version with entries
+            while version > 1:
+                old_source_name = dataset_entry["mdf"]["source_name"].replace("_v"+str(version),
+                                                                              "_v"+str(version-1))
+                del_q = {
+                    "q": "mdf.source_name:" + old_source_name,
+                    "advanced": True
+                    }
+                del_res = ingest_client.delete_by_query(index, del_q)
+                print("DEBUG:", del_res["total"], "Search entries cleared from", old_source_name)
+                if del_res["total"]:
+                    print("DEBUG:", del_res["total"],
+                          "Search entries cleared from", old_source_name)
+                version -= 1
 
             for rc in stock:
                 record = json.loads(rc)
