@@ -7,6 +7,7 @@ import shutil
 import tarfile
 import tempfile
 from threading import Thread
+import time
 import urllib
 import zipfile
 
@@ -68,6 +69,31 @@ STATUS_STEPS = (
 # and the convert steps are STATUS_STEPS[:INGEST_MARK]
 INGEST_MARK = 4
 
+# Global save locations for whitelists
+CONVERT_GROUP = {
+    # Globus Groups UUID
+    "group_id": app.config["CONVERT_GROUP_ID"],
+    # Group member IDs
+    "whitelist": [],
+    # UNIX timestamp of last update
+    "updated": 0,
+    # Refresh frequency (in seconds)
+    #   X days * 24 hours/day * 60 minutes/hour * 60 seconds/minute
+    "frequency": 1 * 60 * 60  # 1 hour
+}
+INGEST_GROUP = {
+    "group_id": app.config["INGEST_GROUP_ID"],
+    "whitelist": [],
+    "updated": 0,
+    "frequency": 1 * 24 * 60 * 60  # 1 day
+}
+ADMIN_GROUP = {
+    "group_id": app.config["ADMIN_GROUP_ID"],
+    "whitelist": [],
+    "updated": 0,
+    "frequency": 1 * 24 * 60 * 60  # 1 day
+}
+
 
 @app.route('/', methods=["GET", "POST"])
 def root_call():
@@ -102,8 +128,17 @@ def accept_convert():
             }), 400)
 
     # Validate input JSON
+    # resourceType is always going to be Dataset, don't require from user
+    if not metadata.get("dc", {}).get("resourceType"):
+        try:
+            metadata["dc"]["resourceType"] = {
+                "resourceTypeGeneral": "Dataset",
+                "resourceType": "Dataset"
+            }
+        except Exception:
+            pass
     schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "moc_convert.json")) as schema_file:
+    with open(os.path.join(schema_dir, "connect_convert.json")) as schema_file:
         schema = json.load(schema_file)
     resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
                                       referrer=schema)
@@ -157,7 +192,7 @@ def accept_convert():
     if not status_res["success"]:
         return (jsonify(status_res), 500)
 
-    driver = Thread(target=moc_driver, name="driver_thread", args=(metadata, source_name))
+    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata, source_name))
     driver.start()
     return (jsonify({
         "success": True,
@@ -165,7 +200,7 @@ def accept_convert():
         }), 202)
 
 
-def moc_driver(metadata, source_name):
+def convert_driver(metadata, source_name):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
@@ -178,12 +213,12 @@ def moc_driver(metadata, source_name):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer", "moc"]
+        "services": ["transfer", "connect"]
         }
     try:
         clients = mdf_toolbox.confidential_login(creds)
         transfer_client = clients["transfer"]
-        moc_authorizer = clients["moc"]
+        connect_authorizer = clients["connect"]
     except Exception as e:
         stat_res = update_status(source_name, "convert_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -306,7 +341,7 @@ def moc_driver(metadata, source_name):
                 "test": json.dumps(test)
             }
             headers = {}
-            moc_authorizer.set_authorization_header(headers)
+            connect_authorizer.set_authorization_header(headers)
             ingest_res = requests.post(app.config["INGEST_URL"],
                                        data=ingest_args,
                                        files={'file': stock},
@@ -339,7 +374,12 @@ def moc_driver(metadata, source_name):
 
 
 def authenticate_token(token, auth_level):
-    """Auth a token"""
+    """Auth a token
+    Levels:
+        convert
+        ingest
+        admin
+    """
     if not token:
         return {
             "success": False,
@@ -376,30 +416,29 @@ def authenticate_token(token, auth_level):
             or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return {
             "success": False,
-            "error": "Not authorized to MOC scope",
+            "error": "Not authorized to MDF Connect scope",
             "error_code": 401
         }
-    # Finally, verify that user ID is in whitelist
-    # Can be any identity the user has (MOC is identity-aware)
-    whitelist = []
-    if auth_level == "admin" or auth_level == "ingest" or auth_level == "convert":
-        with open(app.config["ADMIN_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-    if auth_level == "ingest" or auth_level == "convert":
-        with open(app.config["INGEST_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-    if auth_level == "convert":
-        with open(app.config["CONVERT_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-
+    # Finally, verify user is in appropriate group
+    try:
+        whitelist = fetch_whitelist(auth_level)
+        if len(whitelist) == 0:
+            raise ValueError("Whitelist empty")
+    except Exception as e:
+        print("ERROR: Whitelist generation failed:", e)
+        return {
+            "success": False,
+            "error": "Unable to fetch Group memberships.",
+            "error_code": 500
+        }
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        # TODO: Proper logging
         print("DEBUG: User not in whitelist:", auth_res["username"])
         return {
             "success": False,
             "error": "You cannot access this service (yet)",
             "error_code": 403
         }
+
     return {
         "success": True,
         "token_info": auth_res,
@@ -409,6 +448,70 @@ def authenticate_token(token, auth_level):
         "email": auth_res["email"] or "Not given",
         "identities_set": auth_res["identities_set"]
     }
+
+
+def fetch_whitelist(auth_level):
+    allowed_levels = ["admin", "convert", "ingest"]
+    if auth_level not in allowed_levels:
+        raise ValueError("Invalid auth level '{}'".format(auth_level))
+    whitelist = []
+    groups_auth = {
+        "app_name": "MDF Open Connect",
+        "client_id": app.config["API_CLIENT_ID"],
+        "client_secret": app.config["API_CLIENT_SECRET"],
+        "services": ["groups"]
+    }
+    # Always add admin list
+    # Check for staleness
+    if int(time.time()) - ADMIN_GROUP["updated"] > ADMIN_GROUP["frequency"]:
+        global ADMIN_GROUP
+        # If NexusClient has not been created yet, create it
+        if type(groups_auth) is dict:
+            groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+        # Get all the members
+        member_list = groups_auth.get_group_memberships(ADMIN_GROUP["group_id"])["members"]
+        # Whitelist is all IDs in the group that are active
+        ADMIN_GROUP["whitelist"] = [member["identity_id"]
+                                    for member in member_list
+                                    if member["status"] == "active"]
+        # Update timestamp
+        ADMIN_GROUP["updated"] = int(time.time())
+    whitelist.extend(ADMIN_GROUP["whitelist"])
+    # Add either convert or ingest whitelists
+    if auth_level == "convert":
+        if time.time() - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
+            global CONVERT_GROUP
+            # If NexusClient has not been created yet, create it
+            if type(groups_auth) is dict:
+                groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+            # Get all the members
+            member_list = groups_auth.get_group_memberships(CONVERT_GROUP["group_id"])["members"]
+            # Whitelist is all IDs in the group that are active
+            CONVERT_GROUP["whitelist"] = [member["identity_id"]
+                                          for member in member_list
+                                          if member["status"] == "active"]
+            # Update timestamp
+            CONVERT_GROUP["updated"] = int(time.time())
+        whitelist.extend(CONVERT_GROUP["whitelist"])
+    elif auth_level == "ingest":
+        if time.time() - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
+            global INGEST_GROUP
+            # If NexusClient has not been created yet, create it
+            if type(groups_auth) is dict:
+                groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+            # Get all the members
+            member_list = groups_auth.get_group_memberships(INGEST_GROUP["group_id"])["members"]
+            # Whitelist is all IDs in the group that are active
+            INGEST_GROUP["whitelist"] = [member["identity_id"]
+                                         for member in member_list
+                                         if member["status"] == "active"]
+            # Update timestamp
+            INGEST_GROUP["updated"] = int(time.time())
+        whitelist.extend(INGEST_GROUP["whitelist"])
+    else:
+        # Invalid
+        whitelist.extend([])
+    return whitelist
 
 
 def make_source_name(title, test=False):
@@ -706,11 +809,11 @@ def accept_ingest():
         feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
                                  secure_filename(feedstock.filename))
         feedstock.save(feed_path)
-        ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
-                                                                             source_name,
-                                                                             services,
-                                                                             data_loc,
-                                                                             service_data))
+        ingester = Thread(target=connect_ingester, name="ingester_thread", args=(feed_path,
+                                                                                 source_name,
+                                                                                 services,
+                                                                                 data_loc,
+                                                                                 service_data))
     except Exception as e:
         stat_res = update_status(source_name, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -727,7 +830,7 @@ def accept_ingest():
         }), 202)
 
 
-def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
+def connect_ingester(base_feed_path, source_name, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -1409,8 +1512,8 @@ def translate_status(status):
         steps = []
         subm = "unknown submission type '{}'".format(sub_type)
 
-    usr_msg = ("Status of {} {} submission {} ({})\n"
-               "Submitted by {} at {}\n\n").format("TEST" if status["test"] else "",
+    usr_msg = ("Status of {}{} submission {} ({})\n"
+               "Submitted by {} at {}\n\n").format("TEST " if status["test"] else "",
                                                    subm,
                                                    status["source_name"],
                                                    status["title"],
