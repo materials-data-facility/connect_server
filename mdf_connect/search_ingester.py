@@ -41,18 +41,17 @@ def search_ingest(ingest_client, feedstocks, index, batch_size=100,
 
             # Delete previous version of this dataset in Search
             version = dataset_entry["mdf"]["version"]
+            old_source_name = dataset_entry["mdf"]["source_name"]
             # Find previous version with entries
             while version > 1:
-                old_source_name = dataset_entry["mdf"]["source_name"].replace("_v"+str(version),
-                                                                              "_v"+str(version-1))
+                old_source_name = old_source_name.replace("_v"+str(version), "_v"+str(version-1))
                 del_q = {
                     "q": "mdf.source_name:" + old_source_name,
                     "advanced": True
                     }
                 del_res = ingest_client.delete_by_query(index, del_q)
-                print("DEBUG:", del_res["total"], "Search entries cleared from", old_source_name)
-                if del_res["total"]:
-                    print("DEBUG:", del_res["total"],
+                if del_res["num_subjects_deleted"]:
+                    print("DEBUG:", del_res["num_subjects_deleted"],
                           "Search entries cleared from", old_source_name)
                 version -= 1
 
