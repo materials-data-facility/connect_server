@@ -463,11 +463,11 @@ def fetch_whitelist(auth_level):
     }
     # Always add admin list
     # Check for staleness
+    global ADMIN_GROUP
     if int(time.time()) - ADMIN_GROUP["updated"] > ADMIN_GROUP["frequency"]:
-        global ADMIN_GROUP
         # If NexusClient has not been created yet, create it
         if type(groups_auth) is dict:
-            groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
         # Get all the members
         member_list = groups_auth.get_group_memberships(ADMIN_GROUP["group_id"])["members"]
         # Whitelist is all IDs in the group that are active
@@ -479,11 +479,11 @@ def fetch_whitelist(auth_level):
     whitelist.extend(ADMIN_GROUP["whitelist"])
     # Add either convert or ingest whitelists
     if auth_level == "convert":
+        global CONVERT_GROUP
         if time.time() - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
-            global CONVERT_GROUP
             # If NexusClient has not been created yet, create it
             if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
             # Get all the members
             member_list = groups_auth.get_group_memberships(CONVERT_GROUP["group_id"])["members"]
             # Whitelist is all IDs in the group that are active
@@ -494,11 +494,11 @@ def fetch_whitelist(auth_level):
             CONVERT_GROUP["updated"] = int(time.time())
         whitelist.extend(CONVERT_GROUP["whitelist"])
     elif auth_level == "ingest":
+        global INGEST_GROUP
         if time.time() - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
-            global INGEST_GROUP
             # If NexusClient has not been created yet, create it
             if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.login(groups_auth)["groups"]
+                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
             # Get all the members
             member_list = groups_auth.get_group_memberships(INGEST_GROUP["group_id"])["members"]
             # Whitelist is all IDs in the group that are active
@@ -650,7 +650,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
                 # Transfer locally
                 mdf_toolbox.quick_transfer(mdf_transfer_client, user_ep, local_ep,
-                                           [(user_path, local_path)], timeout=0)
+                                           [(user_path, local_path)], timeout=0,
+                                           retries=50)
         elif protocol == "http" or protocol == "https":
             # Get extension (mostly for debugging)
             try:
@@ -699,7 +700,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         mdf_toolbox.quick_transfer(mdf_transfer_client, local_ep, backup_ep,
-                                   [(local_path, backup_path)], timeout=0)
+                                   [(local_path, backup_path)], timeout=0,
+                                   retries=50)
     return {
         "success": True
         }
@@ -993,7 +995,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             mdf_toolbox.quick_transfer(transfer_client,
                                        app.config["LOCAL_EP"], app.config["BACKUP_EP"],
                                        [(final_feed_path, backup_feed_path)],
-                                       timeout=0)
+                                       timeout=0, retries=20)
         except Exception as e:
             stat_res = update_status(source_name, "ingest_search", "R",
                                      text="Feedstock backup failed: {}".format(e))
@@ -1140,7 +1142,7 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         ep, path = loc.split("/", 1)
         path = "/" + path + ("/" if not path.endswith("/") else "")
         mdf_toolbox.quick_transfer(transfer_client, ep, pub_endpoint,
-                                   [(path, pub_path)], timeout=0)
+                                   [(path, pub_path)], timeout=0, retries=50)
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
@@ -1268,18 +1270,26 @@ def get_status(source_name):
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
-    with open(app.config["ADMIN_WHITELIST"]) as f:
-        admin_whitelist = list(json.load(f).values())
+    try:
+        admin_res = authenticate_token(request.headers.get("Authorization"), auth_level="admin")
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
     # If actually not found
     if (not raw_status["success"]
         # or dataset not public
         or (raw_status["status"]["acl"] != ["public"]
             # and user was not submitter
-            and not (raw_status["status"]["user_id"] in uid_set
-                     # user is not in ACL
-                     or any([uid in raw_status["status"]["acl"] for uid in uid_set])
-                     # user is not admin
-                     or any([uid in admin_whitelist for uid in uid_set])))):
+            and raw_status["status"]["user_id"] not in uid_set
+            # and user is not in ACL
+            and not any([uid in raw_status["status"]["acl"] for uid in uid_set])
+            # and user is not admin
+            and not admin_res["success"])):
+        # Summary:
+        # if (NOT found)
+        #    OR (NOT public AND user != submitter AND user not in acl_list AND user is not admin)
         return (jsonify({
             "success": False,
             "error": "Submission {} not found, or not available".format(source_name)
