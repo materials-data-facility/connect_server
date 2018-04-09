@@ -151,7 +151,8 @@ def accept_convert():
             "details": str(e)
             }), 400)
 
-    test = metadata.get("test", False)
+    # test = True if set in metadata or config
+    test = metadata.pop("test", False) or app.config["DEFAULT_TEST_FLAG"]
 
     sub_title = metadata["dc"]["titles"][0]["title"]
     source_name_info = make_source_name(
@@ -170,6 +171,41 @@ def accept_convert():
     metadata["mdf"]["version"] = source_name_info["version"]
     if not metadata["mdf"].get("acl"):
         metadata["mdf"]["acl"] = ["public"]
+
+    # If the user has set a non-test Publish collection, verify user is in correct group
+    if not test and isinstance(metadata.get("services", {}).get("globus_publish"), dict):
+        collection = str(metadata["services"]["globus_publish"].get("collection_id")
+                         or metadata["services"]["globus_publish"].get("collection_name", ""))
+        # Make sure collection is in PUBLISH_COLLECTIONS, and grab the info
+        if collection not in app.config["PUBLISH_COLLECTIONS"].keys():
+            collection = [col_val for col_val in app.config["PUBLISH_COLLECTIONS"].values()
+                          if col_val["name"].strip().lower() == collection.strip().lower()]
+            if len(collection) == 0:
+                return (jsonify({
+                    "success": False,
+                    "error": ("Submission to Globus Publish collection '{}' "
+                              "is not supported.").format(collection)
+                    }), 400)
+            elif len(collection) > 1:
+                return (jsonify({
+                    "success": False,
+                    "error": "Globus Publish collection {} is not unique.".format(collection)
+                    }), 400)
+            else:
+                collection = collection[0]
+        else:
+            collection = app.config["PUBLISH_COLLECTIONS"][collection]
+        try:
+            auth_res = authenticate_token(request.headers.get("Authorization"),
+                                          auth_level=collection["group"])
+        except Exception as e:
+            return (jsonify({
+                "success": False,
+                "error": "Group authentication failed"
+                }), 500)
+        if not auth_res["success"]:
+            error_code = auth_res.pop("error_code")
+            return (jsonify(auth_res), error_code)
 
     status_info = {
         "source_name": source_name,
@@ -192,7 +228,9 @@ def accept_convert():
     if not status_res["success"]:
         return (jsonify(status_res), 500)
 
-    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata, source_name))
+    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata,
+                                                                       source_name,
+                                                                       test))
     driver.start()
     return (jsonify({
         "success": True,
@@ -200,7 +238,7 @@ def accept_convert():
         }), 202)
 
 
-def convert_driver(metadata, source_name):
+def convert_driver(metadata, source_name, test):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
@@ -225,7 +263,6 @@ def convert_driver(metadata, source_name):
             raise ValueError(str(stat_res))
         else:
             return
-    test = metadata.pop("test", False)
     stat_res = update_status(source_name, "convert_start", "S")
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
@@ -307,7 +344,7 @@ def convert_driver(metadata, source_name):
                 return
         # If no records, warn user
         elif num_parsed == 0:
-            stat_res = update_status(source_name, "converting", "F",  # "U",
+            stat_res = update_status(source_name, "converting", "U",
                                      text=("No records were parsed out of {} groups"
                                            .format(num_groups)))
             if not stat_res["success"]:
@@ -435,7 +472,7 @@ def authenticate_token(token, auth_level):
         print("DEBUG: User not in whitelist:", auth_res["username"])
         return {
             "success": False,
-            "error": "You cannot access this service (yet)",
+            "error": "You cannot access this service or collection",
             "error_code": 403
         }
 
@@ -451,9 +488,8 @@ def authenticate_token(token, auth_level):
 
 
 def fetch_whitelist(auth_level):
-    allowed_levels = ["admin", "convert", "ingest"]
-    if auth_level not in allowed_levels:
-        raise ValueError("Invalid auth level '{}'".format(auth_level))
+    # auth_level values:
+    # admin, convert, ingest, [Group ID]
     whitelist = []
     groups_auth = {
         "app_name": "MDF Open Connect",
@@ -509,8 +545,19 @@ def fetch_whitelist(auth_level):
             INGEST_GROUP["updated"] = int(time.time())
         whitelist.extend(INGEST_GROUP["whitelist"])
     else:
-        # Invalid
-        whitelist.extend([])
+        # Assume auth_level is Group ID
+        # If NexusClient has not been created yet, create it
+        if type(groups_auth) is dict:
+            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
+        # Get all the members
+        try:
+            member_list = groups_auth.get_group_memberships(auth_level)["members"]
+        except Exception as e:
+            pass
+        else:
+            whitelist.extend([member["identity_id"]
+                              for member in member_list
+                              if member["status"] == "active"])
     return whitelist
 
 
@@ -804,11 +851,6 @@ def accept_ingest():
                 "test": True
             }
     else:
-        # TODO: Remove this when we can verify user is allowed to Publish into collections
-        if services.get("globus_publish"):
-            services["globus_publish"] = {
-                "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
-            }
         if services.get("mrr"):
             services["mrr"] = {
                 "test": app.config["DEFAULT_MRR_TEST"]
@@ -1656,6 +1698,13 @@ def translate_status(status):
             })
         elif code == 'P':
             msg = "{} is in progress.".format(step)
+            usr_msg += msg + "\n"
+            web_msg.append({
+                "signal": "started",
+                "text": msg
+            })
+        elif code == 'T':
+            msg = "{} is retrying due to an error: {}".format(step, errors.pop(0))
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "started",
