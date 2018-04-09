@@ -799,11 +799,19 @@ def accept_ingest():
             services["citrine"] = {
                 "public": False
             }
-    # TODO: Remove this when we can verify user is allowed to Publish into collections
+        if services.get("mrr"):
+            services["mrr"] = {
+                "test": True
+            }
     else:
+        # TODO: Remove this when we can verify user is allowed to Publish into collections
         if services.get("globus_publish"):
             services["globus_publish"] = {
                 "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
+            }
+        if services.get("mrr"):
+            services["mrr"] = {
+                "test": app.config["DEFAULT_MRR_TEST"]
             }
 
     # Save file
@@ -1102,11 +1110,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         try:
+            if isinstance(services["mrr"], dict) and services["mrr"].get("test"):
+                mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
+            else:
+                mrr_title = dataset["dc"]["titles"][0]["title"]
             mrr_entry = {
                 "title": dataset["dc"]["titles"][0]["title"],
                 "schema": app.config["MRR_SCHEMA"],
                 "content": app.config["MRR_TEMPLATE"].format(
-                                title=dataset["dc"]["titles"][0]["title"],
+                                title=mrr_title,
                                 publisher=dataset["dc"]["publisher"],
                                 contributors="".join(
                                     [app.config["MRR_CONTRIBUTOR"].format(
@@ -1128,7 +1140,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 mrr_res = requests.post(app.config["MRR_URL"],
                                         auth=(app.config["MRR_USERNAME"],
                                               app.config["MRR_PASSWORD"]),
-                                        data=mrr_entry)
+                                        data=mrr_entry).json()
             except Exception as e:
                 stat_res = update_status(source_name, "ingest_mrr", "F",
                                          text="Unable to submit MRR entry:"+str(e))
