@@ -1097,8 +1097,58 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             raise ValueError(str(stat_res))
 
     # MRR
-    # TODO
-    stat_res = update_status(source_name, "ingest_mrr", "N")
+    if services.get("mrr"):
+        stat_res = update_status(source_name, "ingest_mrr", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        try:
+            mrr_entry = {
+                "title": dataset["dc"]["titles"][0]["title"],
+                "schema": app.config["MRR_SCHEMA"],
+                "content": app.config["MRR_TEMPLATE"].format(
+                                title=dataset["dc"]["titles"][0]["title"],
+                                publisher=dataset["dc"]["publisher"],
+                                contributors="".join(
+                                    [app.config["MRR_CONTRIBUTOR"].format(
+                                        name=author.get("givenName", "") + " "
+                                             + author.get("familyName", ""),
+                                        affiliation=author.get("affiliation", ""))
+                                     for author in dataset["dc"]["creators"]]),
+                                contact_name=dataset["dc"]["creators"][0]["creatorName"],
+                                description=dataset["dc"].get("description", ""),
+                                subject="")
+            }
+        except Exception as e:
+            stat_res = update_status(source_name, "ingest_mrr", "F",
+                                     text="Unable to create MRR metadata:"+str(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+        else:
+            try:
+                mrr_res = requests.post(app.config["MRR_URL"],
+                                        auth=(app.config["MRR_USERNAME"],
+                                              app.config["MRR_PASSWORD"]),
+                                        data=mrr_entry)
+            except Exception as e:
+                stat_res = update_status(source_name, "ingest_mrr", "F",
+                                         text="Unable to submit MRR entry:"+str(e))
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+            else:
+                if mrr_res.get("_id"):
+                    stat_res = update_status(source_name, "ingest_mrr", "M",
+                                             text="Entry ID: "+mrr_res["_id"])
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+                else:
+                    stat_res = update_status(source_name, "ingest_mrr", "F",
+                                             text=mrr_res.get("message", "Unknown failure"))
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+    else:
+        stat_res = update_status(source_name, "ingest_mrr", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Cleanup
     cleanups = [
