@@ -6,22 +6,23 @@ from queue import Empty
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
 
-import ase.io
-from bson import ObjectId
-import hyperspy.api as hs
-import magic
-from mdf_toolbox import toolbox
-import pandas as pd
-from PIL import Image
-import pycalphad
-import pymatgen
-from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg
-from pif_ingestor.manager import IngesterManager
-from pypif.pif import dump as pif_dump
-from pypif_sdk.util import citrination as cit_utils
-from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock
-from pypif_sdk.interop.datacite import add_datacite as add_dc
-import yaml
+# E402: module level import not at top of file
+import ase.io  # noqa: E402
+from bson import ObjectId  # noqa: E402
+import hyperspy.api as hs  # noqa: E402
+import magic  # noqa: E402
+from mdf_toolbox import toolbox  # noqa: E402
+import pandas as pd  # noqa: E402
+from PIL import Image  # noqa: E402
+import pycalphad  # noqa: E402
+import pymatgen  # noqa: E402
+from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
+from pif_ingestor.manager import IngesterManager  # noqa: E402
+from pypif.pif import dump as pif_dump  # noqa: E402
+from pypif_sdk.util import citrination as cit_utils  # noqa: E402
+from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock  # noqa: E402
+from pypif_sdk.interop.datacite import add_datacite as add_dc  # noqa: E402
+import yaml  # noqa: E402
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]

@@ -7,6 +7,7 @@ import shutil
 import tarfile
 import tempfile
 from threading import Thread
+import time
 import urllib
 import zipfile
 
@@ -68,6 +69,31 @@ STATUS_STEPS = (
 # and the convert steps are STATUS_STEPS[:INGEST_MARK]
 INGEST_MARK = 4
 
+# Global save locations for whitelists
+CONVERT_GROUP = {
+    # Globus Groups UUID
+    "group_id": app.config["CONVERT_GROUP_ID"],
+    # Group member IDs
+    "whitelist": [],
+    # UNIX timestamp of last update
+    "updated": 0,
+    # Refresh frequency (in seconds)
+    #   X days * 24 hours/day * 60 minutes/hour * 60 seconds/minute
+    "frequency": 1 * 60 * 60  # 1 hour
+}
+INGEST_GROUP = {
+    "group_id": app.config["INGEST_GROUP_ID"],
+    "whitelist": [],
+    "updated": 0,
+    "frequency": 1 * 24 * 60 * 60  # 1 day
+}
+ADMIN_GROUP = {
+    "group_id": app.config["ADMIN_GROUP_ID"],
+    "whitelist": [],
+    "updated": 0,
+    "frequency": 1 * 24 * 60 * 60  # 1 day
+}
+
 
 @app.route('/', methods=["GET", "POST"])
 def root_call():
@@ -102,8 +128,17 @@ def accept_convert():
             }), 400)
 
     # Validate input JSON
+    # resourceType is always going to be Dataset, don't require from user
+    if not metadata.get("dc", {}).get("resourceType"):
+        try:
+            metadata["dc"]["resourceType"] = {
+                "resourceTypeGeneral": "Dataset",
+                "resourceType": "Dataset"
+            }
+        except Exception:
+            pass
     schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "moc_convert.json")) as schema_file:
+    with open(os.path.join(schema_dir, "connect_convert.json")) as schema_file:
         schema = json.load(schema_file)
     resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
                                       referrer=schema)
@@ -116,7 +151,8 @@ def accept_convert():
             "details": str(e)
             }), 400)
 
-    test = metadata.get("test", False)
+    # test = True if set in metadata or config
+    test = metadata.pop("test", False) or app.config["DEFAULT_TEST_FLAG"]
 
     sub_title = metadata["dc"]["titles"][0]["title"]
     source_name_info = make_source_name(
@@ -135,6 +171,41 @@ def accept_convert():
     metadata["mdf"]["version"] = source_name_info["version"]
     if not metadata["mdf"].get("acl"):
         metadata["mdf"]["acl"] = ["public"]
+
+    # If the user has set a non-test Publish collection, verify user is in correct group
+    if not test and isinstance(metadata.get("services", {}).get("globus_publish"), dict):
+        collection = str(metadata["services"]["globus_publish"].get("collection_id")
+                         or metadata["services"]["globus_publish"].get("collection_name", ""))
+        # Make sure collection is in PUBLISH_COLLECTIONS, and grab the info
+        if collection not in app.config["PUBLISH_COLLECTIONS"].keys():
+            collection = [col_val for col_val in app.config["PUBLISH_COLLECTIONS"].values()
+                          if col_val["name"].strip().lower() == collection.strip().lower()]
+            if len(collection) == 0:
+                return (jsonify({
+                    "success": False,
+                    "error": ("Submission to Globus Publish collection '{}' "
+                              "is not supported.").format(collection)
+                    }), 400)
+            elif len(collection) > 1:
+                return (jsonify({
+                    "success": False,
+                    "error": "Globus Publish collection {} is not unique.".format(collection)
+                    }), 400)
+            else:
+                collection = collection[0]
+        else:
+            collection = app.config["PUBLISH_COLLECTIONS"][collection]
+        try:
+            auth_res = authenticate_token(request.headers.get("Authorization"),
+                                          auth_level=collection["group"])
+        except Exception as e:
+            return (jsonify({
+                "success": False,
+                "error": "Group authentication failed"
+                }), 500)
+        if not auth_res["success"]:
+            error_code = auth_res.pop("error_code")
+            return (jsonify(auth_res), error_code)
 
     status_info = {
         "source_name": source_name,
@@ -157,7 +228,9 @@ def accept_convert():
     if not status_res["success"]:
         return (jsonify(status_res), 500)
 
-    driver = Thread(target=moc_driver, name="driver_thread", args=(metadata, source_name))
+    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata,
+                                                                       source_name,
+                                                                       test))
     driver.start()
     return (jsonify({
         "success": True,
@@ -165,7 +238,7 @@ def accept_convert():
         }), 202)
 
 
-def moc_driver(metadata, source_name):
+def convert_driver(metadata, source_name, test):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
@@ -178,19 +251,18 @@ def moc_driver(metadata, source_name):
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],
         "client_secret": app.config["API_CLIENT_SECRET"],
-        "services": ["transfer", "moc"]
+        "services": ["transfer", "connect"]
         }
     try:
         clients = mdf_toolbox.confidential_login(creds)
         transfer_client = clients["transfer"]
-        moc_authorizer = clients["moc"]
+        connect_authorizer = clients["connect"]
     except Exception as e:
         stat_res = update_status(source_name, "convert_start", "F", text=repr(e))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
             return
-    test = metadata.pop("test", False)
     stat_res = update_status(source_name, "convert_start", "S")
     if not stat_res["success"]:
         raise ValueError(str(stat_res))
@@ -202,12 +274,17 @@ def moc_driver(metadata, source_name):
     local_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], source_name) + "/"
     try:
-        dl_res = download_and_backup(transfer_client,
-                                     metadata.pop("data", {}),
-                                     app.config["LOCAL_EP"],
-                                     local_path,
-                                     app.config["BACKUP_EP"] if not test else None,
-                                     backup_path if not test else None)
+        for dl_res in download_and_backup(transfer_client,
+                                          metadata.pop("data", {}),
+                                          app.config["LOCAL_EP"],
+                                          local_path,
+                                          app.config["BACKUP_EP"] if not test else None,
+                                          backup_path if not test else None):
+            if not dl_res["success"]:
+                stat_res = update_status(source_name, "convert_download", "T",
+                                         text=dl_res["error"])
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
     except Exception as e:
         stat_res = update_status(source_name, "convert_download", "F", text=repr(e))
         if not stat_res["success"]:
@@ -215,7 +292,7 @@ def moc_driver(metadata, source_name):
         else:
             return
     if not dl_res["success"]:
-        stat_res = update_status(source_name, "convert_download", "F", text=str(dl_res))
+        stat_res = update_status(source_name, "convert_download", "F", text=dl_res["error"])
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
@@ -272,7 +349,7 @@ def moc_driver(metadata, source_name):
                 return
         # If no records, warn user
         elif num_parsed == 0:
-            stat_res = update_status(source_name, "converting", "F",  # "U",
+            stat_res = update_status(source_name, "converting", "U",
                                      text=("No records were parsed out of {} groups"
                                            .format(num_groups)))
             if not stat_res["success"]:
@@ -306,7 +383,7 @@ def moc_driver(metadata, source_name):
                 "test": json.dumps(test)
             }
             headers = {}
-            moc_authorizer.set_authorization_header(headers)
+            connect_authorizer.set_authorization_header(headers)
             ingest_res = requests.post(app.config["INGEST_URL"],
                                        data=ingest_args,
                                        files={'file': stock},
@@ -339,7 +416,12 @@ def moc_driver(metadata, source_name):
 
 
 def authenticate_token(token, auth_level):
-    """Auth a token"""
+    """Auth a token
+    Levels:
+        convert
+        ingest
+        admin
+    """
     if not token:
         return {
             "success": False,
@@ -376,30 +458,29 @@ def authenticate_token(token, auth_level):
             or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
         return {
             "success": False,
-            "error": "Not authorized to MOC scope",
+            "error": "Not authorized to MDF Connect scope",
             "error_code": 401
         }
-    # Finally, verify that user ID is in whitelist
-    # Can be any identity the user has (MOC is identity-aware)
-    whitelist = []
-    if auth_level == "admin" or auth_level == "ingest" or auth_level == "convert":
-        with open(app.config["ADMIN_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-    if auth_level == "ingest" or auth_level == "convert":
-        with open(app.config["INGEST_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-    if auth_level == "convert":
-        with open(app.config["CONVERT_WHITELIST"]) as f:
-            whitelist.extend(json.load(f).values())
-
+    # Finally, verify user is in appropriate group
+    try:
+        whitelist = fetch_whitelist(auth_level)
+        if len(whitelist) == 0:
+            raise ValueError("Whitelist empty")
+    except Exception as e:
+        print("ERROR: Whitelist generation failed:", e)
+        return {
+            "success": False,
+            "error": "Unable to fetch Group memberships.",
+            "error_code": 500
+        }
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        # TODO: Proper logging
         print("DEBUG: User not in whitelist:", auth_res["username"])
         return {
             "success": False,
-            "error": "You cannot access this service (yet)",
+            "error": "You cannot access this service or collection",
             "error_code": 403
         }
+
     return {
         "success": True,
         "token_info": auth_res,
@@ -409,6 +490,83 @@ def authenticate_token(token, auth_level):
         "email": auth_res["email"] or "Not given",
         "identities_set": auth_res["identities_set"]
     }
+
+
+def fetch_whitelist(auth_level):
+    # auth_level values:
+    # admin, convert, ingest, [Group ID]
+    whitelist = []
+    groups_auth = {
+        "app_name": "MDF Open Connect",
+        "client_id": app.config["API_CLIENT_ID"],
+        "client_secret": app.config["API_CLIENT_SECRET"],
+        "services": ["groups"]
+    }
+    # Always add admin list
+    # Check for staleness
+    global ADMIN_GROUP
+    if int(time.time()) - ADMIN_GROUP["updated"] > ADMIN_GROUP["frequency"]:
+        # If NexusClient has not been created yet, create it
+        if type(groups_auth) is dict:
+            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
+        # Get all the members
+        member_list = groups_auth.get_group_memberships(ADMIN_GROUP["group_id"])["members"]
+        # Whitelist is all IDs in the group that are active
+        ADMIN_GROUP["whitelist"] = [member["identity_id"]
+                                    for member in member_list
+                                    if member["status"] == "active"]
+        # Update timestamp
+        ADMIN_GROUP["updated"] = int(time.time())
+    whitelist.extend(ADMIN_GROUP["whitelist"])
+    # Add either convert or ingest whitelists
+    if auth_level == "convert":
+        global CONVERT_GROUP
+        if int(time.time()) - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
+            # If NexusClient has not been created yet, create it
+            if type(groups_auth) is dict:
+                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
+            # Get all the members
+            member_list = groups_auth.get_group_memberships(CONVERT_GROUP["group_id"])["members"]
+            # Whitelist is all IDs in the group that are active
+            CONVERT_GROUP["whitelist"] = [member["identity_id"]
+                                          for member in member_list
+                                          if member["status"] == "active"]
+            # Update timestamp
+            CONVERT_GROUP["updated"] = int(time.time())
+        whitelist.extend(CONVERT_GROUP["whitelist"])
+    elif auth_level == "ingest":
+        global INGEST_GROUP
+        if int(time.time()) - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
+            # If NexusClient has not been created yet, create it
+            if type(groups_auth) is dict:
+                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
+            # Get all the members
+            member_list = groups_auth.get_group_memberships(INGEST_GROUP["group_id"])["members"]
+            # Whitelist is all IDs in the group that are active
+            INGEST_GROUP["whitelist"] = [member["identity_id"]
+                                         for member in member_list
+                                         if member["status"] == "active"]
+            # Update timestamp
+            INGEST_GROUP["updated"] = int(time.time())
+        whitelist.extend(INGEST_GROUP["whitelist"])
+    elif auth_level == "admin":
+        # Already handled admins
+        pass
+    else:
+        # Assume auth_level is Group ID
+        # If NexusClient has not been created yet, create it
+        if type(groups_auth) is dict:
+            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
+        # Get all the members
+        try:
+            member_list = groups_auth.get_group_memberships(auth_level)["members"]
+        except Exception as e:
+            pass
+        else:
+            whitelist.extend([member["identity_id"]
+                              for member in member_list
+                              if member["status"] == "active"])
+    return whitelist
 
 
 def make_source_name(title, test=False):
@@ -546,8 +704,18 @@ def download_and_backup(mdf_transfer_client, data_loc,
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
 
                 # Transfer locally
-                mdf_toolbox.quick_transfer(mdf_transfer_client, user_ep, local_ep,
-                                           [(user_path, local_path)], timeout=0)
+                transfer = mdf_toolbox.custom_transfer(
+                                mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                                inactivity_time=app.config["TRANSFER_DEADLINE"])
+                for event in transfer:
+                    if not event["success"]:
+                        yield {
+                            "success": False,
+                            "error": "{} - {}".format(event["code"], event["description"])
+                        }
+                if not event["success"]:
+                    raise ValueError(event)
+
         elif protocol == "http" or protocol == "https":
             # Get extension (mostly for debugging)
             try:
@@ -595,11 +763,17 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
     # Back up data
     if backup_ep and backup_path:
-        mdf_toolbox.quick_transfer(mdf_transfer_client, local_ep, backup_ep,
-                                   [(local_path, backup_path)], timeout=0)
-    return {
+        transfer = mdf_toolbox.custom_transfer(
+                        mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+        for event in transfer:
+            if not event["success"]:
+                print(event)
+        if not event["success"]:
+            raise ValueError(event["code"]+": "+event["description"])
+    yield {
         "success": True
-        }
+    }
 
 
 @app.route("/ingest", methods=["POST"])
@@ -694,11 +868,14 @@ def accept_ingest():
             services["citrine"] = {
                 "public": False
             }
-    # TODO: Remove this when we can verify user is allowed to Publish into collections
+        if services.get("mrr"):
+            services["mrr"] = {
+                "test": True
+            }
     else:
-        if services.get("globus_publish"):
-            services["globus_publish"] = {
-                "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
+        if services.get("mrr"):
+            services["mrr"] = {
+                "test": app.config["DEFAULT_MRR_TEST"]
             }
 
     # Save file
@@ -706,11 +883,11 @@ def accept_ingest():
         feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
                                  secure_filename(feedstock.filename))
         feedstock.save(feed_path)
-        ingester = Thread(target=moc_ingester, name="ingester_thread", args=(feed_path,
-                                                                             source_name,
-                                                                             services,
-                                                                             data_loc,
-                                                                             service_data))
+        ingester = Thread(target=connect_ingester, name="ingester_thread", args=(feed_path,
+                                                                                 source_name,
+                                                                                 services,
+                                                                                 data_loc,
+                                                                                 service_data))
     except Exception as e:
         stat_res = update_status(source_name, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -727,7 +904,7 @@ def accept_ingest():
         }), 202)
 
 
-def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
+def connect_ingester(base_feed_path, source_name, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -876,9 +1053,6 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         else:
             return
     else:
-        stat_res = update_status(source_name, "ingest_search", "S")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
         # Other services use the dataset information
         if services:
             with open(final_feed_path) as f:
@@ -887,16 +1061,24 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
         backup_feed_path = os.path.join(app.config["BACKUP_FEEDSTOCK"],
                                         source_name + "_final.json")
         try:
-            mdf_toolbox.quick_transfer(transfer_client,
-                                       app.config["LOCAL_EP"], app.config["BACKUP_EP"],
-                                       [(final_feed_path, backup_feed_path)],
-                                       timeout=0)
+            transfer = mdf_toolbox.custom_transfer(
+                            transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                            [(final_feed_path, backup_feed_path)],
+                            inactivity_time=app.config["TRANSFER_DEADLINE"])
+            for event in transfer:
+                if not event["success"]:
+                    print(event)
+            if not event["success"]:
+                raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
             stat_res = update_status(source_name, "ingest_search", "R",
                                      text="Feedstock backup failed: {}".format(e))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
+            stat_res = update_status(source_name, "ingest_search", "S")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
             os.remove(final_feed_path)
 
     # Globus Publish
@@ -992,8 +1174,61 @@ def moc_ingester(base_feed_path, source_name, services, data_loc, service_loc):
             raise ValueError(str(stat_res))
 
     # MRR
-    # TODO
-    stat_res = update_status(source_name, "ingest_mrr", "N")
+    if services.get("mrr"):
+        stat_res = update_status(source_name, "ingest_mrr", "P")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        try:
+            if isinstance(services["mrr"], dict) and services["mrr"].get("test"):
+                mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
+            else:
+                mrr_title = dataset["dc"]["titles"][0]["title"]
+            mrr_entry = {
+                "title": dataset["dc"]["titles"][0]["title"],
+                "schema": app.config["MRR_SCHEMA"],
+                "content": app.config["MRR_TEMPLATE"].format(
+                                title=mrr_title,
+                                publisher=dataset["dc"]["publisher"],
+                                contributors="".join(
+                                    [app.config["MRR_CONTRIBUTOR"].format(
+                                        name=author.get("givenName", "") + " "
+                                             + author.get("familyName", ""),
+                                        affiliation=author.get("affiliation", ""))
+                                     for author in dataset["dc"]["creators"]]),
+                                contact_name=dataset["dc"]["creators"][0]["creatorName"],
+                                description=dataset["dc"].get("description", ""),
+                                subject="")
+            }
+        except Exception as e:
+            stat_res = update_status(source_name, "ingest_mrr", "F",
+                                     text="Unable to create MRR metadata:"+str(e))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+        else:
+            try:
+                mrr_res = requests.post(app.config["MRR_URL"],
+                                        auth=(app.config["MRR_USERNAME"],
+                                              app.config["MRR_PASSWORD"]),
+                                        data=mrr_entry).json()
+            except Exception as e:
+                stat_res = update_status(source_name, "ingest_mrr", "F",
+                                         text="Unable to submit MRR entry:"+str(e))
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+            else:
+                if mrr_res.get("_id"):
+                    stat_res = update_status(source_name, "ingest_mrr", "S")
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+                else:
+                    stat_res = update_status(source_name, "ingest_mrr", "F",
+                                             text=mrr_res.get("message", "Unknown failure"))
+                    if not stat_res["success"]:
+                        raise ValueError(str(stat_res))
+    else:
+        stat_res = update_status(source_name, "ingest_mrr", "N")
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
 
     # Cleanup
     cleanups = [
@@ -1036,8 +1271,13 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         loc = loc.replace("globus://", "")
         ep, path = loc.split("/", 1)
         path = "/" + path + ("/" if not path.endswith("/") else "")
-        mdf_toolbox.quick_transfer(transfer_client, ep, pub_endpoint,
-                                   [(path, pub_path)], timeout=0)
+        transfer = mdf_toolbox.custom_transfer(
+                        transfer_client, ep, pub_endpoint, [(path, pub_path)],
+                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+        for event in transfer:
+            pass
+        if not event["success"]:
+            raise ValueError(event["code"]+": "+event["description"])
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
@@ -1165,18 +1405,26 @@ def get_status(source_name):
     raw_status = read_status(source_name)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
-    with open(app.config["ADMIN_WHITELIST"]) as f:
-        admin_whitelist = list(json.load(f).values())
+    try:
+        admin_res = authenticate_token(request.headers.get("Authorization"), auth_level="admin")
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
     # If actually not found
     if (not raw_status["success"]
         # or dataset not public
         or (raw_status["status"]["acl"] != ["public"]
             # and user was not submitter
-            and not (raw_status["status"]["user_id"] in uid_set
-                     # user is not in ACL
-                     or any([uid in raw_status["status"]["acl"] for uid in uid_set])
-                     # user is not admin
-                     or any([uid in admin_whitelist for uid in uid_set])))):
+            and raw_status["status"]["user_id"] not in uid_set
+            # and user is not in ACL
+            and not any([uid in raw_status["status"]["acl"] for uid in uid_set])
+            # and user is not admin
+            and not admin_res["success"])):
+        # Summary:
+        # if (NOT found)
+        #    OR (NOT public AND user != submitter AND user not in acl_list AND user is not admin)
         return (jsonify({
             "success": False,
             "error": "Submission {} not found, or not available".format(source_name)
@@ -1239,7 +1487,7 @@ def create_status(status):
     # Create defaults
     status["messages"] = []
     status["errors"] = []
-    status["code"] = "W" * len(STATUS_STEPS)
+    status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
     if read_status(status["source_name"])["success"]:
@@ -1321,6 +1569,8 @@ def update_status(source_name, step, code, text=None, link=None):
         status["errors"].append(text or "An error occurred but we're recovering")
     elif code == 'U':
         status["messages"].append(text or "Processing will continue")
+    elif code == 'T':
+        status["errors"].append(text or "Retrying")
     status["code"] = "".join(code_list)
 
     try:
@@ -1409,8 +1659,8 @@ def translate_status(status):
         steps = []
         subm = "unknown submission type '{}'".format(sub_type)
 
-    usr_msg = ("Status of {} {} submission {} ({})\n"
-               "Submitted by {} at {}\n\n").format("TEST" if status["test"] else "",
+    usr_msg = ("Status of {}{} submission {} ({})\n"
+               "Submitted by {} at {}\n\n").format("TEST " if status["test"] else "",
                                                    subm,
                                                    status["source_name"],
                                                    status["title"],
@@ -1486,6 +1736,13 @@ def translate_status(status):
                 "signal": "started",
                 "text": msg
             })
+        elif code == 'T':
+            msg = "{} is retrying due to an error: {}".format(step, errors.pop(0))
+            usr_msg += msg + "\n"
+            web_msg.append({
+                "signal": "started",
+                "text": msg
+            })
         elif code == 'X':
             msg = "{} was cancelled.".format(step)
             usr_msg += msg + "\n"
@@ -1493,7 +1750,7 @@ def translate_status(status):
                 "signal": "idle",
                 "text": msg
             })
-        elif code == 'W':
+        elif code == 'z':
             msg = "{} has not started yet.".format(step)
             usr_msg += msg + "\n"
             web_msg.append({
