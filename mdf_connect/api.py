@@ -274,12 +274,15 @@ def convert_driver(metadata, source_name, test):
     local_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], source_name) + "/"
     try:
-        dl_res = download_and_backup(transfer_client,
-                                     metadata.pop("data", {}),
-                                     app.config["LOCAL_EP"],
-                                     local_path,
-                                     app.config["BACKUP_EP"] if not test else None,
-                                     backup_path if not test else None)
+        for dl_res in download_and_backup(transfer_client,
+                                          metadata.pop("data", {}),
+                                          app.config["LOCAL_EP"],
+                                          local_path,
+                                          app.config["BACKUP_EP"] if not test else None,
+                                          backup_path if not test else None):
+            if not dl_res["success"]:
+                stat_res = update_status(source_name, "convert_download", "T",
+                                         text=dl_res["error"])
     except Exception as e:
         stat_res = update_status(source_name, "convert_download", "F", text=repr(e))
         if not stat_res["success"]:
@@ -516,7 +519,7 @@ def fetch_whitelist(auth_level):
     # Add either convert or ingest whitelists
     if auth_level == "convert":
         global CONVERT_GROUP
-        if time.time() - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
+        if int(time.time()) - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
             # If NexusClient has not been created yet, create it
             if type(groups_auth) is dict:
                 groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
@@ -531,7 +534,7 @@ def fetch_whitelist(auth_level):
         whitelist.extend(CONVERT_GROUP["whitelist"])
     elif auth_level == "ingest":
         global INGEST_GROUP
-        if time.time() - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
+        if int(time.time()) - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
             # If NexusClient has not been created yet, create it
             if type(groups_auth) is dict:
                 groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
@@ -696,9 +699,18 @@ def download_and_backup(mdf_transfer_client, data_loc,
                 user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
 
                 # Transfer locally
-                mdf_toolbox.quick_transfer(mdf_transfer_client, user_ep, local_ep,
-                                           [(user_path, local_path)], timeout=0,
-                                           retries=50)
+                transfer = mdf_toolbox.custom_transfer(
+                                mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                                inactivity_time=app.config["TRANSFER_DEADLINE"])
+                for event in transfer:
+                    if not event["success"]:
+                        yield {
+                            "success": False,
+                            "error": "{} - {}".format(event["code"], event["details"])
+                        }
+                if not event["success"]:
+                    raise ValueError(event)
+
         elif protocol == "http" or protocol == "https":
             # Get extension (mostly for debugging)
             try:
@@ -746,12 +758,17 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
     # Back up data
     if backup_ep and backup_path:
-        mdf_toolbox.quick_transfer(mdf_transfer_client, local_ep, backup_ep,
-                                   [(local_path, backup_path)], timeout=0,
-                                   retries=50)
-    return {
+        transfer = mdf_toolbox.custom_transfer(
+                        mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+        for event in transfer:
+            if not event["success"]:
+                print(event)
+        if not event["success"]:
+            raise ValueError(event["code"]+": "+event["description"])
+    yield {
         "success": True
-        }
+    }
 
 
 @app.route("/ingest", methods=["POST"])
@@ -1042,10 +1059,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         backup_feed_path = os.path.join(app.config["BACKUP_FEEDSTOCK"],
                                         source_name + "_final.json")
         try:
-            mdf_toolbox.quick_transfer(transfer_client,
-                                       app.config["LOCAL_EP"], app.config["BACKUP_EP"],
-                                       [(final_feed_path, backup_feed_path)],
-                                       timeout=0, retries=20)
+            transfer = mdf_toolbox.custom_transfer(
+                            transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                            [(final_feed_path, backup_feed_path)],
+                            inactivity_time=app.config["TRANSFER_DEADLINE"])
+            for event in transfer:
+                if not event["success"]:
+                    print(event)
+            if not event["success"]:
+                raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
             stat_res = update_status(source_name, "ingest_search", "R",
                                      text="Feedstock backup failed: {}".format(e))
@@ -1190,8 +1212,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     raise ValueError(str(stat_res))
             else:
                 if mrr_res.get("_id"):
-                    stat_res = update_status(source_name, "ingest_mrr", "M",
-                                             text="Entry ID: "+mrr_res["_id"])
+                    stat_res = update_status(source_name, "ingest_mrr", "S")
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
                 else:
@@ -1245,8 +1266,13 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         loc = loc.replace("globus://", "")
         ep, path = loc.split("/", 1)
         path = "/" + path + ("/" if not path.endswith("/") else "")
-        mdf_toolbox.quick_transfer(transfer_client, ep, pub_endpoint,
-                                   [(path, pub_path)], timeout=0, retries=50)
+        transfer = mdf_toolbox.custom_transfer(
+                        transfer_client, ep, pub_endpoint, [(path, pub_path)],
+                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+        for event in transfer:
+            pass
+        if not event["success"]:
+            raise ValueError(event["code"]+": "+event["description"])
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
@@ -1456,7 +1482,7 @@ def create_status(status):
     # Create defaults
     status["messages"] = []
     status["errors"] = []
-    status["code"] = "W" * len(STATUS_STEPS)
+    status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
     if read_status(status["source_name"])["success"]:
@@ -1538,6 +1564,8 @@ def update_status(source_name, step, code, text=None, link=None):
         status["errors"].append(text or "An error occurred but we're recovering")
     elif code == 'U':
         status["messages"].append(text or "Processing will continue")
+    elif code == 'T':
+        status["errors"].append(text or "Retrying")
     status["code"] = "".join(code_list)
 
     try:
@@ -1717,7 +1745,7 @@ def translate_status(status):
                 "signal": "idle",
                 "text": msg
             })
-        elif code == 'W':
+        elif code == 'z':
             msg = "{} has not started yet.".format(step)
             usr_msg += msg + "\n"
             web_msg.append({
