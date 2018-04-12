@@ -283,6 +283,8 @@ def convert_driver(metadata, source_name, test):
             if not dl_res["success"]:
                 stat_res = update_status(source_name, "convert_download", "T",
                                          text=dl_res["error"])
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
     except Exception as e:
         stat_res = update_status(source_name, "convert_download", "F", text=repr(e))
         if not stat_res["success"]:
@@ -290,7 +292,7 @@ def convert_driver(metadata, source_name, test):
         else:
             return
     if not dl_res["success"]:
-        stat_res = update_status(source_name, "convert_download", "F", text=str(dl_res))
+        stat_res = update_status(source_name, "convert_download", "F", text=dl_res["error"])
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
@@ -709,7 +711,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     if not event["success"]:
                         yield {
                             "success": False,
-                            "error": "{} - {}".format(event["code"], event["details"])
+                            "error": "{} - {}".format(event["code"], event["description"])
                         }
                 if not event["success"]:
                     raise ValueError(event)
