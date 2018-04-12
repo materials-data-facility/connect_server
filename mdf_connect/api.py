@@ -547,6 +547,9 @@ def fetch_whitelist(auth_level):
             # Update timestamp
             INGEST_GROUP["updated"] = int(time.time())
         whitelist.extend(INGEST_GROUP["whitelist"])
+    elif auth_level == "admin":
+        # Already handled admins
+        pass
     else:
         # Assume auth_level is Group ID
         # If NexusClient has not been created yet, create it
@@ -1048,9 +1051,6 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         else:
             return
     else:
-        stat_res = update_status(source_name, "ingest_search", "S")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
         # Other services use the dataset information
         if services:
             with open(final_feed_path) as f:
@@ -1074,6 +1074,9 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
+            stat_res = update_status(source_name, "ingest_search", "S")
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
             os.remove(final_feed_path)
 
     # Globus Publish
