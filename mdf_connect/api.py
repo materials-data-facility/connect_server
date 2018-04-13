@@ -706,6 +706,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
                                 mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                                interval=app.config["TRANSFER_PING_INTERVAL"],
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
                 for event in transfer:
                     if not event["success"]:
@@ -764,7 +765,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
-                        mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                        mdf_transfer_client, local_ep, backup_ep, [(local_path, backup_path)],
+                        interval=app.config["TRANSFER_PING_INTERVAL"],
                         inactivity_time=app.config["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
@@ -1064,6 +1066,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             transfer = mdf_toolbox.custom_transfer(
                             transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
                             [(final_feed_path, backup_feed_path)],
+                            interval=app.config["TRANSFER_PING_INTERVAL"],
                             inactivity_time=app.config["TRANSFER_DEADLINE"])
             for event in transfer:
                 if not event["success"]:
