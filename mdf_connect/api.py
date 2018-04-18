@@ -1048,6 +1048,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         search_res = search_ingest(
                         search_client, base_feed_path,
                         index=search_config.get("index", app.config["INGEST_INDEX"]),
+                        batch_size=app.config["SEARCH_BATCH_SIZE"],
                         feedstock_save=final_feed_path)
     except Exception as e:
         stat_res = update_status(source_name, "ingest_search", "F", text=str(e))
@@ -1504,7 +1505,7 @@ def create_status(status):
             }
 
     # Create defaults
-    status["messages"] = "" * len(STATUS_STEPS)
+    status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
