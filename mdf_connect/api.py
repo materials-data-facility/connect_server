@@ -1045,16 +1045,32 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         raise ValueError(str(stat_res))
     search_config = services.get("mdf_search", {})
     try:
-        search_ingest(search_client, base_feed_path,
-                      index=search_config.get("index", app.config["INGEST_INDEX"]),
-                      feedstock_save=final_feed_path)
+        search_res = search_ingest(
+                        search_client, base_feed_path,
+                        index=search_config.get("index", app.config["INGEST_INDEX"]),
+                        feedstock_save=final_feed_path)
     except Exception as e:
-        stat_res = update_status(source_name, "ingest_search", "F", text=repr(e))
+        stat_res = update_status(source_name, "ingest_search", "F", text=str(e))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
             return
     else:
+        # Handle errors
+        if len(search_res["errors"]) > 0:
+            stat_res = update_status(source_name, "ingest_search", "F",
+                                     text=("{} batches of records failed to ingest "
+                                           "({} records total) Detailed errors:"
+                                           "{}.").format(
+                                                    len(search_res["errors"]),
+                                                    (len(search_res["errors"])
+                                                     * app.config["SEARCH_BATCH_SIZE"]),
+                                                    search_res["errors"]))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+
         # Other services use the dataset information
         if services:
             with open(final_feed_path) as f:
@@ -1488,8 +1504,7 @@ def create_status(status):
             }
 
     # Create defaults
-    status["messages"] = []
-    status["errors"] = []
+    status["messages"] = "" * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
@@ -1503,7 +1518,7 @@ def create_status(status):
     except Exception as e:
         return {
             "success": False,
-            "error": repr(e)
+            "error": str(e)
             }
     else:
         if DEBUG_LEVEL >= 1:
@@ -1556,24 +1571,27 @@ def update_status(source_name, step, code, text=None, link=None):
     code_list[step_index] = code
     # If needed, update messages or errors and cancel tasks
     if code == 'M':
-        status["messages"].append(text or "No message available")
+        status["messages"][step_index] = (text or "No message available")
     elif code == 'L':
-        status["messages"].append([text or "No message available", link or "No link available"])
+        status["messages"][step_index] = [
+            text or "No message available",
+            link or "No link available"
+        ]
     elif code == 'F':
-        status["errors"].append(text or "An error occurred and we're trying to fix it")
+        status["messages"][step_index] = (text or "An error occurred and we're trying to fix it")
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'H':
-        status["errors"].append([text or "An error occurred and we're trying to fix it",
-                                 link or "Help may be available soon."])
+        status["messages"][step_index] = [text or "An error occurred and we're trying to fix it",
+                                          link or "Help may be available soon."]
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
-        status["errors"].append(text or "An error occurred but we're recovering")
+        status["messages"][step_index] = (text or "An error occurred but we're recovering")
     elif code == 'U':
-        status["messages"].append(text or "Processing will continue")
+        status["messages"][step_index] = (text or "Processing will continue")
     elif code == 'T':
-        status["errors"].append(text or "Retrying")
+        status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
 
     try:
@@ -1649,7 +1667,6 @@ def translate_status(status):
     # }
     full_code = list(status["code"])
     messages = status["messages"]
-    errors = status["errors"]
     sub_type = status["submission_code"]
     # Submission type determines steps
     if sub_type == 'C':
@@ -1671,7 +1688,7 @@ def translate_status(status):
                                                    status["submission_time"])
     web_msg = []
 
-    for code, step in zip(full_code, steps):
+    for code, step, index in zip(full_code, steps, range(len(steps))):
         if code == 'S':
             msg = "{} was successful.".format(step)
             usr_msg += msg + "\n"
@@ -1680,14 +1697,14 @@ def translate_status(status):
                 "text": msg
             })
         elif code == 'M':
-            msg = "{} was successful: {}.".format(step, messages.pop(0))
+            msg = "{} was successful: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "success",
                 "text": msg
             })
         elif code == 'L':
-            tup_msg = messages.pop(0)
+            tup_msg = messages[index]
             msg = "{} was successful: {}.".format(step, tup_msg[0])
             usr_msg += msg + " Link: {}\n".format(tup_msg[1])
             web_msg.append({
@@ -1696,28 +1713,28 @@ def translate_status(status):
                 "link": tup_msg[1]
             })
         elif code == 'F':
-            msg = "{} failed: {}.".format(step, errors.pop(0))
+            msg = "{} failed: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'R':
-            msg = "{} failed (processing will continue): {}.".format(step, errors.pop(0))
+            msg = "{} failed (processing will continue): {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'U':
-            msg = "{} was unsuccessful: {}.".format(step, messages.pop(0))
+            msg = "{} was unsuccessful: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",
                 "text": msg
             })
         elif code == 'H':
-            tup_msg = errors.pop(0)
+            tup_msg = messages[index]
             msg = "{} failed: {}.".format(step, tup_msg[0])
             usr_msg += msg + " Link: {}\n".format(tup_msg[1])
             web_msg.append({
@@ -1740,7 +1757,7 @@ def translate_status(status):
                 "text": msg
             })
         elif code == 'T':
-            msg = "{} is retrying due to an error: {}".format(step, errors.pop(0))
+            msg = "{} is retrying due to an error: {}".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "started",
@@ -1761,7 +1778,7 @@ def translate_status(status):
                 "text": msg
             })
         else:
-            msg = "{} is unknown. Code: {}".format(step, code)
+            msg = "{} is unknown. Code: '{}', message: '{}'".format(step, code, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",
