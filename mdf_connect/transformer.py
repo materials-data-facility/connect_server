@@ -1,5 +1,6 @@
 from hashlib import sha512
 import json
+import logging
 import os
 from queue import Empty
 
@@ -26,6 +27,8 @@ import yaml  # noqa: E402
 
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
+
+logger = logging.getLogger(__name__)
 
 # List of parsers at bottom
 
@@ -67,9 +70,9 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                 try:
                     parser_res = parser(group=group, params=parse_params)
                 except Exception as e:
-                    print("Parser {p} failed with exception {e}".format(
-                                                                    p=parser.__name__,
-                                                                    e=repr(e)))
+                    logger.warn("Parser {p} failed with exception {e}".format(
+                                                                        p=parser.__name__,
+                                                                        e=repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -91,8 +94,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                              "type '{t}'!").format(p=parser.__name__,
                                                                    t=type(parser_res)))
                     else:
-                        pass
-                        # print("DEBUG:", parser.__name__, "unable to parse", group)
+                        logger.debug("{} unable to parse {}".format(parser.__name__, group))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -111,13 +113,13 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             try:
                 file_info = _parse_file_info(group=group, params=parse_params)
             except Exception as e:
-                print("File info parser failed:", repr(e))
+                logger.warning("File info parser failed: " + str(e))
             for record in records:
                 # TODO: Should files be handled differently?
                 record = toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
-        print("DEBUG: Transformer error:", repr(e))
+        logger.warning("Transformer error: " + str(e))
 
     return
 

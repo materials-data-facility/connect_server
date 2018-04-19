@@ -1,5 +1,6 @@
 from ctypes import c_bool
 import json
+import logging
 import multiprocessing
 import os
 from queue import Empty
@@ -11,6 +12,8 @@ from mdf_connect import Validator
 
 
 NUM_SUBMITTERS = 5
+
+logger = logging.getLogger(__name__)
 
 
 def search_ingest(ingest_client, feedstock, index, batch_size=100,
@@ -51,8 +54,9 @@ def search_ingest(ingest_client, feedstock, index, batch_size=100,
                 }
             del_res = ingest_client.delete_by_query(index, del_q)
             if del_res["num_subjects_deleted"]:
-                print("DEBUG:", del_res["num_subjects_deleted"],
-                      "Search entries cleared from", old_source_name)
+                logger.info("{} Search entries cleared from {}".format(
+                                                                 del_res["num_subjects_deleted"],
+                                                                 old_source_name))
             version -= 1
 
         for rc in stock:
@@ -161,7 +165,7 @@ def submit_ingests(ingest_queue, error_queue, ingest_client, index, input_done):
             elif res["num_documents_ingested"] <= 0:
                 raise ValueError("No documents ingested: " + str(res))
         except GlobusAPIError as e:
-            print("\nA Globus API Error has occurred. Details:\n", e.raw_json, "\n")
+            logger.error("Search Globus API Error: {}".format(e.raw_json))
             err = {
                 "ingest_batch": ingestable,
                 "exception_type": str(type(e)),
@@ -169,7 +173,7 @@ def submit_ingests(ingest_queue, error_queue, ingest_client, index, input_done):
             }
             error_queue.put(json.dumps(err))
         except Exception as e:
-            print("Search error:", str(e))
+            logger.error("Generic Search error: {}".format(str(e)))
             err = {
                 "ingest_batch": ingestable,
                 "exception_type": str(type(e)),
