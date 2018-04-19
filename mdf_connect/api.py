@@ -1,6 +1,7 @@
 from datetime import datetime, date
 import gzip
 import json
+import logging
 import os
 import re
 import shutil
@@ -23,12 +24,6 @@ from werkzeug.utils import secure_filename
 
 from mdf_connect import app, convert, search_ingest
 
-# Frequency of status messages printed to console
-# Level 0: No messages
-# Level 1: Messages only when the status DB is updated
-# Level 2: Messages when something happens in a driver
-# Level 3 (in progress): Messages whenever anything happens in this module
-DEBUG_LEVEL = 1
 
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
@@ -93,6 +88,11 @@ ADMIN_GROUP = {
     "updated": 0,
     "frequency": 1 * 24 * 60 * 60  # 1 day
 }
+
+logger = logging.getLogger(__name__)
+logger.basicConfig(filename=app.config["LOG_FILE"],
+                   filemode='w',
+                   level=app.config["LOG_LEVEL"])
 
 
 @app.route('/', methods=["GET", "POST"])
@@ -301,8 +301,7 @@ def convert_driver(metadata, source_name, test):
         stat_res = update_status(source_name, "convert_download", "S")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
-        if DEBUG_LEVEL >= 2:
-            print("{}: Data downloaded".format(source_name))
+        logger.debug("{}: Data downloaded".format(source_name))
 
     # Handle service integration data directory
     service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
@@ -362,8 +361,7 @@ def convert_driver(metadata, source_name, test):
                                            .format(num_parsed, num_groups)))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-        if DEBUG_LEVEL >= 2:
-            print("{}: {} entries parsed".format(source_name, len(feedstock)))
+        logger.debug("{}: {} entries parsed".format(source_name, len(feedstock)))
 
     # Pass dataset to /ingest
     stat_res = update_status(source_name, "convert_ingest", "P")
@@ -467,14 +465,14 @@ def authenticate_token(token, auth_level):
         if len(whitelist) == 0:
             raise ValueError("Whitelist empty")
     except Exception as e:
-        print("ERROR: Whitelist generation failed:", e)
+        logger.warning("Whitelist generation failed:", e)
         return {
             "success": False,
             "error": "Unable to fetch Group memberships.",
             "error_code": 500
         }
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        print("DEBUG: User not in whitelist:", auth_res["username"])
+        logger.info("User not in whitelist:", auth_res["username"])
         return {
             "success": False,
             "error": "You cannot access this service or collection",
@@ -770,7 +768,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                         inactivity_time=app.config["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
-                print(event)
+                logger.debug(event)
         if not event["success"]:
             raise ValueError(event["code"]+": "+event["description"])
     yield {
@@ -983,8 +981,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     stat_res = update_status(source_name, "ingest_download", "S")
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
-                    if DEBUG_LEVEL >= 2:
-                        print("{}: Ingest data downloaded".format(source_name))
+                    logger.debug("{}: Ingest data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_download", "N")
         if not stat_res["success"]:
@@ -1030,8 +1027,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 stat_res = update_status(source_name, "ingest_integration", "S")
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
-                if DEBUG_LEVEL >= 2:
-                    print("{}: Integration data downloaded".format(source_name))
+                logger.debug("{}: Integration data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_integration", "N")
         if not stat_res["success"]:
@@ -1087,7 +1083,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                             inactivity_time=app.config["TRANSFER_DEADLINE"])
             for event in transfer:
                 if not event["success"]:
-                    print(event)
+                    logger.debug(event)
             if not event["success"]:
                 raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
@@ -1260,10 +1256,9 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             try:
                 shutil.rmtree(cleanup_path)
             except Exception as e:
-                print("Error: Could not remove data:", str(e))
+                logger.warning("Could not remove data:", str(e))
 
-    if DEBUG_LEVEL >= 2:
-        print("{}: Ingest complete".format(source_name))
+    logger.debug("{}: Ingest complete".format(source_name))
     return {
         "success": True,
         "source_name": source_name
@@ -1393,8 +1388,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
             if up_res.get("success"):
                 success += 1
             else:
-                # TODO: Log this
-                print("DEBUG: Citrine upload failure:", up_res)
+                logger.warning("Citrine upload failure:" + up_res)
                 failed += 1
 
     cit_client.update_data_set(cit_ds_id, share=1 if public else 0)
@@ -1522,8 +1516,7 @@ def create_status(status):
             "error": str(e)
             }
     else:
-        if DEBUG_LEVEL >= 1:
-            print("STATUS {}: Created".format(status["source_name"]))
+        logger.info("STATUS {}: Created".format(status["source_name"]))
         return {
             "success": True,
             "status": status
@@ -1604,8 +1597,7 @@ def update_status(source_name, step, code, text=None, link=None):
             "error": repr(e)
             }
     else:
-        if DEBUG_LEVEL >= 1:
-            print("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
+        logger.info("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
         return {
             "success": True,
             "status": status
