@@ -47,6 +47,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
     list of dict: The metadata parsed from the file.
                   Will be empty if no selected parser can parse data.
     """
+    source_name = parse_params.get("dataset", {}).get("mdf", {}).get("source_name", "unknown")
     try:
         # Parse each group from the queue
         # Exit loop when queue_done is True and no groups remain
@@ -70,9 +71,10 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                 try:
                     parser_res = parser(group=group, params=parse_params)
                 except Exception as e:
-                    logger.warn("Parser {p} failed with exception {e}".format(
-                                                                        p=parser.__name__,
-                                                                        e=repr(e)))
+                    logger.warn(("{} Parser {} failed with "
+                                 "exception {}").format(source_name,
+                                                        p=parser.__name__,
+                                                        e=repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -93,8 +95,8 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                             raise TypeError(("Parser '{p}' returned "
                                              "type '{t}'!").format(p=parser.__name__,
                                                                    t=type(parser_res)))
-                    else:
-                        logger.debug("{} unable to parse {}".format(parser.__name__, group))
+                        logger.debug("{}: {} parsed {}".format(source_name,
+                                                               parser.__name__, group))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -113,13 +115,13 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             try:
                 file_info = _parse_file_info(group=group, params=parse_params)
             except Exception as e:
-                logger.warning("File info parser failed: " + str(e))
+                logger.warning("{}: File info parser failed: {}".format(source_name, str(e)))
             for record in records:
                 # TODO: Should files be handled differently?
                 record = toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
-        logger.warning("Transformer error: " + str(e))
+        logger.warning("{}: Transformer error: {}".format(source_name, str(e)))
 
     return
 

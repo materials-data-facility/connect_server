@@ -89,10 +89,19 @@ ADMIN_GROUP = {
     "frequency": 1 * 24 * 60 * 60  # 1 day
 }
 
-logger = logging.getLogger(__name__)
-logger.basicConfig(filename=app.config["LOG_FILE"],
-                   filemode='w',
-                   level=app.config["LOG_LEVEL"])
+# Set up root logger
+logger = logging.getLogger("mdf_connect")
+logger.setLevel(app.config["LOG_LEVEL"])
+logger.propagate = False
+# Set up formatters
+logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
+                                      style='{',
+                                      datefmt="%Y-%m-%d %H:%M:%S")
+# Set up handlers
+logfile_handler = logging.FileHandler(app.config["LOG_FILE"], mode='w')
+logfile_handler.setFormatter(logfile_formatter)
+
+logger.addHandler(logfile_handler)
 
 
 @app.route('/', methods=["GET", "POST"])
@@ -708,6 +717,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
                 for event in transfer:
                     if not event["success"]:
+                        logger.info("Transfer is_error: {} - {}".format(event["code"],
+                                                                        event["description"]))
                         yield {
                             "success": False,
                             "error": "{} - {}".format(event["code"], event["description"])
@@ -961,10 +972,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 data_ep = app.config["LOCAL_EP"]
                 data_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
                 try:
-                    dl_res = download_and_backup(transfer_client,
-                                                 data_loc,
-                                                 data_ep,
-                                                 data_path)
+                    for dl_res in download_and_backup(transfer_client,
+                                                      data_loc,
+                                                      data_ep,
+                                                      data_path):
+                        if not dl_res["success"]:
+                            stat_res = update_status(source_name, "ingest_download", "T",
+                                                     text=dl_res["error"])
+                            if not stat_res["success"]:
+                                raise ValueError(str(stat_res))
                 except Exception as e:
                     stat_res = update_status(source_name, "ingest_download", "F", text=repr(e))
                     if not stat_res["success"]:
@@ -972,7 +988,8 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     else:
                         return
                 if not dl_res["success"]:
-                    stat_res = update_status(source_name, "ingest_download", "F", text=str(dl_res))
+                    stat_res = update_status(source_name, "ingest_download", "F",
+                                             text=dl_res["error"])
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
                     else:
@@ -1007,10 +1024,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             # Will not transfer anything if already in place
             service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
             try:
-                dl_res = download_and_backup(transfer_client,
-                                             service_loc,
-                                             app.config["LOCAL_EP"],
-                                             service_data)
+                for dl_res in download_and_backup(transfer_client,
+                                                  service_loc,
+                                                  app.config["LOCAL_EP"],
+                                                  service_data):
+                    if not dl_res["success"]:
+                        stat_res = update_status(source_name, "ingest_integration", "T",
+                                                 text=dl_res["error"])
+                        if not stat_res["success"]:
+                            raise ValueError(str(stat_res))
             except Exception as e:
                 stat_res = update_status(source_name, "ingest_integration", "F", text=repr(e))
                 if not stat_res["success"]:
@@ -1018,7 +1040,8 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 else:
                     return
             if not dl_res["success"]:
-                stat_res = update_status(source_name, "ingest_integration", "F", text=str(dl_res))
+                stat_res = update_status(source_name, "ingest_integration", "F",
+                                         text=dl_res["error"])
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
                 else:
@@ -1516,7 +1539,7 @@ def create_status(status):
             "error": str(e)
             }
     else:
-        logger.info("STATUS {}: Created".format(status["source_name"]))
+        logger.info("Status for {}: Created".format(status["source_name"]))
         return {
             "success": True,
             "status": status
@@ -1597,7 +1620,7 @@ def update_status(source_name, step, code, text=None, link=None):
             "error": repr(e)
             }
     else:
-        logger.info("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
+        logger.info("{}: {}: {}, {}, {}".format(source_name, step, code, text, link))
         return {
             "success": True,
             "status": status
