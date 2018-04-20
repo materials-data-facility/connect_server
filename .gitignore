@@ -4,6 +4,7 @@
 *login*
 *.ipynb_checkpoints
 Untitled*.ipynb
+*.log
 
 *.cache*
 *.conf*

@@ -1,6 +1,7 @@
 from datetime import datetime, date
 import gzip
 import json
+import logging
 import os
 import re
 import shutil
@@ -23,12 +24,6 @@ from werkzeug.utils import secure_filename
 
 from mdf_connect import app, convert, search_ingest
 
-# Frequency of status messages printed to console
-# Level 0: No messages
-# Level 1: Messages only when the status DB is updated
-# Level 2: Messages when something happens in a driver
-# Level 3 (in progress): Messages whenever anything happens in this module
-DEBUG_LEVEL = 1
 
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
@@ -93,6 +88,20 @@ ADMIN_GROUP = {
     "updated": 0,
     "frequency": 1 * 24 * 60 * 60  # 1 day
 }
+
+# Set up root logger
+logger = logging.getLogger("mdf_connect")
+logger.setLevel(app.config["LOG_LEVEL"])
+logger.propagate = False
+# Set up formatters
+logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
+                                      style='{',
+                                      datefmt="%Y-%m-%d %H:%M:%S")
+# Set up handlers
+logfile_handler = logging.FileHandler(app.config["LOG_FILE"], mode='w')
+logfile_handler.setFormatter(logfile_formatter)
+
+logger.addHandler(logfile_handler)
 
 
 @app.route('/', methods=["GET", "POST"])
@@ -301,8 +310,7 @@ def convert_driver(metadata, source_name, test):
         stat_res = update_status(source_name, "convert_download", "S")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
-        if DEBUG_LEVEL >= 2:
-            print("{}: Data downloaded".format(source_name))
+        logger.debug("{}: Data downloaded".format(source_name))
 
     # Handle service integration data directory
     service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
@@ -362,8 +370,7 @@ def convert_driver(metadata, source_name, test):
                                            .format(num_parsed, num_groups)))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-        if DEBUG_LEVEL >= 2:
-            print("{}: {} entries parsed".format(source_name, len(feedstock)))
+        logger.debug("{}: {} entries parsed".format(source_name, len(feedstock)))
 
     # Pass dataset to /ingest
     stat_res = update_status(source_name, "convert_ingest", "P")
@@ -467,14 +474,14 @@ def authenticate_token(token, auth_level):
         if len(whitelist) == 0:
             raise ValueError("Whitelist empty")
     except Exception as e:
-        print("ERROR: Whitelist generation failed:", e)
+        logger.warning("Whitelist generation failed:", e)
         return {
             "success": False,
             "error": "Unable to fetch Group memberships.",
             "error_code": 500
         }
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        print("DEBUG: User not in whitelist:", auth_res["username"])
+        logger.info("User not in whitelist:", auth_res["username"])
         return {
             "success": False,
             "error": "You cannot access this service or collection",
@@ -710,6 +717,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
                 for event in transfer:
                     if not event["success"]:
+                        logger.info("Transfer is_error: {} - {}".format(event["code"],
+                                                                        event["description"]))
                         yield {
                             "success": False,
                             "error": "{} - {}".format(event["code"], event["description"])
@@ -770,7 +779,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                         inactivity_time=app.config["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
-                print(event)
+                logger.debug(event)
         if not event["success"]:
             raise ValueError(event["code"]+": "+event["description"])
     yield {
@@ -963,10 +972,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 data_ep = app.config["LOCAL_EP"]
                 data_path = os.path.join(app.config["LOCAL_PATH"], source_name) + "/"
                 try:
-                    dl_res = download_and_backup(transfer_client,
-                                                 data_loc,
-                                                 data_ep,
-                                                 data_path)
+                    for dl_res in download_and_backup(transfer_client,
+                                                      data_loc,
+                                                      data_ep,
+                                                      data_path):
+                        if not dl_res["success"]:
+                            stat_res = update_status(source_name, "ingest_download", "T",
+                                                     text=dl_res["error"])
+                            if not stat_res["success"]:
+                                raise ValueError(str(stat_res))
                 except Exception as e:
                     stat_res = update_status(source_name, "ingest_download", "F", text=repr(e))
                     if not stat_res["success"]:
@@ -974,7 +988,8 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     else:
                         return
                 if not dl_res["success"]:
-                    stat_res = update_status(source_name, "ingest_download", "F", text=str(dl_res))
+                    stat_res = update_status(source_name, "ingest_download", "F",
+                                             text=dl_res["error"])
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
                     else:
@@ -983,8 +998,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     stat_res = update_status(source_name, "ingest_download", "S")
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
-                    if DEBUG_LEVEL >= 2:
-                        print("{}: Ingest data downloaded".format(source_name))
+                    logger.debug("{}: Ingest data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_download", "N")
         if not stat_res["success"]:
@@ -1010,10 +1024,15 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             # Will not transfer anything if already in place
             service_data = os.path.join(app.config["SERVICE_DATA"], source_name) + "/"
             try:
-                dl_res = download_and_backup(transfer_client,
-                                             service_loc,
-                                             app.config["LOCAL_EP"],
-                                             service_data)
+                for dl_res in download_and_backup(transfer_client,
+                                                  service_loc,
+                                                  app.config["LOCAL_EP"],
+                                                  service_data):
+                    if not dl_res["success"]:
+                        stat_res = update_status(source_name, "ingest_integration", "T",
+                                                 text=dl_res["error"])
+                        if not stat_res["success"]:
+                            raise ValueError(str(stat_res))
             except Exception as e:
                 stat_res = update_status(source_name, "ingest_integration", "F", text=repr(e))
                 if not stat_res["success"]:
@@ -1021,7 +1040,8 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 else:
                     return
             if not dl_res["success"]:
-                stat_res = update_status(source_name, "ingest_integration", "F", text=str(dl_res))
+                stat_res = update_status(source_name, "ingest_integration", "F",
+                                         text=dl_res["error"])
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
                 else:
@@ -1030,8 +1050,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 stat_res = update_status(source_name, "ingest_integration", "S")
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
-                if DEBUG_LEVEL >= 2:
-                    print("{}: Integration data downloaded".format(source_name))
+                logger.debug("{}: Integration data downloaded".format(source_name))
     else:
         stat_res = update_status(source_name, "ingest_integration", "N")
         if not stat_res["success"]:
@@ -1045,16 +1064,33 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         raise ValueError(str(stat_res))
     search_config = services.get("mdf_search", {})
     try:
-        search_ingest(search_client, base_feed_path,
-                      index=search_config.get("index", app.config["INGEST_INDEX"]),
-                      feedstock_save=final_feed_path)
+        search_res = search_ingest(
+                        search_client, base_feed_path,
+                        index=search_config.get("index", app.config["INGEST_INDEX"]),
+                        batch_size=app.config["SEARCH_BATCH_SIZE"],
+                        feedstock_save=final_feed_path)
     except Exception as e:
-        stat_res = update_status(source_name, "ingest_search", "F", text=repr(e))
+        stat_res = update_status(source_name, "ingest_search", "F", text=str(e))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
             return
     else:
+        # Handle errors
+        if len(search_res["errors"]) > 0:
+            stat_res = update_status(source_name, "ingest_search", "F",
+                                     text=("{} batches of records failed to ingest "
+                                           "({} records total) Detailed errors:"
+                                           "{}.").format(
+                                                    len(search_res["errors"]),
+                                                    (len(search_res["errors"])
+                                                     * app.config["SEARCH_BATCH_SIZE"]),
+                                                    search_res["errors"]))
+            if not stat_res["success"]:
+                raise ValueError(str(stat_res))
+            else:
+                return
+
         # Other services use the dataset information
         if services:
             with open(final_feed_path) as f:
@@ -1070,7 +1106,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                             inactivity_time=app.config["TRANSFER_DEADLINE"])
             for event in transfer:
                 if not event["success"]:
-                    print(event)
+                    logger.debug(event)
             if not event["success"]:
                 raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
@@ -1243,10 +1279,9 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
             try:
                 shutil.rmtree(cleanup_path)
             except Exception as e:
-                print("Error: Could not remove data:", str(e))
+                logger.warning("Could not remove data:", str(e))
 
-    if DEBUG_LEVEL >= 2:
-        print("{}: Ingest complete".format(source_name))
+    logger.debug("{}: Ingest complete".format(source_name))
     return {
         "success": True,
         "source_name": source_name
@@ -1376,8 +1411,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
             if up_res.get("success"):
                 success += 1
             else:
-                # TODO: Log this
-                print("DEBUG: Citrine upload failure:", up_res)
+                logger.warning("Citrine upload failure:" + up_res)
                 failed += 1
 
     cit_client.update_data_set(cit_ds_id, share=1 if public else 0)
@@ -1488,8 +1522,7 @@ def create_status(status):
             }
 
     # Create defaults
-    status["messages"] = []
-    status["errors"] = []
+    status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
@@ -1503,11 +1536,10 @@ def create_status(status):
     except Exception as e:
         return {
             "success": False,
-            "error": repr(e)
+            "error": str(e)
             }
     else:
-        if DEBUG_LEVEL >= 1:
-            print("STATUS {}: Created".format(status["source_name"]))
+        logger.info("Status for {}: Created".format(status["source_name"]))
         return {
             "success": True,
             "status": status
@@ -1556,24 +1588,27 @@ def update_status(source_name, step, code, text=None, link=None):
     code_list[step_index] = code
     # If needed, update messages or errors and cancel tasks
     if code == 'M':
-        status["messages"].append(text or "No message available")
+        status["messages"][step_index] = (text or "No message available")
     elif code == 'L':
-        status["messages"].append([text or "No message available", link or "No link available"])
+        status["messages"][step_index] = [
+            text or "No message available",
+            link or "No link available"
+        ]
     elif code == 'F':
-        status["errors"].append(text or "An error occurred and we're trying to fix it")
+        status["messages"][step_index] = (text or "An error occurred and we're trying to fix it")
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'H':
-        status["errors"].append([text or "An error occurred and we're trying to fix it",
-                                 link or "Help may be available soon."])
+        status["messages"][step_index] = [text or "An error occurred and we're trying to fix it",
+                                          link or "Help may be available soon."]
         # Cancel subsequent tasks
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
-        status["errors"].append(text or "An error occurred but we're recovering")
+        status["messages"][step_index] = (text or "An error occurred but we're recovering")
     elif code == 'U':
-        status["messages"].append(text or "Processing will continue")
+        status["messages"][step_index] = (text or "Processing will continue")
     elif code == 'T':
-        status["errors"].append(text or "Retrying")
+        status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
 
     try:
@@ -1585,8 +1620,7 @@ def update_status(source_name, step, code, text=None, link=None):
             "error": repr(e)
             }
     else:
-        if DEBUG_LEVEL >= 1:
-            print("STATUS {}: {}: {}, {}, {}".format(source_name, step, code, text, link))
+        logger.info("{}: {}: {}, {}, {}".format(source_name, step, code, text, link))
         return {
             "success": True,
             "status": status
@@ -1649,7 +1683,6 @@ def translate_status(status):
     # }
     full_code = list(status["code"])
     messages = status["messages"]
-    errors = status["errors"]
     sub_type = status["submission_code"]
     # Submission type determines steps
     if sub_type == 'C':
@@ -1671,7 +1704,7 @@ def translate_status(status):
                                                    status["submission_time"])
     web_msg = []
 
-    for code, step in zip(full_code, steps):
+    for code, step, index in zip(full_code, steps, range(len(steps))):
         if code == 'S':
             msg = "{} was successful.".format(step)
             usr_msg += msg + "\n"
@@ -1680,14 +1713,14 @@ def translate_status(status):
                 "text": msg
             })
         elif code == 'M':
-            msg = "{} was successful: {}.".format(step, messages.pop(0))
+            msg = "{} was successful: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "success",
                 "text": msg
             })
         elif code == 'L':
-            tup_msg = messages.pop(0)
+            tup_msg = messages[index]
             msg = "{} was successful: {}.".format(step, tup_msg[0])
             usr_msg += msg + " Link: {}\n".format(tup_msg[1])
             web_msg.append({
@@ -1696,28 +1729,28 @@ def translate_status(status):
                 "link": tup_msg[1]
             })
         elif code == 'F':
-            msg = "{} failed: {}.".format(step, errors.pop(0))
+            msg = "{} failed: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'R':
-            msg = "{} failed (processing will continue): {}.".format(step, errors.pop(0))
+            msg = "{} failed (processing will continue): {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
                 "text": msg
             })
         elif code == 'U':
-            msg = "{} was unsuccessful: {}.".format(step, messages.pop(0))
+            msg = "{} was unsuccessful: {}.".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",
                 "text": msg
             })
         elif code == 'H':
-            tup_msg = errors.pop(0)
+            tup_msg = messages[index]
             msg = "{} failed: {}.".format(step, tup_msg[0])
             usr_msg += msg + " Link: {}\n".format(tup_msg[1])
             web_msg.append({
@@ -1740,7 +1773,7 @@ def translate_status(status):
                 "text": msg
             })
         elif code == 'T':
-            msg = "{} is retrying due to an error: {}".format(step, errors.pop(0))
+            msg = "{} is retrying due to an error: {}".format(step, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "started",
@@ -1761,7 +1794,7 @@ def translate_status(status):
                 "text": msg
             })
         else:
-            msg = "{} is unknown. Code: {}".format(step, code)
+            msg = "{} is unknown. Code: '{}', message: '{}'".format(step, code, messages[index])
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "warning",

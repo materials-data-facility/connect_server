@@ -1,5 +1,6 @@
 from ctypes import c_bool
 import json
+import logging
 import multiprocessing
 import os
 from queue import Empty
@@ -26,6 +27,8 @@ GROUPING_RULES = {
     ]
 }
 
+logger = logging.getLogger(__name__)
+
 
 def convert(root_path, convert_params):
     """Convert files under the root path into feedstock.
@@ -40,6 +43,7 @@ def convert(root_path, convert_params):
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
     """
+    source_name = convert_params.get("dataset", {}).get("mdf", {}).get("source_name", "unknown")
     # Set up multiprocessing
     input_queue = multiprocessing.Queue()
     output_queue = multiprocessing.Queue()
@@ -51,7 +55,7 @@ def convert(root_path, convert_params):
                                                   input_complete, convert_params))
                     for i in range(NUM_TRANSFORMERS)]
     [t.start() for t in transformers]
-    print("DEBUG: Transformers started")
+    logger.debug("{}: Transformers started".format(source_name))
 
     # Populate input queue
     num_groups = 0
@@ -60,7 +64,7 @@ def convert(root_path, convert_params):
         num_groups += 1
     # Mark that input is finished
     input_complete.value = True
-    print("DEBUG: Input complete")
+    logger.debug("{}: Input complete".format(source_name))
 
     # TODO: Process dataset entry
     full_dataset = convert_params["dataset"]
@@ -75,7 +79,7 @@ def convert(root_path, convert_params):
             if any([t.is_alive() for t in transformers]):
                 [t.join(timeout=1) for t in transformers]
             else:
-                print("DEBUG: Transformers joined")
+                logger.debug("{}: Transformers joined".format(source_name))
                 break
 
     return (feedstock, num_groups)
