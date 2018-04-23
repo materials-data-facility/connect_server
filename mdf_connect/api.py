@@ -1080,8 +1080,8 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         if len(search_res["errors"]) > 0:
             stat_res = update_status(source_name, "ingest_search", "F",
                                      text=("{} batches of records failed to ingest "
-                                           "({} records total) Detailed errors:"
-                                           "{}.").format(
+                                           "({} records total)"
+                                           ".").format(
                                                     len(search_res["errors"]),
                                                     (len(search_res["errors"])
                                                      * app.config["SEARCH_BATCH_SIZE"]),
