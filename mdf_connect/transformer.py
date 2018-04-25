@@ -72,9 +72,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     parser_res = parser(group=group, params=parse_params)
                 except Exception as e:
                     logger.warn(("{} Parser {} failed with "
-                                 "exception {}").format(source_name,
-                                                        p=parser.__name__,
-                                                        e=repr(e)))
+                                 "exception {}").format(source_name, parser.__name__, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -219,8 +217,13 @@ def parse_pif(group, params=None):
     cit_manager = IngesterManager()
     mdf_records = []
 
-    raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
-                                          args={"quality_report": False})
+    try:
+        raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
+                                              args={"quality_report": False})
+    except Exception as e:
+        logger.warn("Citrine pif-ingestor raised exception: " + str(e))
+        raise
+
     if not raw_pifs:
         return {}
     if not isinstance(raw_pifs, list):
@@ -228,7 +231,10 @@ def parse_pif(group, params=None):
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
-        mdf_pif = _translate_pif(pif_to_feedstock(pif))
+        try:
+            mdf_pif = _translate_pif(pif_to_feedstock(pif))
+        except Exception as e:
+            logger.warn("PIF to feedstock failed: " + str(e))
         if mdf_pif:
             mdf_records.append(mdf_pif)
 

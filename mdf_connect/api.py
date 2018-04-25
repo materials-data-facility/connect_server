@@ -362,8 +362,6 @@ def convert_driver(metadata, source_name, test):
                                            .format(num_groups)))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
-            else:
-                return
         else:
             stat_res = update_status(source_name, "converting", "M",
                                      text=("{} records parsed out of {} groups"
