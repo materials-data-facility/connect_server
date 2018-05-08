@@ -181,7 +181,8 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
                 logger.debug("{}: Search batch ingested".format(source_name))
         except GlobusAPIError as e:
             logger.error("{}: Search Globus API Error: {}".format(source_name, e.raw_json))
-            logger.debug("Full ingestable:\n{}\n".format(ingestable))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
                 "exception_type": str(type(e)),
                 "details": e.raw_json
@@ -189,10 +190,9 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
             error_queue.put(json.dumps(err))
         except Exception as e:
             logger.error("{}: Generic Search error: {}".format(source_name, repr(e)))
-            logger.debug('Stack trace:', exc_info=True)
-            logger.debug("Full ingestable:\n{}\n".format(ingestable))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
-                "ingest_batch": ingestable,
                 "exception_type": str(type(e)),
                 "details": str(e)
             }

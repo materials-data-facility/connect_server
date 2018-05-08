@@ -221,12 +221,11 @@ def parse_pif(group, params=None):
         raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
                                               args={"quality_report": False})
     except Exception as e:
-        logger.warn("Citrine pif-ingestor raised exception: " + str(e))
+        logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
 
     if not raw_pifs:
         return {}
-    logger.debug("raw_pifs: " + str(raw_pifs))
     if not isinstance(raw_pifs, list):
         raw_pifs = [raw_pifs]
     id_pifs = cit_utils.set_uids(raw_pifs)
@@ -235,12 +234,12 @@ def parse_pif(group, params=None):
         try:
             pif_feed = pif_to_feedstock(pif)
         except Exception as e:
-            logger.warn("PIF to feedstock failed: " + str(e))
+            logger.warn("PIF to feedstock failed: " + repr(e))
             raise
         try:
             mdf_pif = _translate_pif(pif_feed)
         except Exception as e:
-            logger.warn("_translate_pif failed: " + str(e))
+            logger.warn("_translate_pif failed: " + repr(e))
             raise
         if mdf_pif:
             mdf_records.append(mdf_pif)
