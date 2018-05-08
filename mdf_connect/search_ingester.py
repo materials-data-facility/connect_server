@@ -16,12 +16,12 @@ NUM_SUBMITTERS = 5
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(ingest_client, feedstock, index, batch_size=100,
+def search_ingest(ingest_creds, feedstock, index, batch_size,
                   num_submitters=NUM_SUBMITTERS, feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:
-    ingest_client (globus_sdk.SearchClient): An authenticated client.
+    ingest_creds (dict): The credentials with which to ingest.
     feedstock (str): The path to feedstock to ingest.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
@@ -32,6 +32,8 @@ def search_ingest(ingest_client, feedstock, index, batch_size=100,
     dict: success (bool): True on success.
           errors (list): The errors encountered.
     """
+    ingest_creds["services"] = ["search_ingest"]
+    ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
     index = mdf_toolbox.translate_index(index)
 
     # Validate feedstock
@@ -73,7 +75,7 @@ def search_ingest(ingest_client, feedstock, index, batch_size=100,
 
     # Create submitters
     submitters = [multiprocessing.Process(target=submit_ingests,
-                                          args=(ingest_queue, error_queue, ingest_client,
+                                          args=(ingest_queue, error_queue, ingest_creds,
                                                 index, input_done, source_name))
                   for i in range(NUM_SUBMITTERS)]
     # Create queue populator
@@ -148,8 +150,9 @@ def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_n
     return
 
 
-def submit_ingests(ingest_queue, error_queue, ingest_client, index, input_done, source_name):
+def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, source_name):
     """Submit entry ingests to Globus Search."""
+    ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
     while True:
         # Try getting an ingest from the queue
         try:
@@ -164,7 +167,12 @@ def submit_ingests(ingest_queue, error_queue, ingest_client, index, input_done, 
                 continue
         # Ingest, with error handling
         try:
-            res = ingest_client.ingest(index, ingestable)
+            # Allow one retry
+            try:
+                res = ingest_client.ingest(index, ingestable)
+            except Exception as e:
+                logger.error("{}: Retrying Search error: {}".format(source_name, repr(e)))
+                res = ingest_client.ingest(index, ingestable)
             if not res["success"]:
                 raise ValueError("Ingest failed: " + str(res))
             elif res["num_documents_ingested"] <= 0:
@@ -173,16 +181,18 @@ def submit_ingests(ingest_queue, error_queue, ingest_client, index, input_done, 
                 logger.debug("{}: Search batch ingested".format(source_name))
         except GlobusAPIError as e:
             logger.error("{}: Search Globus API Error: {}".format(source_name, e.raw_json))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
-                "ingest_batch": ingestable,
                 "exception_type": str(type(e)),
                 "details": e.raw_json
             }
             error_queue.put(json.dumps(err))
         except Exception as e:
-            logger.error("{}: Generic Search error: {}".format(source_name, str(e)))
+            logger.error("{}: Generic Search error: {}".format(source_name, repr(e)))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
-                "ingest_batch": ingestable,
                 "exception_type": str(type(e)),
                 "details": str(e)
             }
