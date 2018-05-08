@@ -924,7 +924,6 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         }
     try:
         clients = mdf_toolbox.confidential_login(creds)
-        search_client = clients["search_ingest"]
         publish_client = clients["publish"]
         transfer_client = clients["transfer"]
 
@@ -1063,7 +1062,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
     search_config = services.get("mdf_search", {})
     try:
         search_res = search_ingest(
-                        search_client, base_feed_path,
+                        creds, base_feed_path,
                         index=search_config.get("index", app.config["INGEST_INDEX"]),
                         batch_size=app.config["SEARCH_BATCH_SIZE"],
                         feedstock_save=final_feed_path)
