@@ -882,7 +882,16 @@ def accept_ingest():
                 "test": True
             }
     else:
-        if services.get("mrr"):
+        # Put in defaults
+        if services.get("globus_publish") is True:
+            services["globus_publish"] = {
+                "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
+            }
+        if services.get("citrine") is True:
+            services["citrine"] = {
+                "public": app.config["DEFAULT_CITRINATION_PUBLIC"]
+            }
+        if services.get("mrr") is True:
             services["mrr"] = {
                 "test": app.config["DEFAULT_MRR_TEST"]
             }
@@ -1122,13 +1131,10 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         stat_res = update_status(source_name, "ingest_publish", "P")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
-        if isinstance(services["globus_publish"], dict):
-            # collection should be in id or name
-            collection = (services["globus_publish"].get("collection_id")
-                          or services["globus_publish"].get("collection_name")
-                          or app.config["DEFAULT_PUBLISH_COLLECTION"])
-        else:
-            collection = app.config["DEFAULT_PUBLISH_COLLECTION"]
+        # collection should be in id or name
+        collection = (services["globus_publish"].get("collection_id")
+                      or services["globus_publish"].get("collection_name")
+                      or app.config["DEFAULT_PUBLISH_COLLECTION"])
         try:
             fin_res = globus_publish_data(publish_client, transfer_client,
                                           dataset, collection,
