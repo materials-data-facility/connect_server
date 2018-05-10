@@ -218,8 +218,7 @@ def parse_pif(group, params=None):
     mdf_records = []
 
     try:
-        raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[],
-                                              args={"quality_report": False})
+        raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[])
     except Exception as e:
         logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
@@ -248,6 +247,7 @@ def parse_pif(group, params=None):
             with open(pif_path, 'w') as pif_file:
                 pif_dump(add_dc(pif, dc_md), pif_file)
         except Exception as e:
+            logger.warn("Could not save PIF: {}".format(repr(e)))
             try:
                 os.remove(pif_path)
             except FileNotFoundError:
@@ -278,8 +278,11 @@ def parse_json(group, params=None):
 
     records = []
     for file_path in group:
-        with open(file_path) as f:
-            file_json = json.load(f)
+        try:
+            with open(file_path) as f:
+                file_json = json.load(f)
+        except Exception as e:
+            return {}
         records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
@@ -309,7 +312,11 @@ def parse_csv(group, params=None):
 
     records = []
     for file_path in group:
-        df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","), na_values=NA_VALUES)
+        try:
+            df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","),
+                             na_values=NA_VALUES)
+        except Exception as e:
+            return {}
         records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
@@ -336,8 +343,11 @@ def parse_yaml(group, params=None):
 
     records = []
     for file_path in group:
-        with open(file_path) as f:
-            file_json = yaml.safe_load(f)
+        try:
+            with open(file_path) as f:
+                file_json = yaml.safe_load(f)
+        except Exception as e:
+            return {}
         records.extend(_parse_json(file_json, mapping, source_name))
     return records
 
@@ -366,7 +376,10 @@ def parse_excel(group, params=None):
 
     records = []
     for file_path in group:
-        df = pd.read_excel(file_path, na_values=NA_VALUES)
+        try:
+            df = pd.read_excel(file_path, na_values=NA_VALUES)
+        except Exception as e:
+            return {}
         records.extend(_parse_pandas(df, mapping, source_name))
     return records
 
@@ -500,7 +513,7 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping, source_name=None):
+def _parse_pandas(df, mapping, source_name):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
@@ -510,11 +523,11 @@ def _parse_pandas(df, mapping, source_name=None):
         new_map = {}
         for path, value in _flatten_struct(mapping):
             new_map[path] = value + "." + str(index)
-        records.extend(_parse_json(df_json, new_map))
+        records.extend(_parse_json(df_json, new_map, source_name))
     return records
 
 
-def _parse_json(file_json, mapping, source_name=None):
+def _parse_json(file_json, mapping, source_name):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
@@ -526,9 +539,8 @@ def _parse_json(file_json, mapping, source_name=None):
         # Get (path, value) pairs from the key structure
         # Loop over each
         for mdf_path, json_path in _flatten_struct(mapping):
-            if source_name:
-                mdf_path = mdf_path.replace("__custom", source_name)
-                json_path = json_path.replace("__custom", source_name)
+            mdf_path = mdf_path.replace("__custom", source_name)
+            json_path = json_path.replace("__custom", source_name)
             try:
                 value = _follow_path(data, json_path)
             except KeyError:
