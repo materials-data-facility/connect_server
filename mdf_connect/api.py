@@ -1193,8 +1193,10 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                     text = cit_res["error"]
                 elif cit_res.get("failure_count"):
                     text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
+                elif cit_res.get("failure_count") == 0:
+                    text = "No PIFs were generated"
                 else:
-                    text = "No PIFs were uploaded"
+                    text = "An error prevented PIF uploading"
                 stat_res = update_status(source_name, "ingest_citrine", "R", text=text)
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
