@@ -1189,9 +1189,9 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
                 raise ValueError(str(stat_res))
         else:
             if not cit_res["success"]:
-                if cit_res["error"]:
+                if cit_res.get("error"):
                     text = cit_res["error"]
-                elif cit_res["failure_count"]:
+                elif cit_res.get("failure_count"):
                     text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
                 else:
                     text = "No PIFs were uploaded"
