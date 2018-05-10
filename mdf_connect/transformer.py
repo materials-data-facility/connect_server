@@ -226,8 +226,6 @@ def parse_pif(group, params=None):
 
     if not raw_pifs:
         return {}
-    if not isinstance(raw_pifs, list):
-        raw_pifs = [raw_pifs]
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
