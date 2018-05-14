@@ -189,6 +189,9 @@ class Validator:
 
         # Add fields
         # BLOCK: mdf
+        # source_id
+        rc_md["mdf"]["source_id"] = self.__dataset["mdf"]["source_id"]
+
         # source_name
         rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
 
