@@ -46,20 +46,20 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
 
         # Delete previous version of this dataset in Search
         version = dataset_entry["mdf"]["version"]
-        source_name = dataset_entry["mdf"]["source_name"]
-        old_source_name = source_name
+        source_id = dataset_entry["mdf"]["source_id"]
+        old_source_id = source_id
         # Find previous version with entries
         while version > 1:
-            old_source_name = old_source_name.replace("_v"+str(version), "_v"+str(version-1))
+            old_source_id = old_source_id.replace("_v"+str(version), "_v"+str(version-1))
             del_q = {
-                "q": "mdf.source_name:" + old_source_name,
+                "q": "mdf.source_id:" + old_source_id,
                 "advanced": True
                 }
             del_res = ingest_client.delete_by_query(index, del_q)
             if del_res["num_subjects_deleted"]:
                 logger.info(("{}: {} Search entries cleared from "
-                             "{}").format(source_name, del_res["num_subjects_deleted"],
-                                          old_source_name))
+                             "{}").format(source_id, del_res["num_subjects_deleted"],
+                                          old_source_id))
             version -= 1
 
         for rc in stock:
@@ -76,13 +76,13 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
     # Create submitters
     submitters = [multiprocessing.Process(target=submit_ingests,
                                           args=(ingest_queue, error_queue, ingest_creds,
-                                                index, input_done, source_name))
+                                                index, input_done, source_id))
                   for i in range(NUM_SUBMITTERS)]
     # Create queue populator
     populator = multiprocessing.Process(target=populate_queue,
                                         args=(ingest_queue, val, batch_size,
-                                              (feedstock_save or os.devnull), source_name))
-    logger.debug("{}: Search ingestion starting".format(source_name))
+                                              (feedstock_save or os.devnull), source_id))
+    logger.debug("{}: Search ingestion starting".format(source_id))
     # Start processes
     populator.start()
     [s.start() for s in submitters]
@@ -107,7 +107,7 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
 
     # Wait for submitters to finish
     [s.join() for s in submitters]
-    logger.debug("{}: Submitters joined".format(source_name))
+    logger.debug("{}: Submitters joined".format(source_id))
 
     # Fetch remaining errors, if any
     try:
@@ -116,14 +116,14 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
     except Empty:
         pass
 
-    logger.debug("{}: Search ingestion finished with {} errors".format(source_name, len(errors)))
+    logger.debug("{}: Search ingestion finished with {} errors".format(source_id, len(errors)))
     return {
         "success": True,
         "errors": errors
     }
 
 
-def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_name):
+def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_id):
     # Populate ingest queue and save results if requested
     with open(feedstock_save, 'w') as save_loc:
         batch = []
@@ -146,11 +146,11 @@ def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_n
             full_ingest = mdf_toolbox.format_gmeta(batch)
             ingest_queue.put(json.dumps(full_ingest))
             batch.clear()
-    logger.debug("{}: Input queue populated".format(source_name))
+    logger.debug("{}: Input queue populated".format(source_id))
     return
 
 
-def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, source_name):
+def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, source_id):
     """Submit entry ingests to Globus Search."""
     ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
     while True:
@@ -171,16 +171,16 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
             try:
                 res = ingest_client.ingest(index, ingestable)
             except Exception as e:
-                logger.error("{}: Retrying Search error: {}".format(source_name, repr(e)))
+                logger.error("{}: Retrying Search error: {}".format(source_id, repr(e)))
                 res = ingest_client.ingest(index, ingestable)
             if not res["success"]:
                 raise ValueError("Ingest failed: " + str(res))
             elif res["num_documents_ingested"] <= 0:
                 raise ValueError("No documents ingested: " + str(res))
             else:
-                logger.debug("{}: Search batch ingested".format(source_name))
+                logger.debug("{}: Search batch ingested".format(source_id))
         except GlobusAPIError as e:
-            logger.error("{}: Search Globus API Error: {}".format(source_name, e.raw_json))
+            logger.error("{}: Search Globus API Error: {}".format(source_id, e.raw_json))
             # logger.debug('Stack trace:', exc_info=True)
             # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
@@ -189,7 +189,7 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
             }
             error_queue.put(json.dumps(err))
         except Exception as e:
-            logger.error("{}: Generic Search error: {}".format(source_name, repr(e)))
+            logger.error("{}: Generic Search error: {}".format(source_id, repr(e)))
             # logger.debug('Stack trace:', exc_info=True)
             # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {

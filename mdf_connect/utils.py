@@ -29,11 +29,11 @@ DMO_TABLE = app.config["DYNAMO_TABLE"]
 DMO_SCHEMA = {
     "TableName": DMO_TABLE,
     "AttributeDefinitions": [{
-        "AttributeName": "source_name",
+        "AttributeName": "source_id",
         "AttributeType": "S"
     }],
     "KeySchema": [{
-        "AttributeName": "source_name",
+        "AttributeName": "source_id",
         "KeyType": "HASH"
     }],
     "ProvisionedThroughput": {
@@ -239,7 +239,7 @@ def fetch_whitelist(auth_level):
     return whitelist
 
 
-def make_source_name(title, test=False):
+def make_source_id(title, test=False):
     """Make a source name out of a title."""
     delete_words = [
         "and",
@@ -264,35 +264,38 @@ def make_source_name(title, test=False):
     title = title.replace(" ", "_").strip("_")
     # Filter out special characters
     if not title.isalnum():
-        source_name = ""
+        source_id = ""
         for char in title:
             if char.isalnum() or char == "_":
-                source_name += char
+                source_id += char
     else:
-        source_name = title
+        source_id = title
     # Add test flag if necessary
     if test:
-        source_name = "_test_" + source_name
+        source_id = "_test_" + source_id
 
     # Determine version number to add
     # Remove any existing version number
-    source_name = re.sub("_v[0-9]+$", "", source_name)
+    source_id = re.sub("_v[0-9]+$", "", source_id)
+    # Save source_name
+    source_name = source_id
     version = 1
     user_ids = set()
     while True:
         # Try new source name
-        new_source_name = source_name + "_v{}".format(version)
-        status_res = read_status(new_source_name)
+        new_source_id = source_id + "_v{}".format(version)
+        status_res = read_status(new_source_id)
         # If name already exists, increment version and try again
         if status_res["success"]:
             version += 1
             user_ids.add(status_res["status"]["user_id"])
         # Otherwise, correct name found
         else:
-            source_name = new_source_name
+            source_id = new_source_id
             break
 
     return {
+        "source_id": source_id,
         "source_name": source_name,
         "version": version,
         "user_id_list": user_ids
@@ -586,17 +589,17 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
         }
 
 
-def read_status(source_name):
+def read_status(source_id):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
-    status_res = table.get_item(Key={"source_name": source_name}, ConsistentRead=True).get("Item")
+    status_res = table.get_item(Key={"source_id": source_id}, ConsistentRead=True).get("Item")
     if not status_res:
         return {
             "success": False,
-            "error": "ID {} not found in status database".format(source_name)
+            "error": "ID {} not found in status database".format(source_id)
             }
     else:
         return {
@@ -611,10 +614,10 @@ def create_status(status):
         return tbl_res
     table = tbl_res["table"]
     # TODO: Validate status better (JSONSchema?)
-    if not status.get("source_name"):
+    if not status.get("source_id"):
         return {
             "success": False,
-            "error": "source_name missing"
+            "error": "source_id missing"
             }
     elif not status.get("submission_code"):
         return {
@@ -642,10 +645,10 @@ def create_status(status):
     status["code"] = "z" * len(STATUS_STEPS)
 
     # Check that status does not already exist
-    if read_status(status["source_name"])["success"]:
+    if read_status(status["source_id"])["success"]:
         return {
             "success": False,
-            "error": "ID {} already exists in database".format(status["source_name"])
+            "error": "ID {} already exists in database".format(status["source_id"])
             }
     try:
         table.put_item(Item=status)
@@ -655,18 +658,18 @@ def create_status(status):
             "error": str(e)
             }
     else:
-        logger.info("Status for {}: Created".format(status["source_name"]))
+        logger.info("Status for {}: Created".format(status["source_id"]))
         return {
             "success": True,
             "status": status
             }
 
 
-def update_status(source_name, step, code, text=None, link=None):
+def update_status(source_id, step, code, text=None, link=None):
     """Update the status of a given submission.
 
     Arguments:
-    source_name (str): The source_name of the submission.
+    source_id (str): The source_id of the submission.
     step (str or int): The step of the process to update.
     code (char): The applicable status code character.
     text (str): The message or error text. Only used if required for the code. Default None.
@@ -683,7 +686,7 @@ def update_status(source_name, step, code, text=None, link=None):
     table = tbl_res["table"]
     # TODO: Validate status
     # Get old status
-    old_status = read_status(source_name)
+    old_status = read_status(source_id)
     if not old_status["success"]:
         return old_status
     status = old_status["status"]
@@ -736,20 +739,20 @@ def update_status(source_name, step, code, text=None, link=None):
             "error": repr(e)
             }
     else:
-        logger.info("{}: {}: {}, {}, {}".format(source_name, step, code, text, link))
+        logger.info("{}: {}: {}, {}, {}".format(source_id, step, code, text, link))
         return {
             "success": True,
             "status": status
             }
 
 
-def modify_status_entry(source_name, modifications):
+def modify_status_entry(source_id, modifications):
     """Change the status entry of a given submission.
     This is a generalized (and more powerful) version of update_status.
     This function should be used carefully, as most fields in the status DB should never change.
 
     Arguments:
-    source_name (str): The source_name of the submission.
+    source_id (str): The source_id of the submission.
     modifications (dict): The keys and values to update.
 
     Returns:
@@ -763,7 +766,7 @@ def modify_status_entry(source_name, modifications):
     table = tbl_res["table"]
     # TODO: Validate status
     # Get old status
-    old_status = read_status(source_name)
+    old_status = read_status(source_id)
     if not old_status["success"]:
         return old_status
     status = old_status["status"]
@@ -788,7 +791,7 @@ def modify_status_entry(source_name, modifications):
 
 def translate_status(status):
     # {
-    # source_name: str,
+    # source_id: str,
     # submission_code: "C" or "I"
     # code: str, based on char position
     # messages: list of str, in order generated
@@ -814,7 +817,7 @@ def translate_status(status):
     usr_msg = ("Status of {}{} submission {} ({})\n"
                "Submitted by {} at {}\n\n").format("TEST " if status["test"] else "",
                                                    subm,
-                                                   status["source_name"],
+                                                   status["source_id"],
                                                    status["title"],
                                                    status["submitter"],
                                                    status["submission_time"])
@@ -918,7 +921,7 @@ def translate_status(status):
             })
 
     return {
-        "source_name": status["source_name"],
+        "source_id": status["source_id"],
         "status_message": usr_msg,
         "status_list": web_msg,
         "status_code": status["code"],
