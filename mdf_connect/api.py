@@ -1,30 +1,24 @@
-from datetime import datetime, date
-import gzip
+from datetime import datetime
 import json
 import logging
 import os
-import re
 import shutil
-import tarfile
 import tempfile
 from threading import Thread
-import time
-import urllib
-import zipfile
 
-import boto3
 from bson import ObjectId
-from citrination_client import CitrinationClient
 from flask import jsonify, request, redirect
-import globus_sdk
 import jsonschema
 import mdf_toolbox
 import requests
 from werkzeug.utils import secure_filename
 
-from mdf_connect import app, convert, search_ingest
+from mdf_connect import (app, convert, search_ingest,
+                         authenticate_token, make_source_name, download_and_backup,
+                         globus_publish_data, citrine_upload, read_status, create_status,
+                         update_status, modify_status_entry, translate_status)
 
-
+'''
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
                             aws_access_key_id=app.config["DYNAMO_KEY"],
@@ -88,7 +82,7 @@ ADMIN_GROUP = {
     "updated": 0,
     "frequency": 1 * 24 * 60 * 60  # 1 day
 }
-
+'''
 # Set up root logger
 logger = logging.getLogger("mdf_connect")
 logger.setLevel(app.config["LOG_LEVEL"])
@@ -420,6 +414,7 @@ def convert_driver(metadata, source_name, test):
         }
 
 
+'''
 def authenticate_token(token, auth_level):
     """Auth a token
     Levels:
@@ -783,6 +778,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
     yield {
         "success": True
     }
+'''
 
 
 @app.route("/ingest", methods=["POST"])
@@ -901,11 +897,11 @@ def accept_ingest():
         feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
                                  secure_filename(feedstock.filename))
         feedstock.save(feed_path)
-        ingester = Thread(target=connect_ingester, name="ingester_thread", args=(feed_path,
-                                                                                 source_name,
-                                                                                 services,
-                                                                                 data_loc,
-                                                                                 service_data))
+        ingester = Thread(target=ingest_driver, name="ingester_thread", args=(feed_path,
+                                                                              source_name,
+                                                                              services,
+                                                                              data_loc,
+                                                                              service_data))
     except Exception as e:
         stat_res = update_status(source_name, "ingest_start", "F", text=repr(e))
         if not stat_res["success"]:
@@ -922,7 +918,7 @@ def accept_ingest():
         }), 202)
 
 
-def connect_ingester(base_feed_path, source_name, services, data_loc, service_loc):
+def ingest_driver(base_feed_path, source_name, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -1293,6 +1289,7 @@ def connect_ingester(base_feed_path, source_name, services, data_loc, service_lo
         }
 
 
+'''
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
                         data_ep=None, data_path=None, data_loc=None):
     if not data_loc:
@@ -1427,6 +1424,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
         "success_count": success,
         "failure_count": failed
         }
+'''
 
 
 @app.route("/status/<source_name>", methods=["GET"])
@@ -1475,6 +1473,7 @@ def get_status(source_name):
         return (jsonify(translate_status(raw_status["status"])), 200)
 
 
+'''
 def read_status(source_name):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
@@ -1878,3 +1877,4 @@ def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
             "success": True,
             "table": table
             }
+'''
