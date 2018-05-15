@@ -135,7 +135,7 @@ def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_i
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
             iden = SUBJECT_PATTERN.format(entry["mdf"].get("parent_id", entry["mdf"]["mdf_id"]),
-                                    entry["mdf"]["mdf_id"])
+                                          entry["mdf"]["mdf_id"])
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size
@@ -204,7 +204,8 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
     return
 
 
-def update_entry(ingest_creds, index, updated_entry, subject=None, acl=None, overwrite=False):
+def update_search_entry(ingest_creds, index, updated_entry,
+                        subject=None, acl=None, overwrite=False):
     """Update an entry in Search.
     Arguments:
     ingest_creds (dict): The credentials with which to ingest.
@@ -234,9 +235,10 @@ def update_entry(ingest_creds, index, updated_entry, subject=None, acl=None, ove
 
     if not subject:
         try:
-            subject = SUBJECT_PATTERN.format(updated_entry["mdf"].get("parent_id",
-                                                                      entry["mdf"]["mdf_id"]),
-                                             entry["mdf"]["mdf_id"])
+            subject = SUBJECT_PATTERN.format(updated_entry["mdf"].get(
+                                                                   "parent_id",
+                                                                   updated_entry["mdf"]["mdf_id"]),
+                                             updated_entry["mdf"]["mdf_id"])
         except KeyError as e:
             return {
                 "success": False,

@@ -52,7 +52,8 @@ STATUS_STEPS = (
     ("ingest_search", "Globus Search ingestion"),
     ("ingest_publish", "Globus Publish publication"),
     ("ingest_citrine", "Citrine upload"),
-    ("ingest_mrr", "Materials Resource Registration")
+    ("ingest_mrr", "Materials Resource Registration"),
+    ("ingest_cleanup", "Post-processing cleanup")
 )
 # This is the start of ingest steps in STATUS_STEPS
 # In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
