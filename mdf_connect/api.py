@@ -652,7 +652,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                         batch_size=app.config["SEARCH_BATCH_SIZE"],
                         feedstock_save=final_feed_path)
     except Exception as e:
-        stat_res = update_status(source_id, "ingest_search", "F", text=str(e))
+        stat_res = update_status(source_id, "ingest_search", "F", text=repr(e))
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
         else:
@@ -823,7 +823,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             }
         except Exception as e:
             stat_res = update_status(source_id, "ingest_mrr", "R",
-                                     text="Unable to create MRR metadata:"+str(e))
+                                     text="Unable to create MRR metadata:"+repr(e))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
@@ -834,7 +834,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                         data=mrr_entry).json()
             except Exception as e:
                 stat_res = update_status(source_id, "ingest_mrr", "F",
-                                         text="Unable to submit MRR entry:"+str(e))
+                                         text="Unable to submit MRR entry:"+repr(e))
                 if not stat_res["success"]:
                     raise ValueError(str(stat_res))
             else:

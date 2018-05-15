@@ -16,7 +16,7 @@ setup(
         "globus-sdk>=1.5.0",
         "hyperspy>=1.3",
         "jsonschema>=2.6.0",
-        "mdf-toolbox>=0.2.2",
+        "mdf-toolbox>=0.2.3",
         "pandas>=0.22.0",
         "pif-ingestor",
         "Pillow>=5.0.0",

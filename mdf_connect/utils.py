@@ -656,7 +656,7 @@ def create_status(status):
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
+            "error": repr(e)
             }
     else:
         logger.info("Status for {}: Created".format(status["source_id"]))
@@ -956,7 +956,7 @@ def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCH
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
+            "error": repr(e)
             }
 
     tbl_res2 = get_dmo_table(client, table_name)
@@ -986,7 +986,7 @@ def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
+            "error": repr(e)
             }
     else:
         return {
