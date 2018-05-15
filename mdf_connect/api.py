@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from threading import Thread
+import urllib
 
 from bson import ObjectId
 from flask import jsonify, request, redirect
@@ -13,7 +14,7 @@ import mdf_toolbox
 import requests
 from werkzeug.utils import secure_filename
 
-from mdf_connect import (app, convert, search_ingest,
+from mdf_connect import (app, convert, search_ingest, update_search_entry,
                          authenticate_token, make_source_id, download_and_backup,
                          globus_publish_data, citrine_upload, read_status, create_status,
                          update_status, modify_status_entry, translate_status)
@@ -251,6 +252,13 @@ def convert_driver(metadata, source_id, test):
     # Pull out special fields in metadata (the rest is the dataset)
     services = metadata.pop("services", {})
     parse_params = metadata.pop("index", {})
+    # metadata should have data location
+    metadata["data"] = {
+        "endpoint_path": "globus://{}{}".format(app.config["BACKUP_EP"], backup_path),
+        "link": urllib.parse.quote(
+                    app.config["TRANSFER_WEB_APP_LINK"].format(
+                                                            app.config["BACKUP_EP"], backup_path))
+    }
     # Add file info data
     parse_params["file"] = {
         "globus_endpoint": app.config["BACKUP_EP"],
@@ -814,7 +822,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                 subject="")
             }
         except Exception as e:
-            stat_res = update_status(source_id, "ingest_mrr", "F",
+            stat_res = update_status(source_id, "ingest_mrr", "R",
                                      text="Unable to create MRR metadata:"+str(e))
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
@@ -835,7 +843,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
                 else:
-                    stat_res = update_status(source_id, "ingest_mrr", "F",
+                    stat_res = update_status(source_id, "ingest_mrr", "R",
                                              text=mrr_res.get("message", "Unknown failure"))
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
@@ -845,9 +853,21 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
 
-    # Dataset update
-    dataset["services"] = service_res
+    # Dataset update, start cleanup
+    stat_res = update_status(source_id, "ingest_cleanup", "P")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
 
+    dataset["services"] = service_res
+    ds_update = update_search_entry(creds,
+                                    index=search_config.get("index", app.config["INGEST_INDEX"]),
+                                    updated_entry=dataset, overwrite=False)
+    if not ds_update["success"]:
+        stat_res = update_status(source_id, "ingest_cleanup", "F",
+                                 text=ds_update.get("error", "Unable to update dataset"))
+        if not stat_res["success"]:
+            raise ValueError(str(stat_res))
+        return
 
     # Cleanup
     cleanups = [
@@ -859,7 +879,15 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             try:
                 shutil.rmtree(cleanup_path)
             except Exception as e:
-                logger.warning("Could not remove data:", str(e))
+                logger.warning("Could not remove data:", repr(e))
+                stat_res = update_status(source_id, "ingest_cleanup", "F",
+                                         text="Unable to clean up processed data")
+                if not stat_res["success"]:
+                    raise ValueError(str(stat_res))
+                return
+    stat_res = update_status(source_id, "ingest_cleanup", "S")
+    if not stat_res["success"]:
+        raise ValueError(str(stat_res))
 
     logger.debug("{}: Ingest complete".format(source_id))
     return {
