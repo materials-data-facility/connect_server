@@ -122,6 +122,12 @@ class Validator:
         # BLOCK: mrr
         # TODO
 
+        # Services
+        ds_md["services"] = ds_md.get("services", {})
+
+        # Data
+        ds_md["data"] = ds_md.get("data", {})
+
         # Validate against schema
         try:
             jsonschema.validate(ds_md, schema, resolver=resolver)

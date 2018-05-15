@@ -630,6 +630,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             raise ValueError(str(stat_res))
 
     # Integrations
+    service_res = {}
 
     # MDF Search (mandatory)
     stat_res = update_status(source_id, "ingest_search", "P")
@@ -665,9 +666,8 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                 return
 
         # Other services use the dataset information
-        if services:
-            with open(final_feed_path) as f:
-                dataset = json.loads(f.readline())
+        with open(final_feed_path) as f:
+            dataset = json.loads(f.readline())
         # Back up feedstock
         backup_feed_path = os.path.join(app.config["BACKUP_FEEDSTOCK"],
                                         source_id + "_final.json")
@@ -692,6 +692,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
             os.remove(final_feed_path)
+        service_res["mdf_search"] = "This dataset was ingested to MDF Search."
 
     # Globus Publish
     if services.get("globus_publish"):
@@ -711,11 +712,12 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
         else:
-            stat_link = "https://publish.globus.org/jspui/handle/ITEM/{}".format(fin_res["id"])
+            stat_link = app.config["PUBLISH_LINK"].format(fin_res["id"])
             stat_res = update_status(source_id, "ingest_publish", "L",
                                      text=fin_res["dc.description.provenance"], link=stat_link)
             if not stat_res["success"]:
                 raise ValueError(str(stat_res))
+            service_res["globus_publish"] = stat_link
     else:
         stat_res = update_status(source_id, "ingest_publish", "N")
         if not stat_res["success"]:
@@ -779,6 +781,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                                  {"citrine_id": cit_res["cit_ds_id"]})
                 if not stat_res_2["success"]:
                     raise ValueError(str(stat_res_2))
+                service_res["citrine"] = link
     else:
         stat_res = update_status(source_id, "ingest_citrine", "N")
         if not stat_res["success"]:
@@ -836,10 +839,15 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                              text=mrr_res.get("message", "Unknown failure"))
                     if not stat_res["success"]:
                         raise ValueError(str(stat_res))
+            service_res["mrr"] = "This dataset was registered with the MRR."
     else:
         stat_res = update_status(source_id, "ingest_mrr", "N")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
+
+    # Dataset update
+    dataset["services"] = service_res
+
 
     # Cleanup
     cleanups = [
