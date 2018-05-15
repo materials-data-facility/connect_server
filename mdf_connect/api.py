@@ -255,9 +255,8 @@ def convert_driver(metadata, source_id, test):
     # metadata should have data location
     metadata["data"] = {
         "endpoint_path": "globus://{}{}".format(app.config["BACKUP_EP"], backup_path),
-        "link": urllib.parse.quote(
-                    app.config["TRANSFER_WEB_APP_LINK"].format(
-                                                            app.config["BACKUP_EP"], backup_path))
+        "link": app.config["TRANSFER_WEB_APP_LINK"].format(app.config["BACKUP_EP"],
+                                                           urllib.parse.quote(backup_path))
     }
     # Add file info data
     parse_params["file"] = {
