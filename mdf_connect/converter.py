@@ -7,25 +7,13 @@ from queue import Empty
 
 from mdf_connect import transform
 
-NUM_TRANSFORMERS = 1
+NUM_TRANSFORMERS = 5
 
-GROUPING_RULES = {
-    "vasp": [
-        "outcar",
-        "incar",
-        "chgcar",
-        "wavecar",
-        "wavcar",
-        "ozicar",
-        "ibzcar",
-        "kpoints",
-        "doscar",
-        "poscar",
-        "contcar",
-        "vasp_run.xml",
-        "xdatcar"
-    ]
-}
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "converter_conf.json")
+with open(CONFIG_PATH) as conf_f:
+    conf = json.load(conf_f)
+GROUPING_RULES = conf["grouping_rules"]
+REPOSITORY_RULES = conf["repository_rules"]
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +54,7 @@ def convert(root_path, convert_params):
     input_complete.value = True
     logger.debug("{}: Input complete".format(source_id))
 
-    # TODO: Process dataset entry
+    # Process dataset entry
     full_dataset = convert_params["dataset"]
 
     # Create complete feedstock
@@ -119,3 +107,34 @@ def group_tree(root):
         # Add path to filenames and yield each group
         for g in groups:
             yield [os.path.join(path, f) for f in g]
+
+
+def expand_tags(input_tags, repo_rules=REPOSITORY_RULES):
+    # Remove duplicates
+    input_tags = set(input_tags)
+    # Tags in final form
+    final_tags = set()
+    # Tags requiring expansion
+    parent_tags = set()
+
+    for tag in input_tags:
+        # If tag in in canonical form
+        if tag in repo_rules.keys():
+            # Add canonical tag and aliases to final_tags
+            final_tags.add(tag)
+            final_tags.update(repo_rules[tag].get("aliases", []))
+            # Add parents' canonical forms to processing list
+            parent_tags.update(repo_rules[tag].get("parent_tags", []))
+        # tag is not in canonical form
+        else:
+            # Find canonical form of tag, add to processing list, remove tag from input list
+            for name, info in repo_rules.items():
+                if tag in info["aliases"]:
+                    parent_tags.add(name)
+
+    # Process tags requiring expansion
+    # Recursion ends when no parents are left
+    if parent_tags:
+        final_tags.update(expand_tags(parent_tags))
+
+    return final_tags
