@@ -217,9 +217,16 @@ class Validator:
         # resource_type
         rc_md["mdf"]["resource_type"] = "record"
 
+        # version
+        rc_md["mdf"]["version"] = self.__dataset["mdf"]["version"]
+
         # acl
         if not rc_md["mdf"].get("acl"):
             rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
+
+        # repositories
+        if self.__dataset["mdf"].get("repositories"):
+            rc_md["mdf"]["repositories"] = self.__dataset["mdf"]["repositories"]
 
         # BLOCK: files
         # Add file data to dataset
