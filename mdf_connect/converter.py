@@ -56,6 +56,9 @@ def convert(root_path, convert_params):
 
     # Process dataset entry
     full_dataset = convert_params["dataset"]
+    if full_dataset.get("mdf", {}).get("repositories"):
+        full_dataset["mdf"]["repositories"] = expand_repository_tags(
+                                                full_dataset["mdf"]["repositories"])
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -109,7 +112,7 @@ def group_tree(root):
             yield [os.path.join(path, f) for f in g]
 
 
-def expand_tags(input_tags, repo_rules=REPOSITORY_RULES):
+def expand_repository_tags(input_tags, repo_rules=REPOSITORY_RULES):
     # Remove duplicates
     input_tags = set(input_tags)
     # Tags in final form
@@ -135,6 +138,6 @@ def expand_tags(input_tags, repo_rules=REPOSITORY_RULES):
     # Process tags requiring expansion
     # Recursion ends when no parents are left
     if parent_tags:
-        final_tags.update(expand_tags(parent_tags))
+        final_tags.update(expand_repository_tags(parent_tags))
 
     return final_tags
