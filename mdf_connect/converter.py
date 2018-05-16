@@ -57,8 +57,8 @@ def convert(root_path, convert_params):
     # Process dataset entry
     full_dataset = convert_params["dataset"]
     if full_dataset.get("mdf", {}).get("repositories"):
-        full_dataset["mdf"]["repositories"] = expand_repository_tags(
-                                                full_dataset["mdf"]["repositories"])
+        full_dataset["mdf"]["repositories"] = list(expand_repository_tags(
+                                                    full_dataset["mdf"]["repositories"]))
 
     # Create complete feedstock
     feedstock = [full_dataset]
