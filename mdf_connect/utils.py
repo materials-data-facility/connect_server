@@ -1,13 +1,10 @@
 from datetime import date
-import gzip
 import json
 import logging
 import os
 import re
-import tarfile
 import time
 import urllib
-import zipfile
 
 import boto3
 from citrination_client import CitrinationClient
@@ -323,14 +320,10 @@ def download_and_backup(mdf_transfer_client, data_loc,
         raise TypeError("Data locations must be in a list")
     # Download data locally
     for location in data_loc:
-        try:
-            protocol, data_info = location.split("://", 1)
-        except ValueError:
-            raise ValueError("Data location must be in the form [protocol]://[data_location]")
-        # Special case: Globus UI link can be parsed into globus:// protocol
-        if ((protocol == "http" or protocol == "https")
-                and data_info.startswith("www.globus.org/app/transfer")):
-            data_info = urllib.parse.unquote(data_info)
+        loc_info = urllib.parse.urlparse(location)
+        # Special case: Globus UI link can be parsed into globus:// form
+        if location.startswith("https://www.globus.org/app/transfer"):
+            data_info = urllib.parse.unquote(loc_info.query)
             # EP ID is in origin or dest
             ep_start = data_info.find("origin_id=")
             if ep_start < 0:
@@ -363,23 +356,24 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
             # Make new location
             location = "globus://{}{}".format(ep_id, path)
-            protocol, data_info = location.split("://", 1)
+            loc_info = urllib.parse.urlparse(location)
 
-        if protocol == "globus":
+        if loc_info.scheme == "globus":
             # Check that data not already in place
-            if data_info != local_ep + local_path:
-                # Parse out EP and path
-                # Right now, path assumed to be a directory
-                try:
-                    user_ep, user_path = data_info.split("/", 1)
-                except ValueError:
-                    raise ValueError(("Globus link must be in the form "
-                                      "'[endpoint_id]/path/to/data_directory/"))
-                user_path = "/" + user_path + ("/" if not user_path.endswith("/") else "")
-
+            if loc_info.netloc != local_ep and loc_info.path != local_path:
+                # If there is a dir mismatch (one has trailing slash, other does not)
+                # has_slash XOR has_slash
+                if (loc_info.path[-1] == "/") != (local_path[-1] == "/"):
+                    # If Transferring file to dir, add file to dir
+                    # Otherwise error - cannot transfer dir into file
+                    f_name = os.path.basename(loc_info.path)
+                    if not f_name:
+                        raise ValueError("Cannot back up a directory into a file")
+                    local_path += f_name
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
-                                mdf_transfer_client, user_ep, local_ep, [(user_path, local_path)],
+                                mdf_transfer_client, loc_info.netloc, local_ep,
+                                [(loc_info.path, local_path)],
                                 interval=app.config["TRANSFER_PING_INTERVAL"],
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
                 for event in transfer:
@@ -393,14 +387,14 @@ def download_and_backup(mdf_transfer_client, data_loc,
                 if not event["success"]:
                     raise ValueError(event)
 
-        elif protocol == "http" or protocol == "https":
+        elif loc_info.scheme.startswith("http"):
             # Get extension (mostly for debugging)
             try:
-                filename = data_info.rsplit("/", 1)[1]
-                ext = "." + filename.rsplit(".", 1)[1]
-                filename = filename.replace(ext, "")
+                ext = loc_info.path.rsplit(".", 1)[1]
+                if "/" in ext:
+                    raise ValueError()
             except Exception:
-                ext = ".archive"
+                ext = "archive"
             archive_path = os.path.join(local_path, "archive."+ext)
 
             # Fetch file
@@ -408,6 +402,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
             with open(archive_path, 'wb') as out:
                 out.write(res.content)
 
+            '''
             # Extract if possible
             # tar
             if tarfile.is_tarfile(archive_path):
@@ -434,9 +429,11 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     pass
             # If the file was not extracted, it will not have been removed
             # Therefore, it will be processed if possible
+            '''
         else:
             # Nothing to do
-            raise IOError("Invalid data location: " + str(location))
+            raise IOError("Invalid data location: '{}' is not a recognized protocol "
+                          "(from {}).".format(loc_info.scheme, str(location)))
 
     # Back up data
     if backup_ep and backup_path:
