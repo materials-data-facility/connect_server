@@ -70,6 +70,23 @@
             ],
             "parent_tags": [
             ]
+        },
+        "Materials Commons": {
+            "aliases": [
+                "MCPub"
+            ],
+            "parent_tags": [
+                "Center for Predictive Integrated Structural Materials Science"
+            ]
+        },
+        "Center for Predictive Integrated Structural Materials Science": {
+            "aliases": [
+                "PRISMS",
+                "Department of Energy Software Innovation Center for Integrated Multi-Scale Modeling of Structural Metals"
+            ],
+            "parent_tags": [
+                "U.S. Department of Energy"
+            ]
         }
     }
 }
