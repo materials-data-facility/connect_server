@@ -200,19 +200,12 @@ def convert_driver(metadata, source_id, test):
         transfer_client = clients["transfer"]
         connect_authorizer = clients["connect"]
     except Exception as e:
-        stat_res = update_status(source_id, "convert_start", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
-    stat_res = update_status(source_id, "convert_start", "S")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+        update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
+        return
+    update_status(source_id, "convert_start", "S", except_on_fail=True)
 
     # Download data locally, back up on MDF resources
-    stat_res = update_status(source_id, "convert_download", "P")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "convert_download", "P", except_on_fail=True)
     local_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], source_id) + "/"
     try:
@@ -223,26 +216,18 @@ def convert_driver(metadata, source_id, test):
                                           app.config["BACKUP_EP"] if not test else None,
                                           backup_path if not test else None):
             if not dl_res["success"]:
-                stat_res = update_status(source_id, "convert_download", "T",
-                                         text=dl_res["error"])
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "convert_download", "T",
+                                         text=dl_res["error"], except_on_fail=True)
     except Exception as e:
-        stat_res = update_status(source_id, "convert_download", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "convert_download", "F", text=repr(e),
+                                 except_on_fail=True)
+        return
     if not dl_res["success"]:
-        stat_res = update_status(source_id, "convert_download", "F", text=dl_res["error"])
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "convert_download", "F", text=dl_res["error"],
+                                 except_on_fail=True)
+        return
     else:
-        stat_res = update_status(source_id, "convert_download", "S")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "convert_download", "S", except_on_fail=True)
         logger.info("{}: Data downloaded, {} archives extracted".format(
                                                                     source_id,
                                                                     dl_res["num_extracted"]))
@@ -274,47 +259,33 @@ def convert_driver(metadata, source_id, test):
     }
 
     # Convert data
-    stat_res = update_status(source_id, "converting", "P")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "converting", "P", except_on_fail=True)
     try:
         feedstock, num_groups = convert(local_path, convert_params)
     except Exception as e:
-        stat_res = update_status(source_id, "converting", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+        return
     else:
         # feedstock minus dataset entry is records
         num_parsed = len(feedstock) - 1
         # If nothing in feedstock, panic
         if num_parsed < 0:
-            stat_res = update_status(source_id, "converting", "F",
-                                     text="Could not parse dataset entry")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            else:
-                return
+            update_status(source_id, "converting", "F",
+                                     text="Could not parse dataset entry", except_on_fail=True)
+            return
         # If no records, warn user
         elif num_parsed == 0:
-            stat_res = update_status(source_id, "converting", "U",
+            update_status(source_id, "converting", "U",
                                      text=("No records were parsed out of {} groups"
-                                           .format(num_groups)))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+                                           .format(num_groups)), except_on_fail=True)
         else:
-            stat_res = update_status(source_id, "converting", "M",
+            update_status(source_id, "converting", "M",
                                      text=("{} records parsed out of {} groups"
-                                           .format(num_parsed, num_groups)))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+                                           .format(num_parsed, num_groups)), except_on_fail=True)
         logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
 
     # Pass dataset to /ingest
-    stat_res = update_status(source_id, "convert_ingest", "P")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
         with tempfile.TemporaryFile(mode="w+") as stock:
             for entry in feedstock:
@@ -337,23 +308,16 @@ def convert_driver(metadata, source_id, test):
                                        # TODO: Verify after getting real cert
                                        verify=False)
     except Exception as e:
-        stat_res = update_status(source_id, "convert_ingest", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "convert_ingest", "F", text=repr(e),
+                                 except_on_fail=True)
+        return
     else:
         if ingest_res.json().get("success"):
-            stat_res = update_status(source_id, "convert_ingest", "S")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "convert_ingest", "S", except_on_fail=True)
         else:
-            stat_res = update_status(source_id, "convert_ingest", "F",
-                                     text=str(ingest_res.json()))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            else:
-                return
+            update_status(source_id, "convert_ingest", "F",
+                                     text=str(ingest_res.json()), except_on_fail=True)
+            return
 
     return {
         "success": True,
@@ -412,7 +376,7 @@ def accept_ingest():
     # Mint or update status ID
     if source_id:
         # TODO: Verify source_id ownership
-        stat_res = update_status(source_id, "ingest_start", "P")
+        stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
         if not stat_res["success"]:
             return (jsonify(stat_res), 400)
     else:
@@ -483,7 +447,8 @@ def accept_ingest():
                                                                               data_loc,
                                                                               service_data))
     except Exception as e:
-        stat_res = update_status(source_id, "ingest_start", "F", text=repr(e))
+        stat_res = update_status(source_id, "ingest_start", "F", text=repr(e),
+                                 except_on_fail=False)
         if not stat_res["success"]:
             return (jsonify(stat_res), 500)
         else:
@@ -514,42 +479,31 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
 
         final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_final.json")
     except Exception as e:
-        stat_res = update_status(source_id, "ingest_start", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
+        return
 
-    stat_res = update_status(source_id, "ingest_start", "S")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "ingest_start", "S", except_on_fail=True)
 
     # If the data should be local, make sure it is
     # Currently only Publish needs the data
     if services.get("globus_publish"):
         if not data_loc:
-            stat_res = update_status(source_id, "ingest_download", "F",
+            update_status(source_id, "ingest_download", "F",
                                      text=("Globus Publish integration was selected, "
-                                           "but the data location was not provided."))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            stat_res = update_status(source_id, "ingest_publish", "F",
-                                     text="Unable to publish data without location.")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+                                           "but the data location was not provided."),
+                                     except_on_fail=True)
+            update_status(source_id, "ingest_publish", "F",
+                                     text="Unable to publish data without location.",
+                                     except_on_fail=True)
             return
         else:
             # If all locations are Globus, don't need to download locally
             if all([loc.startswith("globus://") for loc in data_loc]):
-                stat_res = update_status(source_id, "ingest_download", "N")
+                update_status(source_id, "ingest_download", "N", except_on_fail=True)
                 data_ep = None
                 data_path = None
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
             else:
-                stat_res = update_status(source_id, "ingest_download", "P")
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_download", "P", except_on_fail=True)
                 # Will not transfer anything if already in place
                 data_ep = app.config["LOCAL_EP"]
                 data_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
@@ -559,50 +513,36 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                                       data_ep,
                                                       data_path):
                         if not dl_res["success"]:
-                            stat_res = update_status(source_id, "ingest_download", "T",
-                                                     text=dl_res["error"])
-                            if not stat_res["success"]:
-                                raise ValueError(str(stat_res))
+                            update_status(source_id, "ingest_download", "T",
+                                                     text=dl_res["error"], except_on_fail=True)
                 except Exception as e:
-                    stat_res = update_status(source_id, "ingest_download", "F", text=repr(e))
-                    if not stat_res["success"]:
-                        raise ValueError(str(stat_res))
-                    else:
-                        return
+                    update_status(source_id, "ingest_download", "F", text=repr(e),
+                                             except_on_fail=True)
+                    return
                 if not dl_res["success"]:
-                    stat_res = update_status(source_id, "ingest_download", "F",
-                                             text=dl_res["error"])
-                    if not stat_res["success"]:
-                        raise ValueError(str(stat_res))
-                    else:
-                        return
+                    update_status(source_id, "ingest_download", "F",
+                                             text=dl_res["error"], except_on_fail=True)
+                    return
                 else:
-                    stat_res = update_status(source_id, "ingest_download", "S")
-                    if not stat_res["success"]:
-                        raise ValueError(str(stat_res))
+                    update_status(source_id, "ingest_download", "S",
+                                             except_on_fail=True)
                     logger.debug("{}: Ingest data downloaded".format(source_id))
     else:
-        stat_res = update_status(source_id, "ingest_download", "N")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_download", "N", except_on_fail=True)
 
     # Same for integrated service data
     if services.get("citrine"):
         if not service_loc:
-            stat_res = update_status(source_id, "ingest_integration", "F",
+            update_status(source_id, "ingest_integration", "F",
                                      text=("Citrine integration was selected, but the"
-                                           "integration data location was not provided."))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            stat_res = update_status(source_id, "ingest_citrine", "F",
-                                     text="Unable to upload PIFs without location.")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+                                           "integration data location was not provided."),
+                                     except_on_fail=True)
+            update_status(source_id, "ingest_citrine", "F",
+                                     text="Unable to upload PIFs without location.",
+                                     except_on_fail=True)
             return
         else:
-            stat_res = update_status(source_id, "ingest_integration", "P")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_integration", "P", except_on_fail=True)
             # Will not transfer anything if already in place
             service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
             try:
@@ -611,40 +551,27 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                                   app.config["LOCAL_EP"],
                                                   service_data):
                     if not dl_res["success"]:
-                        stat_res = update_status(source_id, "ingest_integration", "T",
-                                                 text=dl_res["error"])
-                        if not stat_res["success"]:
-                            raise ValueError(str(stat_res))
+                        update_status(source_id, "ingest_integration", "T",
+                                                 text=dl_res["error"], except_on_fail=True)
             except Exception as e:
-                stat_res = update_status(source_id, "ingest_integration", "F", text=repr(e))
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
-                else:
-                    return
+                update_status(source_id, "ingest_integration", "F", text=repr(e),
+                                         except_on_fail=True)
+                return
             if not dl_res["success"]:
-                stat_res = update_status(source_id, "ingest_integration", "F",
-                                         text=dl_res["error"])
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
-                else:
-                    return
+                update_status(source_id, "ingest_integration", "F",
+                                         text=dl_res["error"], except_on_fail=True)
+                return
             else:
-                stat_res = update_status(source_id, "ingest_integration", "S")
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_integration", "S", except_on_fail=True)
                 logger.debug("{}: Integration data downloaded".format(source_id))
     else:
-        stat_res = update_status(source_id, "ingest_integration", "N")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_integration", "N", except_on_fail=True)
 
     # Integrations
     service_res = {}
 
     # MDF Search (mandatory)
-    stat_res = update_status(source_id, "ingest_search", "P")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "ingest_search", "P", except_on_fail=True)
     search_config = services.get("mdf_search", {})
     try:
         search_res = search_ingest(
@@ -653,26 +580,20 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                         batch_size=app.config["SEARCH_BATCH_SIZE"],
                         feedstock_save=final_feed_path)
     except Exception as e:
-        stat_res = update_status(source_id, "ingest_search", "F", text=repr(e))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
-        else:
-            return
+        update_status(source_id, "ingest_search", "F", text=repr(e),
+                                 except_on_fail=True)
+        return
     else:
         # Handle errors
         if len(search_res["errors"]) > 0:
-            stat_res = update_status(source_id, "ingest_search", "F",
-                                     text=("{} batches of records failed to ingest "
-                                           "({} records total)"
-                                           ".").format(
-                                                    len(search_res["errors"]),
-                                                    (len(search_res["errors"])
-                                                     * app.config["SEARCH_BATCH_SIZE"]),
-                                                    search_res["errors"]))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
-            else:
-                return
+            update_status(source_id, "ingest_search", "F",
+                          text=("{} batches of records failed to ingest ({} records total)"
+                                ".").format(len(search_res["errors"]),
+                                            (len(search_res["errors"])
+                                             * app.config["SEARCH_BATCH_SIZE"]),
+                                            search_res["errors"]),
+                          except_on_fail=True)
+            return
 
         # Other services use the dataset information
         with open(final_feed_path) as f:
@@ -692,22 +613,17 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             if not event["success"]:
                 raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
-            stat_res = update_status(source_id, "ingest_search", "R",
-                                     text="Feedstock backup failed: {}".format(e))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_search", "R",
+                                     text="Feedstock backup failed: {}".format(e),
+                                     except_on_fail=True)
         else:
-            stat_res = update_status(source_id, "ingest_search", "S")
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_search", "S", except_on_fail=True)
             os.remove(final_feed_path)
         service_res["mdf_search"] = "This dataset was ingested to MDF Search."
 
     # Globus Publish
     if services.get("globus_publish"):
-        stat_res = update_status(source_id, "ingest_publish", "P")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_publish", "P", except_on_fail=True)
         # collection should be in id or name
         collection = (services["globus_publish"].get("collection_id")
                       or services["globus_publish"].get("collection_name")
@@ -717,26 +633,20 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                           dataset, collection,
                                           data_ep, data_path, data_loc)
         except Exception as e:
-            stat_res = update_status(source_id, "ingest_publish", "R", text=repr(e))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_publish", "R", text=repr(e),
+                                     except_on_fail=True)
         else:
             stat_link = app.config["PUBLISH_LINK"].format(fin_res["id"])
-            stat_res = update_status(source_id, "ingest_publish", "L",
-                                     text=fin_res["dc.description.provenance"], link=stat_link)
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_publish", "L",
+                                     text=fin_res["dc.description.provenance"], link=stat_link,
+                                     except_on_fail=True)
             service_res["globus_publish"] = stat_link
     else:
-        stat_res = update_status(source_id, "ingest_publish", "N")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_publish", "N", except_on_fail=True)
 
     # Citrine
     if services.get("citrine"):
-        stat_res = update_status(source_id, "ingest_citrine", "P")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Check if this is a new version
         version = dataset.get("mdf", {}).get("version", 1)
@@ -762,9 +672,8 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                      old_citrine_id,
                                      public=services["citrine"].get("public", True))
         except Exception as e:
-            stat_res = update_status(source_id, "ingest_citrine", "R", text=repr(e))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_citrine", "R", text=repr(e),
+                                     except_on_fail=True)
         else:
             if not cit_res["success"]:
                 if cit_res.get("error"):
@@ -775,32 +684,26 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                     text = "No PIFs were generated"
                 else:
                     text = "An error prevented PIF uploading"
-                stat_res = update_status(source_id, "ingest_citrine", "R", text=text)
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_citrine", "R", text=text,
+                                         except_on_fail=True)
             else:
                 text = "{}/{} PIFs uploaded successfully".format(cit_res["success_count"],
                                                                  cit_res["success_count"]
                                                                  + cit_res["failure_count"])
                 link = app.config["CITRINATION_LINK"].format(cit_ds_id=cit_res["cit_ds_id"])
-                stat_res = update_status(source_id, "ingest_citrine", "L", text=text, link=link)
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_citrine", "L", text=text, link=link,
+                                         except_on_fail=True)
                 stat_res_2 = modify_status_entry(source_id,
                                                  {"citrine_id": cit_res["cit_ds_id"]})
                 if not stat_res_2["success"]:
                     raise ValueError(str(stat_res_2))
                 service_res["citrine"] = link
     else:
-        stat_res = update_status(source_id, "ingest_citrine", "N")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_citrine", "N", except_on_fail=True)
 
     # MRR
     if services.get("mrr"):
-        stat_res = update_status(source_id, "ingest_mrr", "P")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_mrr", "P", except_on_fail=True)
         try:
             if isinstance(services["mrr"], dict) and services["mrr"].get("test"):
                 mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
@@ -823,10 +726,9 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                 subject="")
             }
         except Exception as e:
-            stat_res = update_status(source_id, "ingest_mrr", "R",
-                                     text="Unable to create MRR metadata:"+repr(e))
-            if not stat_res["success"]:
-                raise ValueError(str(stat_res))
+            update_status(source_id, "ingest_mrr", "R",
+                                     text="Unable to create MRR metadata:"+repr(e),
+                                     except_on_fail=True)
         else:
             try:
                 mrr_res = requests.post(app.config["MRR_URL"],
@@ -834,40 +736,31 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                               app.config["MRR_PASSWORD"]),
                                         data=mrr_entry).json()
             except Exception as e:
-                stat_res = update_status(source_id, "ingest_mrr", "F",
-                                         text="Unable to submit MRR entry:"+repr(e))
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_mrr", "F",
+                                         text="Unable to submit MRR entry:"+repr(e),
+                                         except_on_fail=True)
             else:
                 if mrr_res.get("_id"):
-                    stat_res = update_status(source_id, "ingest_mrr", "S")
-                    if not stat_res["success"]:
-                        raise ValueError(str(stat_res))
+                    update_status(source_id, "ingest_mrr", "S", except_on_fail=True)
+                    service_res["mrr"] = "This dataset was registered with the MRR."
                 else:
-                    stat_res = update_status(source_id, "ingest_mrr", "R",
-                                             text=mrr_res.get("message", "Unknown failure"))
-                    if not stat_res["success"]:
-                        raise ValueError(str(stat_res))
-            service_res["mrr"] = "This dataset was registered with the MRR."
+                    update_status(source_id, "ingest_mrr", "R",
+                                             text=mrr_res.get("message", "Unknown failure"),
+                                             except_on_fail=True)
     else:
-        stat_res = update_status(source_id, "ingest_mrr", "N")
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_mrr", "N", except_on_fail=True)
 
     # Dataset update, start cleanup
-    stat_res = update_status(source_id, "ingest_cleanup", "P")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "ingest_cleanup", "P", except_on_fail=True)
 
     dataset["services"] = service_res
     ds_update = update_search_entry(creds,
                                     index=search_config.get("index", app.config["INGEST_INDEX"]),
                                     updated_entry=dataset, overwrite=False)
     if not ds_update["success"]:
-        stat_res = update_status(source_id, "ingest_cleanup", "F",
-                                 text=ds_update.get("error", "Unable to update dataset"))
-        if not stat_res["success"]:
-            raise ValueError(str(stat_res))
+        update_status(source_id, "ingest_cleanup", "F",
+                                 text=ds_update.get("error", "Unable to update dataset"),
+                                 except_on_fail=True)
         return
 
     # Cleanup
@@ -881,14 +774,11 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                 shutil.rmtree(cleanup_path)
             except Exception as e:
                 logger.warning("Could not remove data:", repr(e))
-                stat_res = update_status(source_id, "ingest_cleanup", "F",
-                                         text="Unable to clean up processed data")
-                if not stat_res["success"]:
-                    raise ValueError(str(stat_res))
+                update_status(source_id, "ingest_cleanup", "F",
+                                         text="Unable to clean up processed data",
+                                         except_on_fail=True)
                 return
-    stat_res = update_status(source_id, "ingest_cleanup", "S")
-    if not stat_res["success"]:
-        raise ValueError(str(stat_res))
+    update_status(source_id, "ingest_cleanup", "S", except_on_fail=True)
 
     logger.debug("{}: Ingest complete".format(source_id))
     return {
