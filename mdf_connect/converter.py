@@ -5,8 +5,6 @@ import multiprocessing
 import os
 from queue import Empty
 
-import mdf_toolbox
-
 from mdf_connect import transform
 
 NUM_TRANSFORMERS = 5
@@ -34,12 +32,6 @@ def convert(root_path, convert_params):
     list of dict: The full feedstock for this dataset, including dataset entry.
     """
     source_id = convert_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
-
-    # Extract all archives in root dir, and delete extracted archives
-    extract_res = mdf_toolbox.uncompress_tree(root_path, delete_archives=True)
-    if not extract_res["success"]:
-        raise IOError("Unable to extract archives in dataset")
-    logger.info("{}: {} archives extracted.".format(source_id, extract_res["num_extracted"]))
 
     # Set up multiprocessing
     input_queue = multiprocessing.Queue()
