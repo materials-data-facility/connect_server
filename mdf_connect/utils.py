@@ -369,11 +369,13 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     f_name = os.path.basename(loc_info.path)
                     if not f_name:
                         raise ValueError("Cannot back up a directory into a file")
-                    local_path += f_name
+                    transfer_path = os.path.join(local_path, f_name)
+                else:
+                    transfer_path = local_path
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
                                 mdf_transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, local_path)],
+                                [(loc_info.path, transfer_path)],
                                 interval=app.config["TRANSFER_PING_INTERVAL"],
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
                 for event in transfer:
@@ -405,6 +407,11 @@ def download_and_backup(mdf_transfer_client, data_loc,
             raise IOError("Invalid data location: '{}' is not a recognized protocol "
                           "(from {}).".format(loc_info.scheme, str(location)))
 
+    # Extract all archives, delete extracted archives
+    extract_res = mdf_toolbox.uncompress_tree(local_path, delete_archives=True)
+    if not extract_res["success"]:
+        raise IOError("Unable to extract archives in dataset")
+
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
@@ -417,7 +424,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
         if not event["success"]:
             raise ValueError(event["code"]+": "+event["description"])
     yield {
-        "success": True
+        "success": True,
+        "num_extracted": extract_res["num_extracted"]
     }
 
 

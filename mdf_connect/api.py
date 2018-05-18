@@ -243,7 +243,9 @@ def convert_driver(metadata, source_id, test):
         stat_res = update_status(source_id, "convert_download", "S")
         if not stat_res["success"]:
             raise ValueError(str(stat_res))
-        logger.debug("{}: Data downloaded".format(source_id))
+        logger.info("{}: Data downloaded, {} archives extracted".format(
+                                                                    source_id,
+                                                                    dl_res["num_extracted"]))
 
     # Handle service integration data directory
     service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
