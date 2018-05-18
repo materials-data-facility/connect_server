@@ -389,47 +389,17 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
         elif loc_info.scheme.startswith("http"):
             # Get extension (mostly for debugging)
-            try:
-                ext = loc_info.path.rsplit(".", 1)[1]
-                if "/" in ext:
-                    raise ValueError()
-            except Exception:
-                ext = "archive"
-            archive_path = os.path.join(local_path, "archive."+ext)
+            ext = os.path.splitext(loc_info.path)[1]
+            if not ext:
+                ext = ".archive"
+
+            archive_path = os.path.join(local_path, "archive"+ext)
 
             # Fetch file
             res = requests.get(location)
             with open(archive_path, 'wb') as out:
                 out.write(res.content)
 
-            '''
-            # Extract if possible
-            # tar
-            if tarfile.is_tarfile(archive_path):
-                tar = tarfile.open(archive_path)
-                tar.extractall(local_path)
-                tar.close()
-                os.remove(archive_path)
-            # zip
-            elif zipfile.is_zipfile(archive_path):
-                z = zipfile.ZipFile(archive_path)
-                z.extractall(local_path)
-                z.close()
-                os.remove(archive_path)
-            # gzip
-            else:
-                try:
-                    with gzip.open(archive_path) as gz:
-                        archive_data = gz.read()
-                        with open(os.path.join(local_path, filename), 'w') as output:
-                            output.write(str(archive_data))
-                    os.remove(archive_path)
-                # An IOErrorwill occur at gz.read() if the file is not a gzip
-                except IOError:
-                    pass
-            # If the file was not extracted, it will not have been removed
-            # Therefore, it will be processed if possible
-            '''
         else:
             # Nothing to do
             raise IOError("Invalid data location: '{}' is not a recognized protocol "
