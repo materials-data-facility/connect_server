@@ -641,7 +641,7 @@ def create_status(status):
             }
 
 
-def update_status(source_id, step, code, text=None, link=None):
+def update_status(source_id, step, code, text=None, link=None, except_on_fail=False):
     """Update the status of a given submission.
 
     Arguments:
@@ -650,6 +650,8 @@ def update_status(source_id, step, code, text=None, link=None):
     code (char): The applicable status code character.
     text (str): The message or error text. Only used if required for the code. Default None.
     link (str): The link to add. Only used if required for the code. Default None.
+    except_on_fail (bool): If True, will raise an Exception if the status cannot be updated.
+                           If False, will return a dict as normal, with success=False.
 
     Returns:
     dict: success (bool): Success state
@@ -710,9 +712,12 @@ def update_status(source_id, step, code, text=None, link=None):
         # put_item will overwrite
         table.put_item(Item=status)
     except Exception as e:
-        return {
-            "success": False,
-            "error": repr(e)
+        if except_on_fail:
+            raise
+        else:
+            return {
+                "success": False,
+                "error": repr(e)
             }
     else:
         logger.info("{}: {}: {}, {}, {}".format(source_id, step, code, text, link))
