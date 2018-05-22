@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import urllib
 
@@ -565,6 +566,125 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
         }
 
 
+def cancel_submission(source_id, wait=True):
+    """Cancel an in-progress submission.
+    Will not cancel completed or already-cancelled submissions.
+
+    Arguments:
+    source_id (str): The source_id of the submission.
+    wait (bool): If True, will wait on submission completion before returning success.
+                 If False, will not wait.
+                 Default True.
+    Returns:
+    success (bool): True on success, False otherwise.
+    stopped (bool): True if the submission is no longer operating. False otherwise.
+                    The difference between success and stopped is that a submission
+                    that completed previously was not successfully cancelled, but was stopped.
+                    Can be False when success is True if wait is True.
+    error (str): The error message. Only exists if success is False.
+    """
+    logger.debug("{}: Attempting to cancel".format(source_id))
+    # Check if submission can be cancelled
+    stat_res = read_status(source_id)
+    if not stat_res["success"]:
+        return stat_res
+    current_status = stat_res["status"]
+    if current_status["cancelled"]:
+        return {
+            "success": False,
+            "error": "Submission already cancelled",
+            "stopped": True
+        }
+    elif current_status["completed"]:
+        return {
+            "success": False,
+            "error": "Submission already completed",
+            "stopped": True
+        }
+
+    # Change submission to cancelled
+    update_res = modify_status_entry(source_id, {"cancelled": True})
+    if not update_res["success"]:
+        return {
+            "success": False,
+            "error": update_res["error"],
+            "stopped": False
+        }
+
+    # Wait for completion if requested
+    if wait:
+        while not read_status(source_id)["status"]["completed"]:
+            logger.debug("{}: Waiting for submission to cancel".format(source_id))
+            time.sleep(app.config["CANCEL_WAIT_TIME"])
+
+    # Change status code to reflect cancellation
+    old_status_code = read_status(source_id)["status"]["code"]
+    new_status_code = old_status_code.replace("W", "X").replace("T", "X").replace("P", "W")
+    update_res = modify_status_entry(source_id, {"code": new_status_code})
+    if not update_res["success"]:
+        return {
+            "success": False,
+            "error": update_res["error"],
+            "stopped": wait
+        }
+    logger.debug("{}: Submission cancelled: {}".format(source_id, new_status_code))
+
+    return {
+        "success": True,
+        "stopped": wait
+    }
+
+
+def complete_submission(source_id, cleanup=True):
+    """Complete a submission.
+
+    Arguments:
+    source_id (str): The source_id of the submission.
+    cleanup (bool): If True, will delete the local submission data.
+                    If False, will not.
+                    Default True.
+
+    Returns:
+    success (bool): True on success, False otherwise.
+    error (str): The error message. Only exists if success is False.
+    """
+    # Check that status completed is False
+    if read_status(source_id).get("status", {}).get("completed", True):
+        return {
+            "success": False,
+            "error": "Submission not in progress"
+        }
+    logger.debug("{}: Starting cleanup".format(source_id))
+    # Remove dirs containing processed data, if requested
+    if cleanup:
+        cleanup_paths = [
+            os.path.join(app.config["LOCAL_PATH"], source_id) + "/",
+            os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
+        ]
+        for cleanup in cleanup_paths:
+            if os.path.exists(cleanup):
+                try:
+                    shutil.rmtree(cleanup)
+                except Exception as e:
+                    logger.warning("{}: Could not remove path '{}': {}".format(source_id,
+                                                                               cleanup, repr(e)))
+                    return {
+                        "success": False,
+                        "error": "Unable to clear processed data"
+                    }
+            else:
+                logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
+    # Update status to "completed"
+    update_res = modify_status_entry(source_id, {"completed": True})
+    if not update_res["success"]:
+        return update_res
+
+    logger.debug("{}: Cleanup finished".format(source_id))
+    return {
+        "success": True
+    }
+
+
 def read_status(source_id):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
@@ -619,6 +739,8 @@ def create_status(status):
     # Create defaults
     status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
+    status["completed"] = False
+    status["cancelled"] = False
 
     # Check that status does not already exist
     if read_status(status["source_id"])["success"]:
