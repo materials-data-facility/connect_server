@@ -619,7 +619,8 @@ def cancel_submission(source_id, wait=True):
 
     # Change status code to reflect cancellation
     old_status_code = read_status(source_id)["status"]["code"]
-    new_status_code = old_status_code.replace("W", "X").replace("T", "X").replace("P", "W")
+    new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
+                                     .replace("T", "X").replace("P", "W")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
     if not update_res["success"]:
         return {
