@@ -2,7 +2,6 @@ from datetime import datetime
 import json
 import logging
 import os
-import shutil
 import tempfile
 from threading import Thread
 import urllib
@@ -16,7 +15,8 @@ from werkzeug.utils import secure_filename
 
 from mdf_connect import (app, convert, search_ingest, update_search_entry,
                          authenticate_token, make_source_id, download_and_backup,
-                         globus_publish_data, citrine_upload, read_status, create_status,
+                         globus_publish_data, citrine_upload, cancel_submission,
+                         complete_submission, read_status, create_status,
                          update_status, modify_status_entry, translate_status)
 
 
@@ -202,9 +202,33 @@ def convert_driver(metadata, source_id, test):
     except Exception as e:
         update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
         return
+
+    # Cancel the previous version(s)
+    vers = metadata["mdf"]["version"]
+    old_source_id = source_id
+    while vers > 1:
+        old_source_id = old_source_id.replace("_v"+str(vers), "_v"+str(vers-1))
+        cancel_res = cancel_submission(old_source_id, wait=True)
+        if not cancel_res["stopped"]:
+            update_status(source_id, "convert_start", "F",
+                          text=cancel_res.get("error",
+                                              ("Unable to cancel previous "
+                                               "submission '{}'").format(old_source_id)),
+                          except_on_fail=True)
+            return
+        if cancel_res["success"]:
+            logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
+        else:
+            logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
+        vers -= 1
+
     update_status(source_id, "convert_start", "S", except_on_fail=True)
 
     # Download data locally, back up on MDF resources
+    # NOTE: Cancellation point
+    if read_status(source_id).get("status", {}).get("cancelled"):
+        complete_submission(source_id)
+        return
     update_status(source_id, "convert_download", "P", except_on_fail=True)
     local_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], source_id) + "/"
@@ -258,6 +282,11 @@ def convert_driver(metadata, source_id, test):
         "service_data": service_data
     }
 
+    # NOTE: Cancellation point
+    if read_status(source_id).get("status", {}).get("cancelled"):
+        complete_submission(source_id)
+        return
+
     # Convert data
     update_status(source_id, "converting", "P", except_on_fail=True)
     try:
@@ -283,6 +312,11 @@ def convert_driver(metadata, source_id, test):
                                      text=("{} records parsed out of {} groups"
                                            .format(num_parsed, num_groups)), except_on_fail=True)
         logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
+
+    # NOTE: Cancellation point
+    if read_status(source_id).get("status", {}).get("cancelled"):
+        complete_submission(source_id)
+        return
 
     # Pass dataset to /ingest
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
@@ -482,7 +516,35 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
         return
 
+    # Cancel the previous version(s)
+    try:
+        vers = int(source_id.rsplit("_v", 1)[1])
+    except Exception as e:
+        update_status(source_id, "ingest_start", "F", text="Invalid source_id: " + source_id,
+                      except_on_fail=True)
+    old_source_id = source_id
+    while vers > 1:
+        old_source_id = old_source_id.replace("_v"+str(vers), "_v"+str(vers-1))
+        cancel_res = cancel_submission(old_source_id, wait=True)
+        if not cancel_res["stopped"]:
+            update_status(source_id, "convert_start", "F",
+                          text=cancel_res.get("error",
+                                              ("Unable to cancel previous "
+                                               "submission '{}'").format(old_source_id)),
+                          except_on_fail=True)
+            return
+        if cancel_res["success"]:
+            logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
+        else:
+            logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
+        vers -= 1
+
     update_status(source_id, "ingest_start", "S", except_on_fail=True)
+
+    # NOTE: Cancellation point
+    if read_status(source_id).get("status", {}).get("cancelled"):
+        complete_submission(source_id)
+        return
 
     # If the data should be local, make sure it is
     # Currently only Publish needs the data
@@ -569,6 +631,11 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
 
     # Integrations
     service_res = {}
+
+    # NOTE: Cancellation point
+    if read_status(source_id).get("status", {}).get("cancelled"):
+        complete_submission(source_id)
+        return
 
     # MDF Search (mandatory)
     update_status(source_id, "ingest_search", "P", except_on_fail=True)
@@ -764,20 +831,14 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         return
 
     # Cleanup
-    cleanups = [
-        os.path.join(app.config["LOCAL_PATH"], source_id) + "/",
-        os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
-    ]
-    for cleanup_path in cleanups:
-        if os.path.exists(cleanup_path):
-            try:
-                shutil.rmtree(cleanup_path)
-            except Exception as e:
-                logger.warning("Could not remove data:", repr(e))
-                update_status(source_id, "ingest_cleanup", "F",
-                                         text="Unable to clean up processed data",
-                                         except_on_fail=True)
-                return
+    try:
+        fin_res = complete_submission(source_id, cleanup=True)
+    except Exception as e:
+        update_status(source_id, "ingest_cleanup", "F", text=repr(e), except_on_fail=True)
+        return
+    if not fin_res["success"]:
+        update_status(source_id, "ingest_cleanup", "F", text=fin_res["error"], except_on_fail=True)
+        return
     update_status(source_id, "ingest_cleanup", "S", except_on_fail=True)
 
     logger.debug("{}: Ingest complete".format(source_id))
