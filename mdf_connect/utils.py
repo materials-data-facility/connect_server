@@ -256,16 +256,17 @@ def make_source_id(title, test=False):
         title = title.replace(" "+dw+" ", " ")
         # Same for underscore separation
         title = title.replace("_"+dw+"_", "_")
-    # Clear double spacing
-    while title.find("  ") != -1:
-        title = title.replace("  ", " ")
     # Replace spaces with underscores, remove leading/trailing underscores
     title = title.replace(" ", "_").strip("_")
+    # Clear double underscores
+    while title.find("__") != -1:
+        title = title.replace("__", "_")
     # Filter out special characters
     if not title.isalnum():
         source_id = ""
         for char in title:
-            if char.isalnum() or char == "_":
+            # If is alnum, or non-duplicate underscore, add to source_id
+            if char.isalnum() or (char == "_" and not source_id.endswith("_")):
                 source_id += char
     else:
         source_id = title

@@ -101,6 +101,8 @@ class Validator:
         # BLOCK: publications
         new_pubs = []
         cref = Crossref()
+        # TODO: Decide on publications schema
+        '''
         for doi in ds_md.get("publications", []):
             # If doi refers to a DOI
             if isinstance(doi, str):
@@ -115,6 +117,7 @@ class Validator:
             elif isinstance(doi, dict):
                 new_pubs.append(doi)
             # Else, is not appropriate data and is discarded
+        '''
 
         if new_pubs:
             ds_md["publications"] = new_pubs
@@ -162,16 +165,16 @@ class Validator:
               error (str): A short message about the error.
               details (str): The full jsonschema error message.
         """
-        if not self.__dataset:
-            return {
-                "success": False,
-                "error": "Dataset not started."
-                }
-        elif self.__finished:
+        if self.__finished:
             return {
                 "success": False,
                 "error": ("Dataset has been finished by calling get_finished_dataset(),"
                           " and no more records may be entered.")
+                }
+        elif not self.__dataset:
+            return {
+                "success": False,
+                "error": "Dataset not started."
                 }
 
         # Load schema
@@ -280,7 +283,7 @@ class Validator:
 
     def get_finished_dataset(self):
         """Retrieve finished dataset, in a generator."""
-        if not self.__dataset:
+        if self.__dataset is None:
             raise ValueError("Dataset not started")
         elif self.__finished:
             raise ValueError("Dataset already finished")
