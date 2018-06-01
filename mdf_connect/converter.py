@@ -9,7 +9,7 @@ from mdf_connect import transform
 
 NUM_TRANSFORMERS = 5
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "converter_conf.json")
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "converter_conf.json")
 with open(CONFIG_PATH) as conf_f:
     conf = json.load(conf_f)
 GROUPING_RULES = conf["grouping_rules"]
