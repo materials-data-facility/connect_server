@@ -254,6 +254,8 @@ class Validator:
 
             # Split elements in string (on whitespace), make unique and JSON-serializable
             list_of_elem = list(set(str_of_elem.split()))
+            # Ensure deterministic results
+            list_of_elem.sort()
             # Currently deprecated
             # If any "element" isn't in the periodic table,
             # the composition is likely not a chemical formula and should not be parsed
