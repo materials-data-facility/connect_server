@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from queue import Empty
+import re
 
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
@@ -443,6 +444,50 @@ def parse_electron_microscopy(group, params=None):
                 records.append({
                     "electron_microscopy": em
                 })
+    return records
+
+
+def parse_filename(group, params=None):
+    """Parser for metadata stored in filenames.
+    Will populate blocks according to mapping.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            filename (dict):
+                mapping (dict): The mapping of mdf_fields: regex_pattern
+
+    Returns:
+    list of dict: The record(s) parsed.
+    """
+    try:
+        filename_params = params["parsers"]["filename"]
+        mapping = filename_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
+    except (KeyError, AttributeError):
+        return {}
+
+    records = []
+    for file_path in group:
+        record = {}
+        filename = os.path.basename(file_path)
+        for mdf_path, pattern in _flatten_struct(mapping):
+            mdf_path = mdf_path.replace("__custom", source_name)
+            match = re.search(pattern, filename)
+            if match:
+                fields = mdf_path.split(".")
+                last_field = fields.pop()
+                current_field = record
+                # Create all missing fields
+                for field in fields:
+                    if current_field.get(field) is None:
+                        current_field[field] = {}
+                    current_field = current_field[field]
+                # Add value to end
+                current_field[last_field] = match.group()
+        if record:
+            records.append(record)
     return records
 
 

@@ -1,7 +1,6 @@
 import json
-import os
 
-import mdf_connect
+import mdf_connect.transformer as parsers
 import pytest
 
 
@@ -10,6 +9,7 @@ dataset_param = {
         "source_name": "test_dataset"
     }
 }
+
 
 def test_json(tmpdir):
     json_data = {
@@ -54,30 +54,69 @@ def test_json(tmpdir):
     }
 
     # Test with proper mappings
-    assert mdf_connect.transformer.parse_json(group, params={
-                                                        "dataset": dataset_param,
-                                                        "parsers": {
-                                                            "json": {
-                                                                "mapping": mapping1
-                                                            }
-                                                        }
-                                                     }) == [correct_record]
-    assert mdf_connect.transformer.parse_json(group, params={
-                                                        "dataset": dataset_param,
-                                                        "parsers": {
-                                                            "json": {
-                                                                "mapping": mapping2
-                                                            }
-                                                        }
-                                                     }) == [correct_record]
+    assert parsers.parse_json(group, params={
+                                        "dataset": dataset_param,
+                                        "parsers": {
+                                            "json": {
+                                                "mapping": mapping1
+                                            }
+                                        }
+                                     }) == [correct_record]
+    assert parsers.parse_json(group, params={
+                                        "dataset": dataset_param,
+                                        "parsers": {
+                                            "json": {
+                                                "mapping": mapping2
+                                            }
+                                        }
+                                     }) == [correct_record]
     # Test failure modes
-    assert mdf_connect.transformer.parse_json(group, {}) == {}
-    assert mdf_connect.transformer.parse_json([], params={
-                                                        "dataset": dataset_param,
-                                                        "parsers": {
-                                                            "json": {
-                                                                "mapping": mapping2
-                                                            }
-                                                        }
-                                                  }) == []
+    assert parsers.parse_json(group, {}) == {}
+    assert parsers.parse_json([], params={
+                                    "dataset": dataset_param,
+                                    "parsers": {
+                                        "json": {
+                                            "mapping": mapping2
+                                        }
+                                    }
+                                  }) == []
 
+
+def test_filename():
+    mapping = {
+        "material.composition": "^.{2}",  # First two chars are always composition
+        "__custom.foo": "foo:.{3}",  # 3 chars after foo is foo
+        "__custom.ext": "\..{3,4}$"  # 3 or 4 char extension
+    }
+    group = ["He_abcdeffoo:FOO.txt", "Al123Smith_et_al.and_co.data", "O2foo:bar"]
+    correct = [{
+        'test_dataset': {
+            'ext': '.txt',
+            'foo': 'foo:FOO'
+        },
+        'material': {
+            'composition': 'He'
+        }
+    }, {
+        'test_dataset': {
+            'ext': '.data'
+        },
+        'material': {
+            'composition': 'Al'
+        }
+    }, {
+        'test_dataset': {
+            'foo': 'foo:bar'
+        },
+        'material': {
+            'composition': 'O2'
+        }
+    }]
+    assert parsers.parse_filename(group, params={
+                                            "dataset": dataset_param,
+                                            "parsers": {
+                                                "filename": {
+                                                    "mapping": mapping
+                                                }
+                                            }
+                                         }) == correct
