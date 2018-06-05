@@ -9,7 +9,7 @@ install:
 env:
 - FLASK_ENV=development
 script:
-- flake8 . && travis_wait 50 py.test --nbval-lax
+- flake8 . && travis_wait 50 py.test
 before_install:
 - openssl aes-256-cbc -K $encrypted_d16805535c17_key -iv $encrypted_d16805535c17_iv
   -in travis.tar.enc -out travis.tar -d

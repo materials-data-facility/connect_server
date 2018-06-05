@@ -256,7 +256,7 @@ def test_validator():
         }],
         'material': {
             'composition': 'FFO2',
-            'elements': ['O', 'F']
+            'elements': ['F', 'O']
         },
         'calphad': {
             'phases': ['waxing', 'waning', 'waiting']
