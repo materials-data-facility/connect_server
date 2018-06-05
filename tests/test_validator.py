@@ -88,8 +88,7 @@ def test_validator():
         "files": [{
             "data_type": "example",
             "filename": "foo.bar"
-        },
-        {
+        }, {
             "data_type": "also-example",
             "globus": "globus://12345a/a/b/c/foo.txt",
             "url": "https://example.com/data/foo.txt",

@@ -4,7 +4,7 @@ import os
 from tempfile import TemporaryFile
 
 from bson import ObjectId
-from crossref.restful import Works as Crossref
+from crossref.restful import Works as Crossref  # noqa: F401
 import jsonschema
 
 
