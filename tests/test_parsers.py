@@ -1,7 +1,7 @@
 import json
 
 import mdf_connect.transformer as parsers
-import pytest
+import pytest  # noqa: F401
 
 
 dataset_param = {

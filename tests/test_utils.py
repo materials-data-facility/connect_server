@@ -1,5 +1,5 @@
 import mdf_connect
-import pytest
+import pytest  # noqa: F401
 
 
 def test_make_source_id():
