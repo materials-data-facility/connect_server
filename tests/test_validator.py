@@ -153,7 +153,7 @@ def test_validator():
                 'resourceType': 'Dataset',
                 'resourceTypeGeneral': 'Dataset'
             },
-            'titles': [{ 
+            'titles': [{
                 'title': 'Foo Bar Dataset'
             }]
         },
@@ -341,11 +341,10 @@ def test_validator():
     assert res[2]["mdf"].pop("ingest_date")
     assert res == correct2
 
-    bad_res =  val.add_record({})
+    bad_res = val.add_record({})
     assert bad_res["success"] is False
     assert "Dataset has been finished" in bad_res["error"]
 
     bad_res = val.start_dataset(bad_dataset)
     assert bad_res["success"] is False
     assert "Invalid metadata" in bad_res["error"]
-

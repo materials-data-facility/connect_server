@@ -100,9 +100,9 @@ class Validator:
 
         # BLOCK: publications
         new_pubs = []
-        cref = Crossref()
         # TODO: Decide on publications schema
         '''
+        cref = Crossref()
         for doi in ds_md.get("publications", []):
             # If doi refers to a DOI
             if isinstance(doi, str):

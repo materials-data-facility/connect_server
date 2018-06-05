@@ -1,5 +1,3 @@
-import os
-
 import mdf_connect
 import pytest
 
@@ -31,4 +29,3 @@ def test_make_source_id():
     # assert res["version"] > 1
     # assert res["source_name"] == ""
     # assert res["source_id"].endswith(str(res["version"]))
-
