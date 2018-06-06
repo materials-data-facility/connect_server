@@ -11,7 +11,6 @@ setup(
         "boto3>=1.7.33",
         "citrination-client>=4.1.1",
         "crossrefapi>=1.3.0",
-        "Cython>=0.27.3",
         "dfttopif>=1.0.0",
         "flask>=1.0.2",
         "globus-sdk>=1.5.0",
@@ -20,7 +19,7 @@ setup(
         "mdf-toolbox>=0.2.3",
         "pandas>=0.23.0",
         "Pillow>=5.1.0",
-        "pycalphad>=0.7",
+        # "pycalphad>=0.7",  # Must be conda installed
         "pymatgen>=2018.5.22",
         "pymongo>=3.6.1",  # For bson.ObjectId
         "pypif>=2.1.0",

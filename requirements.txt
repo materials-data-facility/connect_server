@@ -3,4 +3,3 @@
 -e git+https://github.com/CitrineInformatics/pif-ingestor.git#egg=pif_ingestor
 -e git+https://github.com/CitrineInformatics/pypif-sdk.git#egg=pypif_sdk
 
-
