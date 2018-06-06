@@ -80,6 +80,14 @@ def test_json(tmpdir):
                                         }
                                     }
                                   }) == []
+    assert parsers.parse_json(["doesn't_exist.nope"], params={
+                                    "dataset": dataset_param,
+                                    "parsers": {
+                                        "json": {
+                                            "mapping": mapping2
+                                        }
+                                    }
+                                  }) == {}
 
 
 def test_filename():
@@ -120,3 +128,13 @@ def test_filename():
                                                 }
                                             }
                                          }) == correct
+    # Failures
+    assert parsers.parse_filename(group, params={}) == {}
+    assert parsers.parse_filename([], params={
+                                            "dataset": dataset_param,
+                                            "parsers": {
+                                                "filename": {
+                                                    "mapping": mapping
+                                                }
+                                            }
+                                         }) == []
