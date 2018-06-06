@@ -1,5 +1,4 @@
 from datetime import date
-import json
 import logging
 import os
 import re
@@ -525,15 +524,15 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
         else:
             cit_ds_id = previous_id
             cit_client.update_dataset(cit_ds_id,
-                                       name=cit_title,
-                                       description=cit_desc,
-                                       public=False)
+                                      name=cit_title,
+                                      description=cit_desc,
+                                      public=False)
     # Create new dataset if not created
     if not previous_id or previous_id == "INVALID":
         try:
             cit_ds_id = cit_client.create_dataset(name=cit_title,
-                                                   description=cit_desc,
-                                                   public=False).id
+                                                  description=cit_desc,
+                                                  public=False).id
             assert cit_ds_id > 0
         except Exception as e:
             logger.warning("{}: Citrine dataset creation failed: {}".format(source_id, repr(e)))
