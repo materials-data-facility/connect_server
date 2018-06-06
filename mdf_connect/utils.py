@@ -501,7 +501,7 @@ def get_publish_metadata(metadata):
 
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
                    public=app.config["DEFAULT_CITRINATION_PUBLIC"]):
-    cit_client = CitrinationClient(api_key)
+    cit_client = CitrinationClient(api_key).data
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
     except (KeyError, IndexError, TypeError):
