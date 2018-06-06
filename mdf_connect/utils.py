@@ -502,6 +502,7 @@ def get_publish_metadata(metadata):
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
                    public=app.config["DEFAULT_CITRINATION_PUBLIC"]):
     cit_client = CitrinationClient(api_key).data
+    source_id = mdf_dataset.get("mdf", {}).get("source_id", "NO_ID")
     try:
         cit_title = mdf_dataset["dc"]["titles"][0]["title"]
     except (KeyError, IndexError, TypeError):
@@ -517,24 +518,25 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
     # Create new version if dataset previously created
     if previous_id:
         try:
-            rev_res = cit_client.create_data_set_version(previous_id).json()
-            assert rev_res["dataset_id"] == previous_id
+            rev_res = cit_client.create_dataset_version(previous_id)
+            assert rev_res.number > 1
         except Exception:
             previous_id = "INVALID"
         else:
             cit_ds_id = previous_id
-            cit_client.update_data_set(cit_ds_id,
+            cit_client.update_dataset(cit_ds_id,
                                        name=cit_title,
                                        description=cit_desc,
-                                       share=0)
+                                       public=False)
     # Create new dataset if not created
     if not previous_id or previous_id == "INVALID":
         try:
-            cit_ds_id = cit_client.create_data_set(name=cit_title,
+            cit_ds_id = cit_client.create_dataset(name=cit_title,
                                                    description=cit_desc,
-                                                   share=0).json()["id"]
+                                                   public=False).id
             assert cit_ds_id > 0
-        except Exception:
+        except Exception as e:
+            logger.warning("{}: Citrine dataset creation failed: {}".format(source_id, repr(e)))
             if previous_id == "INVALID":
                 return {
                     "success": False,
@@ -550,14 +552,14 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
     failed = 0
     for path, _, files in os.walk(os.path.abspath(citrine_data)):
         for pif in files:
-            up_res = json.loads(cit_client.upload(cit_ds_id, os.path.join(path, pif)))
-            if up_res.get("success"):
+            up_res = cit_client.upload(cit_ds_id, os.path.join(path, pif))
+            if up_res.successful():
                 success += 1
             else:
-                logger.warning("Citrine upload failure:" + up_res)
+                logger.warning("{}: Citrine upload failure: {}".format(source_id, str(up_res)))
                 failed += 1
 
-    cit_client.update_data_set(cit_ds_id, share=1 if public else 0)
+    cit_client.update_dataset(cit_ds_id, public=public)
 
     return {
         "success": bool(success),
