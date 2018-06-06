@@ -11,6 +11,7 @@ setup(
         "boto3>=1.7.33",
         "citrination-client>=4.1.1",
         "crossrefapi>=1.3.0",
+        "Cython>=0.27.3",
         "dfttopif>=1.0.0",
         "flask>=1.0.2",
         "globus-sdk>=1.5.0",
