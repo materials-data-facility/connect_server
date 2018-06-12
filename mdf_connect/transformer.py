@@ -31,6 +31,9 @@ NA_VALUES = ["", " "]
 
 logger = logging.getLogger(__name__)
 
+# Log debug messages for all parser events. Extremely spammy.
+SUPER_DEBUG = True
+
 # List of parsers at bottom
 
 
@@ -96,6 +99,9 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                                                    t=type(parser_res)))
                         logger.debug("{}: {} parsed {}".format(source_id,
                                                                parser.__name__, group))
+                    elif SUPER_DEBUG:
+                        logger.debug("{}: {} could not parse {}".format(source_id,
+                                                                        parser.__name__, group))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -494,6 +500,7 @@ def parse_filename(group, params=None):
 # List of all non-internal parsers
 ALL_PARSERS = [
     parse_crystal_structure,
+    parse_tdb,
     parse_pif,
     parse_json,
     parse_csv,
