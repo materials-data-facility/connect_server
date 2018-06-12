@@ -20,7 +20,7 @@ import pycalphad  # noqa: E402
 import pymatgen  # noqa: E402
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
 from pif_ingestor.manager import IngesterManager  # noqa: E402
-from pypif.obj import System
+from pypif.obj import System  # noqa: E402
 from pypif.pif import dump as pif_dump  # noqa: E402
 from pypif_sdk.util import citrination as cit_utils  # noqa: E402
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock  # noqa: E402
