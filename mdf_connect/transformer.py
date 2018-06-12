@@ -20,6 +20,7 @@ import pycalphad  # noqa: E402
 import pymatgen  # noqa: E402
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
 from pif_ingestor.manager import IngesterManager  # noqa: E402
+from pypif.obj import System
 from pypif.pif import dump as pif_dump  # noqa: E402
 from pypif_sdk.util import citrination as cit_utils  # noqa: E402
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock  # noqa: E402
@@ -223,9 +224,12 @@ def parse_pif(group, params=None):
     except Exception as e:
         logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
-
     if not raw_pifs:
         return {}
+    elif isinstance(raw_pifs, System):
+        raw_pifs = [raw_pifs]
+    elif not isinstance(raw_pifs, list):
+        raw_pifs = list(raw_pifs)
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
