@@ -322,7 +322,9 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Download data locally
     for location in data_loc:
         loc_info = urllib.parse.urlparse(location)
-        # Special case: Globus UI link can be parsed into globus:// form
+
+        # Special case pre-processing
+        # Globus Web App link into globus:// form
         if location.startswith("https://www.globus.org/app/transfer"):
             data_info = urllib.parse.unquote(loc_info.query)
             # EP ID is in origin or dest
@@ -358,7 +360,15 @@ def download_and_backup(mdf_transfer_client, data_loc,
             # Make new location
             location = "globus://{}{}".format(ep_id, path)
             loc_info = urllib.parse.urlparse(location)
+        # Google Drive protocol into globus:// form
+        elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+            # Don't use os.path.join because path starts with /
+            # GDRIVE_ROOT does not end in / to make compatible
+            location = "globus://{}{}{}".format(app.config["GDRIVE_EP"],
+                                                app.config["GDRIVE_ROOT"], loc_info.path)
+            loc_info = urllib.parse.urlparse(location)
 
+        # Globus Transfer
         if loc_info.scheme == "globus":
             # Check that data not already in place
             if loc_info.netloc != local_ep and loc_info.path != local_path:
@@ -389,7 +399,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                         }
                 if not event["success"]:
                     raise ValueError(event)
-
+        # HTTP(S)
         elif loc_info.scheme.startswith("http"):
             # Get extension (mostly for debugging)
             ext = os.path.splitext(loc_info.path)[1]
@@ -402,7 +412,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
             res = requests.get(location)
             with open(archive_path, 'wb') as out:
                 out.write(res.content)
-
+        # Not supported
         else:
             # Nothing to do
             raise IOError("Invalid data location: '{}' is not a recognized protocol "
