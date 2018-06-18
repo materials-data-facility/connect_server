@@ -29,10 +29,12 @@ logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {messag
                                       style='{',
                                       datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
-logfile_handler = logging.FileHandler(app.config["LOG_FILE"], mode='w')
+logfile_handler = logging.FileHandler(app.config["LOG_FILE"], mode='a')
 logfile_handler.setFormatter(logfile_formatter)
 
 logger.addHandler(logfile_handler)
+
+logger.info("\n\n==========Connect service started==========\n")
 
 
 @app.route('/', methods=["GET", "POST"])
@@ -189,6 +191,7 @@ def convert_driver(metadata, source_id, test):
     source_id (str): The source name of this submission.
     """
     # Setup
+    update_status(source_id, "convert_start", "P", except_on_fail=True)
     creds = {
         "app_name": "MDF Open Connect",
         "client_id": app.config["API_CLIENT_ID"],

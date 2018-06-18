@@ -595,7 +595,7 @@ def cancel_submission(source_id, wait=True):
                     Can be False when success is True if wait is True.
     error (str): The error message. Only exists if success is False.
     """
-    logger.debug("{}: Attempting to cancel".format(source_id))
+    logger.debug("Attempting to cancel {}".format(source_id))
     # Check if submission can be cancelled
     stat_res = read_status(source_id)
     if not stat_res["success"]:
@@ -626,7 +626,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         while not read_status(source_id)["status"]["completed"]:
-            logger.debug("{}: Waiting for submission to cancel".format(source_id))
+            logger.info("Waiting for submission {} to cancel".format(source_id))
             time.sleep(app.config["CANCEL_WAIT_TIME"])
 
     # Change status code to reflect cancellation
@@ -640,7 +640,7 @@ def cancel_submission(source_id, wait=True):
             "error": update_res["error"],
             "stopped": wait
         }
-    logger.debug("{}: Submission cancelled: {}".format(source_id, new_status_code))
+    logger.debug("Submission {} cancelled: {}".format(source_id, new_status_code))
 
     return {
         "success": True,
