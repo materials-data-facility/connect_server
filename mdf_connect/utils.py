@@ -613,6 +613,21 @@ def cancel_submission(source_id, wait=True):
             "error": "Submission already completed",
             "stopped": True
         }
+    # Check if PID still alive, if dead, is effectively cancelled
+    else:
+        try:
+            # If this does not throw exception, process is alive
+            os.kill(current_status["pid"], 0)  # Signal 0 is noop
+        except ProcessLookupError:
+            # No process found
+            return {
+                "success": False,
+                "error": "Submission not processing",
+                "stopped": True
+            }
+        except Exception:
+            # Other exception unexpected
+            raise
 
     # Change submission to cancelled
     update_res = modify_status_entry(source_id, {"cancelled": True})
@@ -754,6 +769,7 @@ def create_status(status):
     status["code"] = "z" * len(STATUS_STEPS)
     status["completed"] = False
     status["cancelled"] = False
+    status["pid"] = os.getpid()
 
     # Check that status does not already exist
     if read_status(status["source_id"])["success"]:
