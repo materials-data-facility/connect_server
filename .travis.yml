@@ -1,0 +1,39 @@
+language: python
+python:
+- '3.5'
+- '3.6'
+install:
+- wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
+- bash miniconda.sh -b -p $HOME/miniconda
+- export PATH="$HOME/miniconda/bin:$PATH"
+- conda config --set always_yes yes --set changeps1 no
+- conda update -q conda
+- conda create -q -n test-env python=$TRAVIS_PYTHON_VERSION
+- source activate test-env
+- pip install --upgrade pip
+- pip install -e .
+- pip install -r requirements.txt --src ~/pip_src/
+- pip install -r test_requirements.txt
+- conda install -c pycalphad -c msys2 -c conda-forge pycalphad
+env:
+- FLASK_ENV=development
+script:
+- flake8 . && travis_wait 50 py.test
+before_install:
+- openssl aes-256-cbc -K $encrypted_d16805535c17_key -iv $encrypted_d16805535c17_iv
+  -in travis.tar.enc -out travis.tar -d
+- tar xvf travis.tar
+- mv keys.conf mdf_connect/config/keys.conf
+after_success:
+- coveralls
+notifications:
+  email:
+    recipients:
+    - jgaff@uchicago.edu
+    on_success: never
+    on_failure: change
+  slack:
+    on_success: always
+    on_failure: always
+    rooms:
+      secure: PQiWfFCYIZLW32gLzs9zhJvnkFkhz8AFslYVdEWL/7qfBZyeJ6Ik1uM+CTluykxc6PXxbauJrtYHL0cN9J4ydPxyIt27v5s0KcXo8qngvXtsYXJDqLaAuzopeQ9dQz/t74MZiOZ52qWgzjcWmzwB7UKIXAbfCVnWDRsV7LrDUpDLu1Cg7kQpwmWV7nYWs10Ti6qU+bsMEKVpl+vQGqU8ZDX4ybV7OFPURGGCFjsHS1gTQ7QfXUgHpqhFGmbxK3TbKgoU1sooTSeMxC+JH8DtHEb6LfX5FmcDExhIo7FqWi9FzdQzufwSk2twS/8V55PA2XQIEzzhUDlyyq1gzItqe9C2BY5khEuPxgjn3y1Eomr4Xv4FACdXkw3IF7nPcqFSEMwjuT2c0N0l/dsvsnNu8OXU7xCeScyGfGiyGFHml+BNsKrQ3V6g+1S7rGfGROzwiN3UeGSizcL14lwaT63P8K42uiBjOybJn002ltFtCIE7ieKaX0GD0lIxL4swGU1mU6qeCv4nu4t1hsLm59YqESwUGQJ7YjAeLA2UgtVZFh1N4naSQmSE3p3CudIqg6HAsQddIa0G1p7Ulgalzao4wVPJhLccTAOHvtj8rgi1qUA1H9CyxKYy2U1RooVpteJc1uJOBl5X9kbfYoHYi71JSluOcdO3wyzWOlJynhKFL28=
