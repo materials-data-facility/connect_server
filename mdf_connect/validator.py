@@ -4,7 +4,7 @@ import os
 from tempfile import TemporaryFile
 
 from bson import ObjectId
-from crossref.restful import Works as Crossref
+from crossref.restful import Works as Crossref  # noqa: F401
 import jsonschema
 
 
@@ -100,6 +100,8 @@ class Validator:
 
         # BLOCK: publications
         new_pubs = []
+        # TODO: Decide on publications schema
+        '''
         cref = Crossref()
         for doi in ds_md.get("publications", []):
             # If doi refers to a DOI
@@ -115,12 +117,19 @@ class Validator:
             elif isinstance(doi, dict):
                 new_pubs.append(doi)
             # Else, is not appropriate data and is discarded
+        '''
 
         if new_pubs:
             ds_md["publications"] = new_pubs
 
         # BLOCK: mrr
         # TODO
+
+        # Services
+        ds_md["services"] = ds_md.get("services", {})
+
+        # Data
+        ds_md["data"] = ds_md.get("data", {})
 
         # Validate against schema
         try:
@@ -156,16 +165,16 @@ class Validator:
               error (str): A short message about the error.
               details (str): The full jsonschema error message.
         """
-        if not self.__dataset:
-            return {
-                "success": False,
-                "error": "Dataset not started."
-                }
-        elif self.__finished:
+        if self.__finished:
             return {
                 "success": False,
                 "error": ("Dataset has been finished by calling get_finished_dataset(),"
                           " and no more records may be entered.")
+                }
+        elif not self.__dataset:
+            return {
+                "success": False,
+                "error": "Dataset not started."
                 }
 
         # Load schema
@@ -189,6 +198,9 @@ class Validator:
 
         # Add fields
         # BLOCK: mdf
+        # source_id
+        rc_md["mdf"]["source_id"] = self.__dataset["mdf"]["source_id"]
+
         # source_name
         rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
 
@@ -208,9 +220,16 @@ class Validator:
         # resource_type
         rc_md["mdf"]["resource_type"] = "record"
 
+        # version
+        rc_md["mdf"]["version"] = self.__dataset["mdf"]["version"]
+
         # acl
         if not rc_md["mdf"].get("acl"):
             rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
+
+        # repositories
+        if self.__dataset["mdf"].get("repositories"):
+            rc_md["mdf"]["repositories"] = self.__dataset["mdf"]["repositories"]
 
         # BLOCK: files
         # Add file data to dataset
@@ -235,6 +254,8 @@ class Validator:
 
             # Split elements in string (on whitespace), make unique and JSON-serializable
             list_of_elem = list(set(str_of_elem.split()))
+            # Ensure deterministic results
+            list_of_elem.sort()
             # Currently deprecated
             # If any "element" isn't in the periodic table,
             # the composition is likely not a chemical formula and should not be parsed
@@ -264,7 +285,7 @@ class Validator:
 
     def get_finished_dataset(self):
         """Retrieve finished dataset, in a generator."""
-        if not self.__dataset:
+        if self.__dataset is None:
             raise ValueError("Dataset not started")
         elif self.__finished:
             raise ValueError("Dataset already finished")

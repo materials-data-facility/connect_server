@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from queue import Empty
+import re
 
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
@@ -19,6 +20,7 @@ import pycalphad  # noqa: E402
 import pymatgen  # noqa: E402
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
 from pif_ingestor.manager import IngesterManager  # noqa: E402
+from pypif.obj import System  # noqa: E402
 from pypif.pif import dump as pif_dump  # noqa: E402
 from pypif_sdk.util import citrination as cit_utils  # noqa: E402
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock  # noqa: E402
@@ -29,6 +31,9 @@ import yaml  # noqa: E402
 NA_VALUES = ["", " "]
 
 logger = logging.getLogger(__name__)
+
+# Log debug messages for all parser events. Extremely spammy.
+SUPER_DEBUG = True
 
 # List of parsers at bottom
 
@@ -47,7 +52,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
     list of dict: The metadata parsed from the file.
                   Will be empty if no selected parser can parse data.
     """
-    source_name = parse_params.get("dataset", {}).get("mdf", {}).get("source_name", "unknown")
+    source_id = parse_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
     try:
         # Parse each group from the queue
         # Exit loop when queue_done is True and no groups remain
@@ -72,7 +77,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     parser_res = parser(group=group, params=parse_params)
                 except Exception as e:
                     logger.warn(("{} Parser {} failed with "
-                                 "exception {}").format(source_name, parser.__name__, repr(e)))
+                                 "exception {}").format(source_id, parser.__name__, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -93,8 +98,11 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                             raise TypeError(("Parser '{p}' returned "
                                              "type '{t}'!").format(p=parser.__name__,
                                                                    t=type(parser_res)))
-                        logger.debug("{}: {} parsed {}".format(source_name,
+                        logger.debug("{}: {} parsed {}".format(source_id,
                                                                parser.__name__, group))
+                    elif SUPER_DEBUG:
+                        logger.debug("{}: {} could not parse {}".format(source_id,
+                                                                        parser.__name__, group))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -113,13 +121,13 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             try:
                 file_info = _parse_file_info(group=group, params=parse_params)
             except Exception as e:
-                logger.warning("{}: File info parser failed: {}".format(source_name, str(e)))
+                logger.warning("{}: File info parser failed: {}".format(source_id, repr(e)))
             for record in records:
                 # TODO: Should files be handled differently?
                 record = toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
-        logger.warning("{}: Transformer error: {}".format(source_name, str(e)))
+        logger.warning("{}: Transformer error: {}".format(source_id, str(e)))
 
     return
 
@@ -222,9 +230,12 @@ def parse_pif(group, params=None):
     except Exception as e:
         logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
-
     if not raw_pifs:
         return {}
+    elif isinstance(raw_pifs, System):
+        raw_pifs = [raw_pifs]
+    elif not isinstance(raw_pifs, list):
+        raw_pifs = list(raw_pifs)
     id_pifs = cit_utils.set_uids(raw_pifs)
 
     for pif in id_pifs:
@@ -446,9 +457,54 @@ def parse_electron_microscopy(group, params=None):
     return records
 
 
+def parse_filename(group, params=None):
+    """Parser for metadata stored in filenames.
+    Will populate blocks according to mapping.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            filename (dict):
+                mapping (dict): The mapping of mdf_fields: regex_pattern
+
+    Returns:
+    list of dict: The record(s) parsed.
+    """
+    try:
+        filename_params = params["parsers"]["filename"]
+        mapping = filename_params["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
+    except (KeyError, AttributeError):
+        return {}
+
+    records = []
+    for file_path in group:
+        record = {}
+        filename = os.path.basename(file_path)
+        for mdf_path, pattern in _flatten_struct(mapping):
+            mdf_path = mdf_path.replace("__custom", source_name)
+            match = re.search(pattern, filename)
+            if match:
+                fields = mdf_path.split(".")
+                last_field = fields.pop()
+                current_field = record
+                # Create all missing fields
+                for field in fields:
+                    if current_field.get(field) is None:
+                        current_field[field] = {}
+                    current_field = current_field[field]
+                # Add value to end
+                current_field[last_field] = match.group()
+        if record:
+            records.append(record)
+    return records
+
+
 # List of all non-internal parsers
 ALL_PARSERS = [
     parse_crystal_structure,
+    parse_tdb,
     parse_pif,
     parse_json,
     parse_csv,

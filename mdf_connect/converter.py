@@ -7,25 +7,13 @@ from queue import Empty
 
 from mdf_connect import transform
 
-NUM_TRANSFORMERS = 1
+NUM_TRANSFORMERS = 5
 
-GROUPING_RULES = {
-    "vasp": [
-        "outcar",
-        "incar",
-        "chgcar",
-        "wavecar",
-        "wavcar",
-        "ozicar",
-        "ibzcar",
-        "kpoints",
-        "doscar",
-        "poscar",
-        "contcar",
-        "vasp_run.xml",
-        "xdatcar"
-    ]
-}
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "converter_conf.json")
+with open(CONFIG_PATH) as conf_f:
+    conf = json.load(conf_f)
+GROUPING_RULES = conf["grouping_rules"]
+REPOSITORY_RULES = conf["repository_rules"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +31,8 @@ def convert(root_path, convert_params):
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
     """
-    source_name = convert_params.get("dataset", {}).get("mdf", {}).get("source_name", "unknown")
+    source_id = convert_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
+
     # Set up multiprocessing
     input_queue = multiprocessing.Queue()
     output_queue = multiprocessing.Queue()
@@ -55,7 +44,7 @@ def convert(root_path, convert_params):
                                                   input_complete, convert_params))
                     for i in range(NUM_TRANSFORMERS)]
     [t.start() for t in transformers]
-    logger.debug("{}: Transformers started".format(source_name))
+    logger.debug("{}: Transformers started".format(source_id))
 
     # Populate input queue
     num_groups = 0
@@ -64,10 +53,13 @@ def convert(root_path, convert_params):
         num_groups += 1
     # Mark that input is finished
     input_complete.value = True
-    logger.debug("{}: Input complete".format(source_name))
+    logger.debug("{}: Input complete".format(source_id))
 
-    # TODO: Process dataset entry
+    # Process dataset entry
     full_dataset = convert_params["dataset"]
+    if full_dataset.get("mdf", {}).get("repositories"):
+        full_dataset["mdf"]["repositories"] = list(expand_repository_tags(
+                                                    full_dataset["mdf"]["repositories"]))
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -79,7 +71,7 @@ def convert(root_path, convert_params):
             if any([t.is_alive() for t in transformers]):
                 [t.join(timeout=1) for t in transformers]
             else:
-                logger.debug("{}: Transformers joined".format(source_name))
+                logger.debug("{}: Transformers joined".format(source_id))
                 break
 
     return (feedstock, num_groups)
@@ -119,3 +111,34 @@ def group_tree(root):
         # Add path to filenames and yield each group
         for g in groups:
             yield [os.path.join(path, f) for f in g]
+
+
+def expand_repository_tags(input_tags, repo_rules=REPOSITORY_RULES):
+    # Remove duplicates
+    input_tags = set(input_tags)
+    # Tags in final form
+    final_tags = set()
+    # Tags requiring expansion
+    parent_tags = set()
+
+    for tag in input_tags:
+        # If tag in in canonical form
+        if tag in repo_rules.keys():
+            # Add canonical tag and aliases to final_tags
+            final_tags.add(tag)
+            final_tags.update(repo_rules[tag].get("aliases", []))
+            # Add parents' canonical forms to processing list
+            parent_tags.update(repo_rules[tag].get("parent_tags", []))
+        # tag is not in canonical form
+        else:
+            # Find canonical form of tag, add to processing list, remove tag from input list
+            for name, info in repo_rules.items():
+                if tag in info["aliases"]:
+                    parent_tags.add(name)
+
+    # Process tags requiring expansion
+    # Recursion ends when no parents are left
+    if parent_tags:
+        final_tags.update(expand_repository_tags(parent_tags))
+
+    return final_tags
