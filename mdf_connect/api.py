@@ -37,7 +37,10 @@ logger.addHandler(logfile_handler)
 logger.info("\n\n==========Connect service started==========\n")
 
 
+# Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
+@app.route('/convert', methods=["GET"])
+@app.route('/ingest', methods=["GET"])
 def root_call():
     return redirect(app.config["FORM_URL"], code=302)
 
