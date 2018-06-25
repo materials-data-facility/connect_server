@@ -4,7 +4,6 @@ import os
 from tempfile import TemporaryFile
 
 from bson import ObjectId
-from crossref.restful import Works as Crossref  # noqa: F401
 import jsonschema
 
 
@@ -63,8 +62,6 @@ class Validator:
 #            ds_md["dc"] = {}
         if not ds_md.get("mdf") or not isinstance(ds_md["mdf"], dict):
             ds_md["mdf"] = {}
-#        if not ds_md.get("publications") or not isinstance(ds_md["publications"], list):
-#            ds_md["publications"] = []
 #        if not ds_md.get("mrr") or not isinstance(ds_md["mrr"], dict):
 #            ds_md["mrr"] = {}
 
@@ -97,30 +94,6 @@ class Validator:
         # version
         if not ds_md["mdf"].get("version"):
             ds_md["mdf"]["version"] = 1
-
-        # BLOCK: publications
-        new_pubs = []
-        # TODO: Decide on publications schema
-        '''
-        cref = Crossref()
-        for doi in ds_md.get("publications", []):
-            # If doi refers to a DOI
-            if isinstance(doi, str):
-                pub_md = cref.doi(doi)
-                # doi call will return None if not found
-                if isinstance(pub_md, dict):
-                    new_pubs.append(pub_md)
-                # Maintain DOI if not found
-                else:
-                    new_pubs.append({"doi": doi})
-            # If is dict, assume is metadata
-            elif isinstance(doi, dict):
-                new_pubs.append(doi)
-            # Else, is not appropriate data and is discarded
-        '''
-
-        if new_pubs:
-            ds_md["publications"] = new_pubs
 
         # BLOCK: mrr
         # TODO
