@@ -687,7 +687,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                 raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
             update_status(source_id, "ingest_search", "R",
-                                     text="Feedstock backup failed: {}".format(e),
+                                     text="Feedstock backup failed: {}".format(str(e)),
                                      except_on_fail=True)
         else:
             update_status(source_id, "ingest_search", "S", except_on_fail=True)
