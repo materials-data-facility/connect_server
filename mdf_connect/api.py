@@ -37,7 +37,10 @@ logger.addHandler(logfile_handler)
 logger.info("\n\n==========Connect service started==========\n")
 
 
+# Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
+@app.route('/convert', methods=["GET"])
+@app.route('/ingest', methods=["GET"])
 def root_call():
     return redirect(app.config["FORM_URL"], code=302)
 
@@ -684,7 +687,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                 raise ValueError(event["code"]+": "+event["description"])
         except Exception as e:
             update_status(source_id, "ingest_search", "R",
-                                     text="Feedstock backup failed: {}".format(e),
+                                     text="Feedstock backup failed: {}".format(str(e)),
                                      except_on_fail=True)
         else:
             update_status(source_id, "ingest_search", "S", except_on_fail=True)
