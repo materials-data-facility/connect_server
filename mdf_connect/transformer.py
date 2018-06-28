@@ -25,6 +25,7 @@ from pypif.pif import dump as pif_dump  # noqa: E402
 from pypif_sdk.util import citrination as cit_utils  # noqa: E402
 from pypif_sdk.interop.mdf import _to_user_defined as pif_to_feedstock  # noqa: E402
 from pypif_sdk.interop.datacite import add_datacite as add_dc  # noqa: E402
+import xmltodict  # noqa: E402
 import yaml  # noqa: E402
 
 # Additional NaN values for Pandas
@@ -363,6 +364,37 @@ def parse_yaml(group, params=None):
     return records
 
 
+def parse_xml(group, params=None):
+    """Parser for XML files.
+    Will populate blocks according to mapping.
+
+    Arguments:
+    group (list of str): The paths to grouped files.
+    params (dict):
+        parsers (dict):
+            xml (dict):
+                mapping (dict): The mapping of mdf_fields: xml_fields
+
+    Returns:
+    list of dict: The record(s) parsed.
+    """
+    try:
+        mapping = params["parsers"]["xml"]["mapping"]
+        source_name = params["dataset"]["mdf"]["source_name"]
+    except (KeyError, AttributeError):
+        return {}
+
+    records = []
+    for file_path in group:
+        try:
+            with open(file_path) as f:
+                file_json = xmltodict.parse(f.read())
+        except Exception as e:
+            return {}
+        records.extend(_parse_json(file_json, mapping, source_name))
+    return records
+
+
 def parse_excel(group, params=None):
     """Parser for MS Excel files.
     Will populate blocks according to mapping.
@@ -509,9 +541,11 @@ ALL_PARSERS = [
     parse_json,
     parse_csv,
     parse_yaml,
+    parse_xml,
     parse_excel,
     parse_image,
-    parse_electron_microscopy
+    parse_electron_microscopy,
+    parse_filename
 ]
 
 

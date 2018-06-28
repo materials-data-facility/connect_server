@@ -90,6 +90,75 @@ def test_json(tmpdir):
                                   }) == {}
 
 
+def test_xml(tmpdir):
+    xml_data = ('<?xml version="1.0" encoding="utf-8"?>\n<root><dict1><field1>value1</field1>'
+                '<field2>2</field2></dict1><dict2><nested1><field1>true</field1>'
+                '<field3>value3</field3></nested1></dict2><compost>CN25</compost></root>')
+    xml_file = tmpdir.join("test.xml")
+    with xml_file.open(mode='w', ensure=True) as f:
+        f.write(xml_data)
+    group = [xml_file.strpath]
+    mapping1 = {
+        "__custom": {
+            "foo": "root.dict1.field1",
+            "bar": "root.dict2.nested1.field1"
+        },
+        "material": {
+            "composition": "root.compost"
+        }
+    }
+    mapping2 = {
+        "__custom.foo": "root.dict1.field1",
+        "__custom.bar": "root.dict2.nested1.field1",
+        "material.composition": "root.compost"
+    }
+    correct_record = {
+        "material": {
+            "composition": "CN25"
+        },
+        "test_dataset": {
+            "foo": "value1",
+            "bar": 'true'
+        }
+    }
+
+    # Test with proper mappings
+    assert parsers.parse_xml(group, params={
+                                        "dataset": dataset_param,
+                                        "parsers": {
+                                            "xml": {
+                                                "mapping": mapping1
+                                            }
+                                        }
+                                     }) == [correct_record]
+    assert parsers.parse_xml(group, params={
+                                        "dataset": dataset_param,
+                                        "parsers": {
+                                            "xml": {
+                                                "mapping": mapping2
+                                            }
+                                        }
+                                     }) == [correct_record]
+    # Test failure modes
+    assert parsers.parse_xml(group, {}) == {}
+    assert parsers.parse_xml([], params={
+                                    "dataset": dataset_param,
+                                    "parsers": {
+                                        "xml": {
+                                            "mapping": mapping2
+                                        }
+                                    }
+                                  }) == []
+    assert parsers.parse_xml(["doesn't_exist.nope"], params={
+                                    "dataset": dataset_param,
+                                    "parsers": {
+                                        "xml": {
+                                            "mapping": mapping2
+                                        }
+                                    }
+                                  }) == {}
+
+
 def test_filename():
     mapping = {
         "material.composition": "^.{2}",  # First two chars are always composition
