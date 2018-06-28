@@ -25,6 +25,7 @@ setup(
         "pypif>=2.1.0",
         "python-magic>=0.4.15",
         "pyyaml>=3.12",
-        "requests>=2.18.4"
+        "requests>=2.18.4",
+        "xmltodict>=0.11.0"
     ]
 )
