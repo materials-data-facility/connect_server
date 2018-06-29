@@ -325,7 +325,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
 
         # Special case pre-processing
         # Globus Web App link into globus:// form
-        if location.startswith("https://www.globus.org/app/transfer"):
+        if (location.startswith("https://www.globus.org/app/transfer")
+                or location.startswith("https://app.globus.org/file-manager")):
             data_info = urllib.parse.unquote(loc_info.query)
             # EP ID is in origin or dest
             ep_start = data_info.find("origin_id=")
