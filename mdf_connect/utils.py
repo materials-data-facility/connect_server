@@ -860,6 +860,8 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
 
+    pid = os.getpid()
+    status["pid"] = pid
     try:
         # put_item will overwrite
         table.put_item(Item=status)
@@ -872,7 +874,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
                 "error": repr(e)
             }
     else:
-        logger.info("{}: {}: {}, {}, {}".format(source_id, step, code, text, link))
+        logger.info("[{}]{}: {}: {}, {}, {}".format(pid, source_id, step, code, text, link))
         return {
             "success": True,
             "status": status

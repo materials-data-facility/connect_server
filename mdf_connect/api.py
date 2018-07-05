@@ -344,9 +344,7 @@ def convert_driver(metadata, source_id, test):
             ingest_res = requests.post(app.config["INGEST_URL"],
                                        data=ingest_args,
                                        files={'file': stock},
-                                       headers=headers,
-                                       # TODO: Verify after getting real cert
-                                       verify=False)
+                                       headers=headers)
     except Exception as e:
         update_status(source_id, "convert_ingest", "F", text=repr(e),
                                  except_on_fail=True)
