@@ -641,9 +641,14 @@ def cancel_submission(source_id, wait=True):
 
     # Wait for completion if requested
     if wait:
-        while not read_status(source_id)["status"]["completed"]:
-            logger.info("Waiting for submission {} to cancel".format(source_id))
-            time.sleep(app.config["CANCEL_WAIT_TIME"])
+        try:
+            while not read_status(source_id)["status"]["completed"]:
+                os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
+                logger.info("Waiting for submission {} to cancel".format(source_id))
+                time.sleep(app.config["CANCEL_WAIT_TIME"])
+        except ProcessLookupError:
+            # Process is dead
+            pass
 
     # Change status code to reflect cancellation
     old_status_code = read_status(source_id)["status"]["code"]
