@@ -1,9 +1,10 @@
 from datetime import datetime
 import json
 import logging
+from multiprocessing import Process
 import os
+import sys
 import tempfile
-from threading import Thread
 import urllib
 
 from bson import ObjectId
@@ -175,14 +176,23 @@ def accept_convert():
     if not status_res["success"]:
         return (jsonify(status_res), 500)
 
-    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata,
-                                                                       source_id,
-                                                                       test))
-    driver.start()
+    spawner = Process(target=spawn_driver, name="driver_spawner", args=(metadata,
+                                                                        source_id,
+                                                                        test))
+    spawner.start()
+    spawner.join()
     return (jsonify({
         "success": True,
         "source_id": source_id
         }), 202)
+
+
+def spawn_driver(metadata, source_id, test):
+    driver = Process(target=convert_driver, name="driver_process", args=(metadata,
+                                                                         source_id,
+                                                                         test))
+    driver.start()
+    os.kill(os.getpid(), 9)
 
 
 def convert_driver(metadata, source_id, test):
@@ -350,11 +360,11 @@ def convert_driver(metadata, source_id, test):
                                  except_on_fail=True)
         return
     else:
-        if ingest_res.json().get("success"):
+        if ingest_res.status_code < 300 and ingest_res.json().get("success"):
             update_status(source_id, "convert_ingest", "S", except_on_fail=True)
         else:
             update_status(source_id, "convert_ingest", "F",
-                                     text=str(ingest_res.json()), except_on_fail=True)
+                                     text=str(ingest_res.content), except_on_fail=True)
             return
 
     return {
@@ -479,7 +489,7 @@ def accept_ingest():
         feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
                                  secure_filename(feedstock.filename))
         feedstock.save(feed_path)
-        ingester = Thread(target=ingest_driver, name="ingester_thread", args=(feed_path,
+        spawner = Process(target=spawn_ingest, name="ingester_spawner", args=(feed_path,
                                                                               source_id,
                                                                               services,
                                                                               data_loc,
@@ -494,11 +504,22 @@ def accept_ingest():
                 "success": False,
                 "error": repr(e)
                 }), 400)
-    ingester.start()
+    spawner.start()
+    spawner.join()
     return (jsonify({
         "success": True,
         "source_id": source_id
         }), 202)
+
+
+def spawn_ingest(base_feed_path, source_id, services, data_loc, service_loc):
+    driver = Process(target=ingest_driver, name="ingest_process", args=(base_feed_path,
+                                                                        source_id,
+                                                                        services,
+                                                                        data_loc,
+                                                                        service_loc))
+    driver.start()
+    os.kill(os.getpid(), 9)
 
 
 def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):

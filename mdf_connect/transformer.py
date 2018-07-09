@@ -34,7 +34,7 @@ NA_VALUES = ["", " "]
 logger = logging.getLogger(__name__)
 
 # Log debug messages for all parser events. Extremely spammy.
-SUPER_DEBUG = True
+SUPER_DEBUG = False
 
 # List of parsers at bottom
 
