@@ -318,7 +318,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
     """
     os.makedirs(local_path, exist_ok=True)
     if not isinstance(data_loc, list):
-        raise TypeError("Data locations must be in a list")
+        data_loc = [data_loc]
     # Download data locally
     for location in data_loc:
         loc_info = urllib.parse.urlparse(location)
@@ -621,6 +621,7 @@ def cancel_submission(source_id, wait=True):
             os.kill(current_status["pid"], 0)  # Signal 0 is noop
         except ProcessLookupError:
             # No process found
+            complete_submission(source_id)
             return {
                 "success": False,
                 "error": "Submission not processing",
@@ -644,11 +645,13 @@ def cancel_submission(source_id, wait=True):
         try:
             while not read_status(source_id)["status"]["completed"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
-                logger.info("Waiting for submission {} to cancel".format(source_id))
+                logger.info("Waiting for submission {} (PID {}) to cancel".format(
+                                                                            source_id,
+                                                                            current_status["pid"]))
                 time.sleep(app.config["CANCEL_WAIT_TIME"])
         except ProcessLookupError:
             # Process is dead
-            pass
+            complete_submission(source_id)
 
     # Change status code to reflect cancellation
     old_status_code = read_status(source_id)["status"]["code"]
@@ -732,6 +735,16 @@ def read_status(source_id):
             "error": "ID {} not found in status database".format(source_id)
             }
     else:
+        # Check if process is a ghost - dead but not complete
+        if not status_res["complete"]:
+            try:
+                os.kill(status_res["pid"], 0)
+            except ProcessLookupError:
+                com_res = complete_submission(source_id)
+                if not com_res["success"]:
+                    return com_res
+                status_res = table.get_item(Key={"source_id": source_id},
+                                            ConsistentRead=True).get("Item")
         return {
             "success": True,
             "status": status_res
@@ -1068,7 +1081,8 @@ def translate_status(status):
         "title": status["title"],
         "submitter": status["submitter"],
         "submission_time": status["submission_time"],
-        "test": status["test"]
+        "test": status["test"],
+        "active": status["completed"]
         }
 
 
