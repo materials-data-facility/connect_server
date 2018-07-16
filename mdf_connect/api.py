@@ -461,7 +461,7 @@ def accept_ingest():
             #   Not started (z) after convert_ingest
             # To avoid issues with additional status steps, the location of convert_ingest
             #   is not hard-coded, and assumed to be the first P
-            # TODO: Improve logic?
+            # TODO: Improve logic
             try:
                 p_index = old_status["code"].find("P")
                 assert p_index > -1
@@ -474,42 +474,45 @@ def accept_ingest():
                                                                                 old_status["code")
                     }), 500)
             # Correct version is "old" version
+            source_id = old_source_id
+            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            if not stat_res["success"]:
+                return (jsonify(stat_res), 400)
 
+        # Past submission complete, try "new" version
+        else:
+            # TODO: Same logic improvement
+            try:
+                p_index = new_status["code"].find("P")
+                assert p_index > -1
+                assert all([code in ["S", "U"] for code in new_status["code"][:p_index]])
+                assert all([code is "z" for code in new_status["code"][:p_index]])
+            except AssertionError:
+                return (jsonify({
+                    "success": False,
+                    "error": "Invalid status code for submission {}: {}".format(new_source_id,
+                                                                                new_status["code")
+                    }), 500)
+            # Correct version is "new" version
+            source_id = new_source_id
+            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            if not stat_res["success"]:
+                return (jsonify(stat_res), 400)
 
-######
-    # version > 1 (not new submission)
-    if new_source_info["version"] > 1:
-        old_source_id = new_source_info["source_name"] + "_v" + str(new_source_info["version"] - 1)
-        old_status = read_status(old_source_id)
-        if not old_status["success"]:
-            return (jsonify({
-                "success": False,
-                "error": "Prior submission lost from database"
-                }), 500)
-        # Verify user can submit this source_id
-        # Connect can always submit, other users must be in user_id_list
-        if (app.config["API_CLIENT_ID"] not in identities
-                and len(source_id_info["user_id_list"]) > 0
-                and not any([uid in source_id_info["user_id_list"] for uid in identities])):
+    # User-submitted, not from Connect
+    # Will not have existing status
+    else:
+        # Verify user is allowed to submit the source_name
+        if (len(new_source_info["user_id_list"]) > 0
+                and not any([uid in new_source_info["user_id_list"] for uid in identities])):
             return (jsonify({
                 "success": False,
                 "error": ("Your source_name or title has been submitted previously "
                           "by another user.")
                 }), 400)
-        # Check if old submission is complete (new submission is new version)
-######
-
-    # Mint or update status ID
-    if source_id:
-        # TODO: Verify source_id ownership, legitimacy
-        stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
-        if not stat_res["success"]:
-            return (jsonify(stat_res), 400)
-    else:
-        # TODO: Fetch real source_id/title instead of minting ObjectId
-        title = "ingested_{}".format(str(ObjectId()))
-        source_id_info = make_source_id(title)
-        source_id = source_id_info["source_id"]
+        # Create new status
+        # Correct source_id is "new" always (previous user-submitted source_ids will be cancelled)
+        source_id = new_source_id
         status_info = {
             "source_id": source_id,
             "submission_code": "I",
