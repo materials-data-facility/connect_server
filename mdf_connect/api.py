@@ -6,7 +6,6 @@ import os
 import tempfile
 import urllib
 
-from bson import ObjectId
 from flask import jsonify, request, redirect
 import jsonschema
 import mdf_toolbox
@@ -341,7 +340,6 @@ def convert_driver(metadata, source_id, test):
 
     # Pass dataset to /ingest
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
-    #TODO: No file
     try:
         with tempfile.TemporaryFile(mode="w+") as stock:
             for entry in feedstock:
@@ -349,17 +347,17 @@ def convert_driver(metadata, source_id, test):
                 stock.write("\n")
             stock.seek(0)
             ingest_args = {
+                "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], stock.name),
                 "source_id": source_id,
-                "data": json.dumps(["globus://" + app.config["LOCAL_EP"] + local_path]),
-                "services": json.dumps(services),
-                "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data]),
-                "test": json.dumps(test)
+                "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
+                "services": services,
+                "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
+                "test": test
             }
             headers = {}
             connect_authorizer.set_authorization_header(headers)
             ingest_res = requests.post(app.config["INGEST_URL"],
-                                       data=ingest_args,
-                                       files={'file': stock},
+                                       json=ingest_args,
                                        headers=headers)
     except Exception as e:
         update_status(source_id, "convert_ingest", "F", text=repr(e),
@@ -471,7 +469,7 @@ def accept_ingest():
                 return (jsonify({
                     "success": False,
                     "error": "Invalid status code for submission {}: {}".format(old_source_id,
-                                                                                old_status["code")
+                                                                                old_status["code"])
                     }), 500)
             # Correct version is "old" version
             source_id = old_source_id
@@ -491,7 +489,7 @@ def accept_ingest():
                 return (jsonify({
                     "success": False,
                     "error": "Invalid status code for submission {}: {}".format(new_source_id,
-                                                                                new_status["code")
+                                                                                new_status["code"])
                     }), 500)
             # Correct version is "new" version
             source_id = new_source_id
