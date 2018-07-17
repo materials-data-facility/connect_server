@@ -271,7 +271,13 @@ def make_source_id(title, test=False):
         source_id = title
     # Add test flag if necessary
     if test:
-        source_id = "_test_" + source_id
+        # If test flag already applied, don't re-apply
+        if source_id.startswith("test"):
+            # Just add back initial underscore
+            source_id = "_" + source_id
+        # Otherwise, apply test flag
+        else:
+            source_id = "_test_" + source_id
 
     # Determine version number to add
     # Remove any existing version number
@@ -316,9 +322,17 @@ def download_and_backup(mdf_transfer_client, data_loc,
     Returns:
     dict: success (bool): True on success, False on failure.
     """
+    filename = None
+    # If the local_path is a file and not a directory, use the directory
+    if local_path[-1] != "/":
+        # Save the filename for later
+        filename = os.path.basename(local_path)
+        local_path = os.path.dirname(local_path) + "/"
+
     os.makedirs(local_path, exist_ok=True)
     if not isinstance(data_loc, list):
         data_loc = [data_loc]
+
     # Download data locally
     for location in data_loc:
         loc_info = urllib.parse.urlparse(location)
@@ -372,13 +386,14 @@ def download_and_backup(mdf_transfer_client, data_loc,
         # Globus Transfer
         if loc_info.scheme == "globus":
             # Check that data not already in place
-            if loc_info.netloc != local_ep and loc_info.path != local_path:
+            if (loc_info.netloc != local_ep
+                    and loc_info.path != (local_path + (filename if filename else ""))):
                 # If there is a dir mismatch (one has trailing slash, other does not)
                 # has_slash XOR has_slash
                 if (loc_info.path[-1] == "/") != (local_path[-1] == "/"):
                     # If Transferring file to dir, add file to dir
                     # Otherwise error - cannot transfer dir into file
-                    f_name = os.path.basename(loc_info.path)
+                    f_name = filename or os.path.basename(loc_info.path)
                     if not f_name:
                         raise ValueError("Cannot back up a directory into a file")
                     transfer_path = os.path.join(local_path, f_name)
@@ -407,7 +422,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
             if not ext:
                 ext = ".archive"
 
-            archive_path = os.path.join(local_path, "archive"+ext)
+            archive_path = os.path.join(local_path, filename or "archive"+ext)
 
             # Fetch file
             res = requests.get(location)
@@ -427,14 +442,15 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
-                        mdf_transfer_client, local_ep, backup_ep, [(local_path, backup_path)],
+                        mdf_transfer_client, local_ep, backup_ep,
+                        [(local_path + (filename if filename else ""), backup_path)],
                         interval=app.config["TRANSFER_PING_INTERVAL"],
                         inactivity_time=app.config["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
                 logger.debug(event)
         if not event["success"]:
-            raise ValueError(event["code"]+": "+event["description"])
+            raise ValueError("{}: {}".format(event["code"], event["description"]))
     yield {
         "success": True,
         "num_extracted": extract_res["num_extracted"]
@@ -608,7 +624,7 @@ def cancel_submission(source_id, wait=True):
             "error": "Submission already cancelled",
             "stopped": True
         }
-    elif current_status["completed"]:
+    elif not current_status["active"]:
         return {
             "success": False,
             "error": "Submission already completed",
@@ -643,7 +659,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         try:
-            while not read_status(source_id)["status"]["completed"]:
+            while read_status(source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
@@ -685,8 +701,8 @@ def complete_submission(source_id, cleanup=True):
     success (bool): True on success, False otherwise.
     error (str): The error message. Only exists if success is False.
     """
-    # Check that status completed is False
-    if read_status(source_id).get("status", {}).get("completed", True):
+    # Check that status active is True
+    if not read_status(source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -711,8 +727,8 @@ def complete_submission(source_id, cleanup=True):
                     }
             else:
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
-    # Update status to "completed"
-    update_res = modify_status_entry(source_id, {"completed": True})
+    # Update status to inactive
+    update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
         return update_res
 
@@ -722,7 +738,7 @@ def complete_submission(source_id, cleanup=True):
     }
 
 
-def read_status(source_id):
+def read_status(source_id, update_active=False):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
@@ -734,21 +750,20 @@ def read_status(source_id):
             "success": False,
             "error": "ID {} not found in status database".format(source_id)
             }
-    else:
-        # Check if process is a ghost - dead but not complete
-        if not status_res["complete"]:
-            try:
-                os.kill(status_res["pid"], 0)
-            except ProcessLookupError:
-                com_res = complete_submission(source_id)
-                if not com_res["success"]:
-                    return com_res
-                status_res = table.get_item(Key={"source_id": source_id},
-                                            ConsistentRead=True).get("Item")
-        return {
-            "success": True,
-            "status": status_res
-            }
+    # Check if process is a ghost - dead but not complete
+    if update_active and status_res["active"]:
+        try:
+            os.kill(status_res["pid"], 0)
+        except ProcessLookupError:
+            com_res = complete_submission(source_id)
+            if not com_res["success"]:
+                return com_res
+            status_res = table.get_item(Key={"source_id": source_id},
+                                        ConsistentRead=True).get("Item")
+    return {
+        "success": True,
+        "status": status_res
+        }
 
 
 def create_status(status):
@@ -786,7 +801,7 @@ def create_status(status):
     # Create defaults
     status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
-    status["completed"] = False
+    status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
 
@@ -1082,7 +1097,7 @@ def translate_status(status):
         "submitter": status["submitter"],
         "submission_time": status["submission_time"],
         "test": status["test"],
-        "active": status["completed"]
+        "active": status["active"]
         }
 
 
