@@ -341,14 +341,14 @@ def convert_driver(metadata, source_id, test):
     # Pass dataset to /ingest
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
-        with tempfile.TemporaryFile(mode="w+") as stock:
+        with tempfile.NamedTemporaryFile(mode="w+") as stock:
             for entry in feedstock:
                 json.dump(entry, stock)
                 stock.write("\n")
             stock.seek(0)
             ingest_args = {
                 "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], stock.name),
-                "source_id": source_id,
+                "source_name": source_id,
                 "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
                 "services": services,
                 "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
@@ -427,7 +427,6 @@ def accept_ingest():
     source_name = metadata.get("source_name", None)
     test = metadata.get("test", False) or app.config["DEFAULT_TEST_FLAG"]
 
-######
     if not source_name and not title:
         return (jsonify({
             "success": False,
@@ -436,41 +435,37 @@ def accept_ingest():
     # "new" source_id for new submissions
     new_source_info = make_source_id(source_name or title, test=test)
     new_source_id = new_source_info["source_id"]
-    new_status = read_status(new_source_id)
+    new_status_info = read_status(new_source_id, update_active=True)
     # "old" source_id for current/previous submission
     # Found by decrementing new version, to a minimum of 1
     old_source_id = "{}_v{}".format(new_source_info["source_name"],
                                     max(new_source_info["version"] - 1, 1))
-    old_status = read_status(old_source_id)
-    if not old_status["success"]:
+    old_status_info = read_status(old_source_id, update_active=True)
+    if not old_status_info["success"]:
         return (jsonify({
             "success": False,
-            "error": "Prior submission '{}' lost from database".format(old_source_id)
+            "error": "Prior submission '{}' not found in database".format(old_source_id)
             }), 500)
+    old_status = old_status_info["status"]
 
     # Submissions from Connect will have status entries, user submission will not
     if app.config["API_CLIENT_ID"] in identities:
-        # Check if past submission is complete
-        if not old_status["completed"]:
-            # Check submission validity
-            # Old Connect submission must be:
-            #   Successful until convert_ingest
-            #   convert_ingest in Progress
-            #   Not started (z) after convert_ingest
-            # To avoid issues with additional status steps, the location of convert_ingest
-            #   is not hard-coded, and assumed to be the first P
-            # TODO: Improve logic
+        # Check if past submission is active
+        if old_status["active"]:
+            # TODO: Check status validity
+            '''
             try:
                 p_index = old_status["code"].find("P")
                 assert p_index > -1
-                assert all([code in ["S", "U"] for code in old_status["code"][:p_index]])
-                assert all([code is "z" for code in old_status["code"][:p_index]])
+                assert all([code in ["S", "M", "U"] for code in old_status["code"][:p_index]])
+                assert all([code is "z" for code in old_status["code"][p_index+1:]])
             except AssertionError:
                 return (jsonify({
                     "success": False,
                     "error": "Invalid status code for submission {}: {}".format(old_source_id,
                                                                                 old_status["code"])
                     }), 500)
+            '''
             # Correct version is "old" version
             source_id = old_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
@@ -478,8 +473,10 @@ def accept_ingest():
                 return (jsonify(stat_res), 400)
 
         # Past submission complete, try "new" version
-        else:
-            # TODO: Same logic improvement
+        elif new_status_info["success"]:
+            # TODO: Same status validity check
+            '''
+            new_status = new_status_info["status"]
             try:
                 p_index = new_status["code"].find("P")
                 assert p_index > -1
@@ -491,11 +488,17 @@ def accept_ingest():
                     "error": "Invalid status code for submission {}: {}".format(new_source_id,
                                                                                 new_status["code"])
                     }), 500)
+            '''
             # Correct version is "new" version
             source_id = new_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
                 return (jsonify(stat_res), 400)
+        else:
+            return (jsonify({
+                "success": False,
+                "error": "Current submission '{}' not found in database".format(old_source_id)
+                }), 500)
 
     # User-submitted, not from Connect
     # Will not have existing status
@@ -530,7 +533,6 @@ def accept_ingest():
                 }), 500)
         if not status_res["success"]:
             return (jsonify(status_res), 500)
-######
 
     if test:
         services["mdf_search"] = {
@@ -985,7 +987,7 @@ def get_status(source_id):
         return (jsonify(auth_res), error_code)
 
     uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_id)
+    raw_status = read_status(source_id, update_active=True)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
     try:
