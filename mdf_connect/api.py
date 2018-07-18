@@ -3,7 +3,6 @@ import json
 import logging
 from multiprocessing import Process
 import os
-import tempfile
 import urllib
 
 from flask import jsonify, request, redirect
@@ -221,6 +220,7 @@ def convert_driver(metadata, source_id, test):
         connect_authorizer = clients["connect"]
     except Exception as e:
         update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cancel the previous version(s)
@@ -235,6 +235,7 @@ def convert_driver(metadata, source_id, test):
                                               ("Unable to cancel previous "
                                                "submission '{}'").format(old_source_id)),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
         if cancel_res["success"]:
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
@@ -265,10 +266,12 @@ def convert_driver(metadata, source_id, test):
     except Exception as e:
         update_status(source_id, "convert_download", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     if not dl_res["success"]:
         update_status(source_id, "convert_download", "F", text=dl_res["error"],
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         update_status(source_id, "convert_download", "S", except_on_fail=True)
@@ -313,6 +316,7 @@ def convert_driver(metadata, source_id, test):
         feedstock, num_groups = convert(local_path, convert_params)
     except Exception as e:
         update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         # feedstock minus dataset entry is records
@@ -321,6 +325,7 @@ def convert_driver(metadata, source_id, test):
         if num_parsed < 0:
             update_status(source_id, "converting", "F",
                                      text="Could not parse dataset entry", except_on_fail=True)
+            complete_submission(source_id)
             return
         # If no records, warn user
         elif num_parsed == 0:
@@ -341,27 +346,29 @@ def convert_driver(metadata, source_id, test):
     # Pass dataset to /ingest
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
-        with tempfile.NamedTemporaryFile(mode="w+") as stock:
+        # Write out feedstock
+        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
+        with open(feed_path, 'w') as stock:
             for entry in feedstock:
                 json.dump(entry, stock)
                 stock.write("\n")
-            stock.seek(0)
-            ingest_args = {
-                "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], stock.name),
-                "source_name": source_id,
-                "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
-                "services": services,
-                "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
-                "test": test
-            }
-            headers = {}
-            connect_authorizer.set_authorization_header(headers)
-            ingest_res = requests.post(app.config["INGEST_URL"],
-                                       json=ingest_args,
-                                       headers=headers)
+        ingest_args = {
+            "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], feed_path),
+            "source_name": source_id,
+            "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
+            "services": services,
+            "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
+            "test": test
+        }
+        headers = {}
+        connect_authorizer.set_authorization_header(headers)
+        ingest_res = requests.post(app.config["INGEST_URL"],
+                                   json=ingest_args,
+                                   headers=headers)
     except Exception as e:
         update_status(source_id, "convert_ingest", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         if ingest_res.status_code < 300 and ingest_res.json().get("success"):
@@ -369,6 +376,7 @@ def convert_driver(metadata, source_id, test):
         else:
             update_status(source_id, "convert_ingest", "F",
                                      text=str(ingest_res.content), except_on_fail=True)
+            complete_submission(source_id)
             return
 
     return {
@@ -618,6 +626,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_final.json")
     except Exception as e:
         update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cancel the previous version(s)
@@ -636,6 +645,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                                               ("Unable to cancel previous "
                                                "submission '{}'").format(old_source_id)),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
         if cancel_res["success"]:
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
@@ -662,10 +672,12 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
     except Exception as e:
         update_status(source_id, "ingest_download", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     if not dl_res["success"]:
         update_status(source_id, "ingest_download", "F", text=dl_res["error"],
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         logger.info("{}: Feedstock downloaded".format(source_id))
@@ -681,6 +693,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
             update_status(source_id, "ingest_publish", "F",
                                      text="Unable to publish data without location.",
                                      except_on_fail=True)
+            complete_submission(source_id)
             return
         else:
             # If all locations are Globus, don't need to download locally
@@ -704,10 +717,12 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                 except Exception as e:
                     update_status(source_id, "ingest_download", "F", text=repr(e),
                                              except_on_fail=True)
+                    complete_submission(source_id)
                     return
                 if not dl_res["success"]:
                     update_status(source_id, "ingest_download", "F",
                                              text=dl_res["error"], except_on_fail=True)
+                    complete_submission(source_id)
                     return
                 else:
                     update_status(source_id, "ingest_download", "S",
@@ -726,6 +741,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
             update_status(source_id, "ingest_citrine", "F",
                                      text="Unable to upload PIFs without location.",
                                      except_on_fail=True)
+            complete_submission(source_id)
             return
         else:
             update_status(source_id, "ingest_integration", "P", except_on_fail=True)
@@ -742,10 +758,12 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
             except Exception as e:
                 update_status(source_id, "ingest_integration", "F", text=repr(e),
                                          except_on_fail=True)
+                complete_submission(source_id)
                 return
             if not dl_res["success"]:
                 update_status(source_id, "ingest_integration", "F",
                                          text=dl_res["error"], except_on_fail=True)
+                complete_submission(source_id)
                 return
             else:
                 update_status(source_id, "ingest_integration", "S", except_on_fail=True)
@@ -773,6 +791,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
     except Exception as e:
         update_status(source_id, "ingest_search", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         # Handle errors
@@ -784,6 +803,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                                              * app.config["SEARCH_BATCH_SIZE"]),
                                             search_res["errors"]),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
 
         # Other services use the dataset information
@@ -952,6 +972,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         update_status(source_id, "ingest_cleanup", "F",
                                  text=ds_update.get("error", "Unable to update dataset"),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cleanup

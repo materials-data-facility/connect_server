@@ -688,7 +688,7 @@ def cancel_submission(source_id, wait=True):
     }
 
 
-def complete_submission(source_id, cleanup=True):
+def complete_submission(source_id, cleanup=app.config["DEFAULT_CLEANUP"]):
     """Complete a submission.
 
     Arguments:
