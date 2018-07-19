@@ -1,4 +1,5 @@
 from datetime import date
+import json
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ import urllib
 import boto3
 from citrination_client import CitrinationClient
 import globus_sdk
+import jsonschema
 import mdf_toolbox
 import requests
 
@@ -56,6 +58,16 @@ STATUS_STEPS = (
 # In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
 # and the convert steps are STATUS_STEPS[:INGEST_MARK]
 INGEST_MARK = 4
+
+# Status codes indicating some form of not-failure
+SUCCESS_CODES = [
+    "S",
+    "M",
+    "L",
+    "R",
+    "U",
+    "N"
+]
 
 # Global save locations for whitelists
 CONVERT_GROUP = {
@@ -738,6 +750,62 @@ def complete_submission(source_id, cleanup=app.config["DEFAULT_CLEANUP"]):
     }
 
 
+def validate_status(status, code_mode=None):
+    """Validate a submission status.
+
+    Arguments:
+    status (dict): The status to validate.
+    code_mode (str): The mode to check the status code, or None to skip code check.
+                        "convert": No steps have started or finished.
+                        "ingest": All convert steps have finished (except the ingest handoff)
+                                  and no ingest steps have started or finished.
+
+    Returns:
+    dict:
+        success: True if the status is valid, False if not.
+        error: If the status is not valid, the reason why. Only present when success is False.
+        details: Optional further details about an error.
+    """
+    # Load status schema
+    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
+    with open(os.path.join(schema_dir, "internal_status.json")) as schema_file:
+        schema = json.load(schema_file)
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
+                                      referrer=schema)
+    # Validate against status schema
+    try:
+        jsonschema.validate(status, schema, resolver=resolver)
+    except jsonschema.ValidationError as e:
+        return {
+            "success": False,
+            "error": "Invalid status: {}".format(str(e).split("\n")[0]),
+            "details": str(e)
+        }
+
+    code = status["code"]
+    try:
+        assert len(code) == len(STATUS_STEPS)
+        if code_mode == "convert":
+            # Nothing started or finished
+            assert code == "z" * len(STATUS_STEPS)
+        elif code_mode == "ingest":
+            # convert finished until handoff
+            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK]])
+            # convert handoff to ingest in progress
+            assert code[INGEST_MARK] == "P"
+            # ingest not started
+            assert code[INGEST_MARK + 1:] == "z" * (len(STATUS_STEPS) - INGEST_MARK)
+    except AssertionError:
+        return {
+            "success": False,
+            "error": "Invalid status code '{}' for mode {}".format(code, code_mode)
+        }
+    else:
+        return {
+            "success": True
+        }
+
+
 def read_status(source_id, update_active=False):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
@@ -771,39 +839,17 @@ def create_status(status):
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status better (JSONSchema?)
-    if not status.get("source_id"):
-        return {
-            "success": False,
-            "error": "source_id missing"
-            }
-    elif not status.get("submission_code"):
-        return {
-            "success": False,
-            "error": "submission_code missing"
-            }
-    elif not status.get("title"):
-        return {
-            "success": False,
-            "error": "title missing"
-            }
-    elif not status.get("submitter"):
-        return {
-            "success": False,
-            "error": "submitter missing"
-            }
-    elif not status.get("submission_time"):
-        return {
-            "success": False,
-            "error": "submission_time missing"
-            }
 
-    # Create defaults
+    # Add defaults
     status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
     status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
+
+    status_valid = validate_status(status, "convert")
+    if not status_valid["success"]:
+        return status_valid
 
     # Check that status does not already exist
     if read_status(status["source_id"])["success"]:
