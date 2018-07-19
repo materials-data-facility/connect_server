@@ -102,11 +102,11 @@ def authenticate_token(token, auth_level):
                                                            app.config["API_CLIENT_SECRET"])
         auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     except Exception as e:
+        logger.error("Error authenticating token: {}".format(repr(e)))
         return {
             "success": False,
-            # TODO: Check that the exception doesn't leak info
-            "error": "Unacceptable auth: " + repr(e),
-            "error_code": 400
+            "error": "Authentication could not be completed",
+            "error_code": 500
         }
     if not auth_res:
         return {
