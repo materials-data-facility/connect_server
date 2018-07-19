@@ -13,7 +13,7 @@ import requests
 from mdf_connect import (app, convert, search_ingest, update_search_entry,
                          authenticate_token, make_source_id, download_and_backup,
                          globus_publish_data, citrine_upload, cancel_submission,
-                         complete_submission, read_status, create_status,
+                         complete_submission, validate_status, read_status, create_status,
                          update_status, modify_status_entry, translate_status)
 
 
@@ -460,48 +460,29 @@ def accept_ingest():
     if app.config["API_CLIENT_ID"] in identities:
         # Check if past submission is active
         if old_status["active"]:
-            # TODO: Check status validity
-            '''
-            try:
-                p_index = old_status["code"].find("P")
-                assert p_index > -1
-                assert all([code in ["S", "M", "U"] for code in old_status["code"][:p_index]])
-                assert all([code is "z" for code in old_status["code"][p_index+1:]])
-            except AssertionError:
-                return (jsonify({
-                    "success": False,
-                    "error": "Invalid status code for submission {}: {}".format(old_source_id,
-                                                                                old_status["code"])
-                    }), 500)
-            '''
+            # Check old status validity
+            status_valid = validate_status(old_status, code_mode="ingest")
+            if not status_valid["success"]:
+                return (jsonify(status_valid), 500)
+
             # Correct version is "old" version
             source_id = old_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
-                return (jsonify(stat_res), 400)
+                return (jsonify(stat_res), 500)
 
         # Past submission complete, try "new" version
         elif new_status_info["success"]:
-            # TODO: Same status validity check
-            '''
-            new_status = new_status_info["status"]
-            try:
-                p_index = new_status["code"].find("P")
-                assert p_index > -1
-                assert all([code in ["S", "U"] for code in new_status["code"][:p_index]])
-                assert all([code is "z" for code in new_status["code"][:p_index]])
-            except AssertionError:
-                return (jsonify({
-                    "success": False,
-                    "error": "Invalid status code for submission {}: {}".format(new_source_id,
-                                                                                new_status["code"])
-                    }), 500)
-            '''
+            # Check new status validity
+            status_valid = validate_status(new_status, code_mode="ingest")
+            if not status_valid["success"]:
+                return (jsonify(status_valid), 500)
+
             # Correct version is "new" version
             source_id = new_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
-                return (jsonify(stat_res), 400)
+                return (jsonify(stat_res), 500)
         else:
             return (jsonify({
                 "success": False,
