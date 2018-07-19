@@ -473,6 +473,7 @@ def accept_ingest():
 
         # Past submission complete, try "new" version
         elif new_status_info["success"]:
+            new_status = new_status_info["status"]
             # Check new status validity
             status_valid = validate_status(new_status, code_mode="ingest")
             if not status_valid["success"]:
