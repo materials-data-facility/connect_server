@@ -770,7 +770,7 @@ def validate_status(status, code_mode=None):
     schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
     with open(os.path.join(schema_dir, "internal_status.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
                                       referrer=schema)
     # Validate against status schema
     try:
