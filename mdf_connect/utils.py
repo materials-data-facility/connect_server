@@ -790,11 +790,11 @@ def validate_status(status, code_mode=None):
             assert code == "z" * len(STATUS_STEPS)
         elif code_mode == "ingest":
             # convert finished until handoff
-            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK]])
+            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
             # convert handoff to ingest in progress
-            assert code[INGEST_MARK] == "P"
+            assert code[INGEST_MARK-1] == "P"
             # ingest not started
-            assert code[INGEST_MARK + 1:] == "z" * (len(STATUS_STEPS) - INGEST_MARK)
+            assert code[INGEST_MARK:] == "z" * (len(STATUS_STEPS) - INGEST_MARK)
     except AssertionError:
         return {
             "success": False,
