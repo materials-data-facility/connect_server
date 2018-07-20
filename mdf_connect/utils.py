@@ -1,4 +1,5 @@
 from datetime import date
+import json
 import logging
 import os
 import re
@@ -9,6 +10,7 @@ import urllib
 import boto3
 from citrination_client import CitrinationClient
 import globus_sdk
+import jsonschema
 import mdf_toolbox
 import requests
 
@@ -57,6 +59,16 @@ STATUS_STEPS = (
 # and the convert steps are STATUS_STEPS[:INGEST_MARK]
 INGEST_MARK = 4
 
+# Status codes indicating some form of not-failure
+SUCCESS_CODES = [
+    "S",
+    "M",
+    "L",
+    "R",
+    "U",
+    "N"
+]
+
 # Global save locations for whitelists
 CONVERT_GROUP = {
     # Globus Groups UUID
@@ -102,11 +114,11 @@ def authenticate_token(token, auth_level):
                                                            app.config["API_CLIENT_SECRET"])
         auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     except Exception as e:
+        logger.error("Error authenticating token: {}".format(repr(e)))
         return {
             "success": False,
-            # TODO: Check that the exception doesn't leak info
-            "error": "Unacceptable auth: " + repr(e),
-            "error_code": 400
+            "error": "Authentication could not be completed",
+            "error_code": 500
         }
     if not auth_res:
         return {
@@ -271,7 +283,13 @@ def make_source_id(title, test=False):
         source_id = title
     # Add test flag if necessary
     if test:
-        source_id = "_test_" + source_id
+        # If test flag already applied, don't re-apply
+        if source_id.startswith("test"):
+            # Just add back initial underscore
+            source_id = "_" + source_id
+        # Otherwise, apply test flag
+        else:
+            source_id = "_test_" + source_id
 
     # Determine version number to add
     # Remove any existing version number
@@ -316,16 +334,25 @@ def download_and_backup(mdf_transfer_client, data_loc,
     Returns:
     dict: success (bool): True on success, False on failure.
     """
+    filename = None
+    # If the local_path is a file and not a directory, use the directory
+    if local_path[-1] != "/":
+        # Save the filename for later
+        filename = os.path.basename(local_path)
+        local_path = os.path.dirname(local_path) + "/"
+
     os.makedirs(local_path, exist_ok=True)
     if not isinstance(data_loc, list):
-        raise TypeError("Data locations must be in a list")
+        data_loc = [data_loc]
+
     # Download data locally
     for location in data_loc:
         loc_info = urllib.parse.urlparse(location)
 
         # Special case pre-processing
         # Globus Web App link into globus:// form
-        if location.startswith("https://www.globus.org/app/transfer"):
+        if (location.startswith("https://www.globus.org/app/transfer")
+                or location.startswith("https://app.globus.org/file-manager")):
             data_info = urllib.parse.unquote(loc_info.query)
             # EP ID is in origin or dest
             ep_start = data_info.find("origin_id=")
@@ -371,13 +398,14 @@ def download_and_backup(mdf_transfer_client, data_loc,
         # Globus Transfer
         if loc_info.scheme == "globus":
             # Check that data not already in place
-            if loc_info.netloc != local_ep and loc_info.path != local_path:
+            if (loc_info.netloc != local_ep
+                    and loc_info.path != (local_path + (filename if filename else ""))):
                 # If there is a dir mismatch (one has trailing slash, other does not)
                 # has_slash XOR has_slash
                 if (loc_info.path[-1] == "/") != (local_path[-1] == "/"):
                     # If Transferring file to dir, add file to dir
                     # Otherwise error - cannot transfer dir into file
-                    f_name = os.path.basename(loc_info.path)
+                    f_name = filename or os.path.basename(loc_info.path)
                     if not f_name:
                         raise ValueError("Cannot back up a directory into a file")
                     transfer_path = os.path.join(local_path, f_name)
@@ -406,7 +434,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
             if not ext:
                 ext = ".archive"
 
-            archive_path = os.path.join(local_path, "archive"+ext)
+            archive_path = os.path.join(local_path, filename or "archive"+ext)
 
             # Fetch file
             res = requests.get(location)
@@ -426,14 +454,15 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
-                        mdf_transfer_client, local_ep, backup_ep, [(local_path, backup_path)],
+                        mdf_transfer_client, local_ep, backup_ep,
+                        [(local_path + (filename if filename else ""), backup_path)],
                         interval=app.config["TRANSFER_PING_INTERVAL"],
                         inactivity_time=app.config["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
                 logger.debug(event)
         if not event["success"]:
-            raise ValueError(event["code"]+": "+event["description"])
+            raise ValueError("{}: {}".format(event["code"], event["description"]))
     yield {
         "success": True,
         "num_extracted": extract_res["num_extracted"]
@@ -607,7 +636,7 @@ def cancel_submission(source_id, wait=True):
             "error": "Submission already cancelled",
             "stopped": True
         }
-    elif current_status["completed"]:
+    elif not current_status["active"]:
         return {
             "success": False,
             "error": "Submission already completed",
@@ -620,6 +649,7 @@ def cancel_submission(source_id, wait=True):
             os.kill(current_status["pid"], 0)  # Signal 0 is noop
         except ProcessLookupError:
             # No process found
+            complete_submission(source_id)
             return {
                 "success": False,
                 "error": "Submission not processing",
@@ -640,9 +670,16 @@ def cancel_submission(source_id, wait=True):
 
     # Wait for completion if requested
     if wait:
-        while not read_status(source_id)["status"]["completed"]:
-            logger.info("Waiting for submission {} to cancel".format(source_id))
-            time.sleep(app.config["CANCEL_WAIT_TIME"])
+        try:
+            while read_status(source_id)["status"]["active"]:
+                os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
+                logger.info("Waiting for submission {} (PID {}) to cancel".format(
+                                                                            source_id,
+                                                                            current_status["pid"]))
+                time.sleep(app.config["CANCEL_WAIT_TIME"])
+        except ProcessLookupError:
+            # Process is dead
+            complete_submission(source_id)
 
     # Change status code to reflect cancellation
     old_status_code = read_status(source_id)["status"]["code"]
@@ -663,7 +700,7 @@ def cancel_submission(source_id, wait=True):
     }
 
 
-def complete_submission(source_id, cleanup=True):
+def complete_submission(source_id, cleanup=app.config["DEFAULT_CLEANUP"]):
     """Complete a submission.
 
     Arguments:
@@ -676,8 +713,8 @@ def complete_submission(source_id, cleanup=True):
     success (bool): True on success, False otherwise.
     error (str): The error message. Only exists if success is False.
     """
-    # Check that status completed is False
-    if read_status(source_id).get("status", {}).get("completed", True):
+    # Check that status active is True
+    if not read_status(source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -702,8 +739,8 @@ def complete_submission(source_id, cleanup=True):
                     }
             else:
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
-    # Update status to "completed"
-    update_res = modify_status_entry(source_id, {"completed": True})
+    # Update status to inactive
+    update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
         return update_res
 
@@ -713,7 +750,63 @@ def complete_submission(source_id, cleanup=True):
     }
 
 
-def read_status(source_id):
+def validate_status(status, code_mode=None):
+    """Validate a submission status.
+
+    Arguments:
+    status (dict): The status to validate.
+    code_mode (str): The mode to check the status code, or None to skip code check.
+                        "convert": No steps have started or finished.
+                        "ingest": All convert steps have finished (except the ingest handoff)
+                                  and no ingest steps have started or finished.
+
+    Returns:
+    dict:
+        success: True if the status is valid, False if not.
+        error: If the status is not valid, the reason why. Only present when success is False.
+        details: Optional further details about an error.
+    """
+    # Load status schema
+    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
+    with open(os.path.join(schema_dir, "internal_status.json")) as schema_file:
+        schema = json.load(schema_file)
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
+                                      referrer=schema)
+    # Validate against status schema
+    try:
+        jsonschema.validate(status, schema, resolver=resolver)
+    except jsonschema.ValidationError as e:
+        return {
+            "success": False,
+            "error": "Invalid status: {}".format(str(e).split("\n")[0]),
+            "details": str(e)
+        }
+
+    code = status["code"]
+    try:
+        assert len(code) == len(STATUS_STEPS)
+        if code_mode == "convert":
+            # Nothing started or finished
+            assert code == "z" * len(STATUS_STEPS)
+        elif code_mode == "ingest":
+            # convert finished until handoff
+            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
+            # convert handoff to ingest in progress
+            assert code[INGEST_MARK-1] == "P"
+            # ingest not started
+            assert code[INGEST_MARK:] == "z" * (len(STATUS_STEPS) - INGEST_MARK)
+    except AssertionError:
+        return {
+            "success": False,
+            "error": "Invalid status code '{}' for mode {}".format(code, code_mode)
+        }
+    else:
+        return {
+            "success": True
+        }
+
+
+def read_status(source_id, update_active=False):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
@@ -725,11 +818,20 @@ def read_status(source_id):
             "success": False,
             "error": "ID {} not found in status database".format(source_id)
             }
-    else:
-        return {
-            "success": True,
-            "status": status_res
-            }
+    # Check if process is a ghost - dead but not complete
+    if update_active and status_res["active"]:
+        try:
+            os.kill(status_res["pid"], 0)
+        except ProcessLookupError:
+            com_res = complete_submission(source_id)
+            if not com_res["success"]:
+                return com_res
+            status_res = table.get_item(Key={"source_id": source_id},
+                                        ConsistentRead=True).get("Item")
+    return {
+        "success": True,
+        "status": status_res
+        }
 
 
 def create_status(status):
@@ -737,39 +839,17 @@ def create_status(status):
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status better (JSONSchema?)
-    if not status.get("source_id"):
-        return {
-            "success": False,
-            "error": "source_id missing"
-            }
-    elif not status.get("submission_code"):
-        return {
-            "success": False,
-            "error": "submission_code missing"
-            }
-    elif not status.get("title"):
-        return {
-            "success": False,
-            "error": "title missing"
-            }
-    elif not status.get("submitter"):
-        return {
-            "success": False,
-            "error": "submitter missing"
-            }
-    elif not status.get("submission_time"):
-        return {
-            "success": False,
-            "error": "submission_time missing"
-            }
 
-    # Create defaults
+    # Add defaults
     status["messages"] = ["No message available"] * len(STATUS_STEPS)
     status["code"] = "z" * len(STATUS_STEPS)
-    status["completed"] = False
+    status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
+
+    status_valid = validate_status(status, "convert")
+    if not status_valid["success"]:
+        return status_valid
 
     # Check that status does not already exist
     if read_status(status["source_id"])["success"]:
@@ -859,6 +939,8 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
 
+    pid = os.getpid()
+    status["pid"] = pid
     try:
         # put_item will overwrite
         table.put_item(Item=status)
@@ -871,7 +953,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
                 "error": repr(e)
             }
     else:
-        logger.info("{}: {}: {}, {}, {}".format(source_id, step, code, text, link))
+        logger.info("[{}]{}: {}: {}, {}, {}".format(pid, source_id, step, code, text, link))
         return {
             "success": True,
             "status": status
@@ -1060,7 +1142,8 @@ def translate_status(status):
         "title": status["title"],
         "submitter": status["submitter"],
         "submission_time": status["submission_time"],
-        "test": status["test"]
+        "test": status["test"],
+        "active": status["active"]
         }
 
 

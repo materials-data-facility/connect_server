@@ -38,7 +38,7 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
     index = mdf_toolbox.translate_index(index)
 
     # Validate feedstock
-    with open(feedstock) as stock:
+    with open(feedstock, 'r') as stock:
         val = Validator()
         dataset_entry = json.loads(next(stock))
         ds_res = val.start_dataset(dataset_entry)
@@ -126,6 +126,7 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
 
 def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_id):
     # Populate ingest queue and save results if requested
+    os.makedirs(os.path.dirname(feedstock_save), exist_ok=True)
     with open(feedstock_save, 'w') as save_loc:
         batch = []
         for entry in validator.get_finished_dataset():
