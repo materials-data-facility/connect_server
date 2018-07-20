@@ -893,7 +893,6 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
@@ -941,6 +940,11 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
 
     pid = os.getpid()
     status["pid"] = pid
+
+    status_valid = validate_status(status)
+    if not status_valid["success"]:
+        return status_valid
+
     try:
         # put_item will overwrite
         table.put_item(Item=status)
@@ -978,7 +982,6 @@ def modify_status_entry(source_id, modifications):
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
@@ -987,6 +990,10 @@ def modify_status_entry(source_id, modifications):
 
     # Overwrite old status
     status = mdf_toolbox.dict_merge(modifications, status)
+
+    status_valid = validate_status(status)
+    if not status_valid["success"]:
+        return status_valid
 
     try:
         # put_item will overwrite
