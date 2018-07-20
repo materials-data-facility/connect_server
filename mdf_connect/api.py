@@ -1,22 +1,19 @@
 from datetime import datetime
 import json
 import logging
+from multiprocessing import Process
 import os
-import tempfile
-from threading import Thread
 import urllib
 
-from bson import ObjectId
 from flask import jsonify, request, redirect
 import jsonschema
 import mdf_toolbox
 import requests
-from werkzeug.utils import secure_filename
 
 from mdf_connect import (app, convert, search_ingest, update_search_entry,
                          authenticate_token, make_source_id, download_and_backup,
                          globus_publish_data, citrine_upload, cancel_submission,
-                         complete_submission, read_status, create_status,
+                         complete_submission, validate_status, read_status, create_status,
                          update_status, modify_status_entry, translate_status)
 
 
@@ -175,14 +172,30 @@ def accept_convert():
     if not status_res["success"]:
         return (jsonify(status_res), 500)
 
-    driver = Thread(target=convert_driver, name="driver_thread", args=(metadata,
-                                                                       source_id,
-                                                                       test))
-    driver.start()
+    try:
+        spawner = Process(target=spawn_driver, name="driver_spawner", args=(metadata,
+                                                                            source_id,
+                                                                            test))
+        spawner.start()
+        spawner.join()
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+            }), 500)
+
     return (jsonify({
         "success": True,
         "source_id": source_id
         }), 202)
+
+
+def spawn_driver(metadata, source_id, test):
+    driver = Process(target=convert_driver, name="driver_process", args=(metadata,
+                                                                         source_id,
+                                                                         test))
+    driver.start()
+    os.kill(os.getpid(), 9)
 
 
 def convert_driver(metadata, source_id, test):
@@ -207,6 +220,7 @@ def convert_driver(metadata, source_id, test):
         connect_authorizer = clients["connect"]
     except Exception as e:
         update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cancel the previous version(s)
@@ -221,6 +235,7 @@ def convert_driver(metadata, source_id, test):
                                               ("Unable to cancel previous "
                                                "submission '{}'").format(old_source_id)),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
         if cancel_res["success"]:
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
@@ -251,10 +266,12 @@ def convert_driver(metadata, source_id, test):
     except Exception as e:
         update_status(source_id, "convert_download", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     if not dl_res["success"]:
         update_status(source_id, "convert_download", "F", text=dl_res["error"],
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         update_status(source_id, "convert_download", "S", except_on_fail=True)
@@ -299,6 +316,7 @@ def convert_driver(metadata, source_id, test):
         feedstock, num_groups = convert(local_path, convert_params)
     except Exception as e:
         update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         # feedstock minus dataset entry is records
@@ -307,6 +325,7 @@ def convert_driver(metadata, source_id, test):
         if num_parsed < 0:
             update_status(source_id, "converting", "F",
                                      text="Could not parse dataset entry", except_on_fail=True)
+            complete_submission(source_id)
             return
         # If no records, warn user
         elif num_parsed == 0:
@@ -327,36 +346,37 @@ def convert_driver(metadata, source_id, test):
     # Pass dataset to /ingest
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
-        with tempfile.TemporaryFile(mode="w+") as stock:
+        # Write out feedstock
+        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
+        with open(feed_path, 'w') as stock:
             for entry in feedstock:
                 json.dump(entry, stock)
                 stock.write("\n")
-            stock.seek(0)
-            ingest_args = {
-                "source_id": source_id,
-                "data": json.dumps(["globus://" + app.config["LOCAL_EP"] + local_path]),
-                "services": json.dumps(services),
-                "service_data": json.dumps(["globus://" + app.config["LOCAL_EP"] + service_data]),
-                "test": json.dumps(test)
-            }
-            headers = {}
-            connect_authorizer.set_authorization_header(headers)
-            ingest_res = requests.post(app.config["INGEST_URL"],
-                                       data=ingest_args,
-                                       files={'file': stock},
-                                       headers=headers,
-                                       # TODO: Verify after getting real cert
-                                       verify=False)
+        ingest_args = {
+            "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], feed_path),
+            "source_name": source_id,
+            "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
+            "services": services,
+            "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
+            "test": test
+        }
+        headers = {}
+        connect_authorizer.set_authorization_header(headers)
+        ingest_res = requests.post(app.config["INGEST_URL"],
+                                   json=ingest_args,
+                                   headers=headers)
     except Exception as e:
         update_status(source_id, "convert_ingest", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
-        if ingest_res.json().get("success"):
+        if ingest_res.status_code < 300 and ingest_res.json().get("success"):
             update_status(source_id, "convert_ingest", "S", except_on_fail=True)
         else:
             update_status(source_id, "convert_ingest", "F",
-                                     text=str(ingest_res.json()), except_on_fail=True)
+                                     text=str(ingest_res.content), except_on_fail=True)
+            complete_submission(source_id)
             return
 
     return {
@@ -383,47 +403,107 @@ def accept_ingest():
     # username = auth_res["username"]
     name = auth_res["name"]
     email = auth_res["email"]
+    identities = auth_res["identities_set"]
 
-    # Check that file exists and is valid
-    try:
-        feedstock = request.files["file"]
-    except KeyError:
+    metadata = request.get_json(force=True, silent=True)
+    if not metadata:
         return (jsonify({
             "success": False,
-            "error": "No feedstock file uploaded"
-            }), 400)
-    # Get parameters
-    try:
-        # requests.form is an ImmutableMultiDict
-        # flat=False returns all keys as lists
-        params = request.form.to_dict(flat=False)
-        services = json.loads(params.get("services", ["{}"])[0])
-        data_loc = json.loads(params.get("data", ["{}"])[0])
-        service_data = json.loads(params.get("service_data", ["{}"])[0])
-        source_id = params.get("source_id", [None])[0]
-        test = json.loads(params.get("test", ["false"])[0])
-    except KeyError as e:
-        return (jsonify({
-            "success": False,
-            "error": "Parameters missing: " + repr(e)
-            }), 400)
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Invalid ingest JSON: " + repr(e)
+            "error": "POST data empty or not JSON"
             }), 400)
 
-    # Mint or update status ID
-    if source_id:
-        # TODO: Verify source_id ownership
-        stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
-        if not stat_res["success"]:
-            return (jsonify(stat_res), 400)
+    # Validate input JSON
+    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
+    with open(os.path.join(schema_dir, "connect_ingest.json")) as schema_file:
+        schema = json.load(schema_file)
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
+                                      referrer=schema)
+    try:
+        jsonschema.validate(metadata, schema, resolver=resolver)
+    except jsonschema.ValidationError as e:
+        return (jsonify({
+            "success": False,
+            "error": "Invalid submission: " + str(e).split("\n")[0],
+            "details": str(e)
+            }), 400)
+
+    feed_location = metadata["feedstock_location"]
+    services = metadata.get("services", [])
+    data_loc = metadata.get("data", [])
+    service_data = metadata.get("service_data", [])
+    title = metadata.get("title", None)
+    source_name = metadata.get("source_name", None)
+    test = metadata.get("test", False) or app.config["DEFAULT_TEST_FLAG"]
+
+    if not source_name and not title:
+        return (jsonify({
+            "success": False,
+            "error": "Either title or source_name is required"
+            }), 400)
+    # "new" source_id for new submissions
+    new_source_info = make_source_id(source_name or title, test=test)
+    new_source_id = new_source_info["source_id"]
+    new_status_info = read_status(new_source_id, update_active=True)
+    # "old" source_id for current/previous submission
+    # Found by decrementing new version, to a minimum of 1
+    old_source_id = "{}_v{}".format(new_source_info["source_name"],
+                                    max(new_source_info["version"] - 1, 1))
+    old_status_info = read_status(old_source_id, update_active=True)
+    if not old_status_info["success"]:
+        return (jsonify({
+            "success": False,
+            "error": "Prior submission '{}' not found in database".format(old_source_id)
+            }), 500)
+    old_status = old_status_info["status"]
+
+    # Submissions from Connect will have status entries, user submission will not
+    if app.config["API_CLIENT_ID"] in identities:
+        # Check if past submission is active
+        if old_status["active"]:
+            # Check old status validity
+            status_valid = validate_status(old_status, code_mode="ingest")
+            if not status_valid["success"]:
+                return (jsonify(status_valid), 500)
+
+            # Correct version is "old" version
+            source_id = old_source_id
+            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            if not stat_res["success"]:
+                return (jsonify(stat_res), 500)
+
+        # Past submission complete, try "new" version
+        elif new_status_info["success"]:
+            new_status = new_status_info["status"]
+            # Check new status validity
+            status_valid = validate_status(new_status, code_mode="ingest")
+            if not status_valid["success"]:
+                return (jsonify(status_valid), 500)
+
+            # Correct version is "new" version
+            source_id = new_source_id
+            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            if not stat_res["success"]:
+                return (jsonify(stat_res), 500)
+        else:
+            return (jsonify({
+                "success": False,
+                "error": "Current submission '{}' not found in database".format(old_source_id)
+                }), 500)
+
+    # User-submitted, not from Connect
+    # Will not have existing status
     else:
-        # TODO: Fetch real source_id/title instead of minting ObjectId
-        title = "ingested_{}".format(str(ObjectId()))
-        source_id_info = make_source_id(title)
-        source_id = source_id_info["source_id"]
+        # Verify user is allowed to submit the source_name
+        if (len(new_source_info["user_id_list"]) > 0
+                and not any([uid in new_source_info["user_id_list"] for uid in identities])):
+            return (jsonify({
+                "success": False,
+                "error": ("Your source_name or title has been submitted previously "
+                          "by another user.")
+                }), 400)
+        # Create new status
+        # Correct source_id is "new" always (previous user-submitted source_ids will be cancelled)
+        source_id = new_source_id
         status_info = {
             "source_id": source_id,
             "submission_code": "I",
@@ -435,7 +515,6 @@ def accept_ingest():
             "test": test
             }
         try:
-            # TODO: Better metadata validation
             status_res = create_status(status_info)
         except Exception as e:
             return (jsonify({
@@ -476,16 +555,14 @@ def accept_ingest():
                 "test": app.config["DEFAULT_MRR_TEST"]
             }
 
-    # Save file
     try:
-        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"],
-                                 secure_filename(feedstock.filename))
-        feedstock.save(feed_path)
-        ingester = Thread(target=ingest_driver, name="ingester_thread", args=(feed_path,
+        spawner = Process(target=spawn_ingest, name="ingester_spawner", args=(feed_location,
                                                                               source_id,
                                                                               services,
                                                                               data_loc,
                                                                               service_data))
+        spawner.start()
+        spawner.join()
     except Exception as e:
         stat_res = update_status(source_id, "ingest_start", "F", text=repr(e),
                                  except_on_fail=False)
@@ -495,15 +572,25 @@ def accept_ingest():
             return (jsonify({
                 "success": False,
                 "error": repr(e)
-                }), 400)
-    ingester.start()
+                }), 500)
+
     return (jsonify({
         "success": True,
         "source_id": source_id
         }), 202)
 
 
-def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
+def spawn_ingest(feedstock_location, source_id, services, data_loc, service_loc):
+    driver = Process(target=ingest_driver, name="ingest_process", args=(feedstock_location,
+                                                                        source_id,
+                                                                        services,
+                                                                        data_loc,
+                                                                        service_loc))
+    driver.start()
+    os.kill(os.getpid(), 9)
+
+
+def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -517,9 +604,11 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         publish_client = clients["publish"]
         transfer_client = clients["transfer"]
 
+        base_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
         final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_final.json")
     except Exception as e:
         update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cancel the previous version(s)
@@ -533,11 +622,12 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         old_source_id = old_source_id.replace("_v"+str(vers), "_v"+str(vers-1))
         cancel_res = cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
-            update_status(source_id, "convert_start", "F",
+            update_status(source_id, "ingest_start", "F",
                           text=cancel_res.get("error",
                                               ("Unable to cancel previous "
                                                "submission '{}'").format(old_source_id)),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
         if cancel_res["success"]:
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
@@ -552,6 +642,28 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         complete_submission(source_id)
         return
 
+    update_status(source_id, "ingest_download", "P", except_on_fail=True)
+    try:
+        for dl_res in download_and_backup(transfer_client,
+                                          feedstock_location,
+                                          app.config["LOCAL_EP"],
+                                          base_feed_path):
+            if not dl_res["success"]:
+                update_status(source_id, "ingest_download", "T",
+                                         text=dl_res["error"], except_on_fail=True)
+    except Exception as e:
+        update_status(source_id, "ingest_download", "F", text=repr(e),
+                                 except_on_fail=True)
+        complete_submission(source_id)
+        return
+    if not dl_res["success"]:
+        update_status(source_id, "ingest_download", "F", text=dl_res["error"],
+                                 except_on_fail=True)
+        complete_submission(source_id)
+        return
+    else:
+        logger.info("{}: Feedstock downloaded".format(source_id))
+
     # If the data should be local, make sure it is
     # Currently only Publish needs the data
     if services.get("globus_publish"):
@@ -563,6 +675,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             update_status(source_id, "ingest_publish", "F",
                                      text="Unable to publish data without location.",
                                      except_on_fail=True)
+            complete_submission(source_id)
             return
         else:
             # If all locations are Globus, don't need to download locally
@@ -586,17 +699,19 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                 except Exception as e:
                     update_status(source_id, "ingest_download", "F", text=repr(e),
                                              except_on_fail=True)
+                    complete_submission(source_id)
                     return
                 if not dl_res["success"]:
                     update_status(source_id, "ingest_download", "F",
                                              text=dl_res["error"], except_on_fail=True)
+                    complete_submission(source_id)
                     return
                 else:
                     update_status(source_id, "ingest_download", "S",
                                              except_on_fail=True)
                     logger.debug("{}: Ingest data downloaded".format(source_id))
     else:
-        update_status(source_id, "ingest_download", "N", except_on_fail=True)
+        update_status(source_id, "ingest_download", "S", except_on_fail=True)
 
     # Same for integrated service data
     if services.get("citrine"):
@@ -608,6 +723,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             update_status(source_id, "ingest_citrine", "F",
                                      text="Unable to upload PIFs without location.",
                                      except_on_fail=True)
+            complete_submission(source_id)
             return
         else:
             update_status(source_id, "ingest_integration", "P", except_on_fail=True)
@@ -624,10 +740,12 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
             except Exception as e:
                 update_status(source_id, "ingest_integration", "F", text=repr(e),
                                          except_on_fail=True)
+                complete_submission(source_id)
                 return
             if not dl_res["success"]:
                 update_status(source_id, "ingest_integration", "F",
                                          text=dl_res["error"], except_on_fail=True)
+                complete_submission(source_id)
                 return
             else:
                 update_status(source_id, "ingest_integration", "S", except_on_fail=True)
@@ -655,6 +773,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
     except Exception as e:
         update_status(source_id, "ingest_search", "F", text=repr(e),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
     else:
         # Handle errors
@@ -666,6 +785,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
                                              * app.config["SEARCH_BATCH_SIZE"]),
                                             search_res["errors"]),
                           except_on_fail=True)
+            complete_submission(source_id)
             return
 
         # Other services use the dataset information
@@ -834,6 +954,7 @@ def ingest_driver(base_feed_path, source_id, services, data_loc, service_loc):
         update_status(source_id, "ingest_cleanup", "F",
                                  text=ds_update.get("error", "Unable to update dataset"),
                                  except_on_fail=True)
+        complete_submission(source_id)
         return
 
     # Cleanup
@@ -869,7 +990,7 @@ def get_status(source_id):
         return (jsonify(auth_res), error_code)
 
     uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_id)
+    raw_status = read_status(source_id, update_active=True)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
     try:
