@@ -319,12 +319,13 @@ def make_source_id(title, test=False):
     }
 
 
-def download_and_backup(mdf_transfer_client, data_loc,
+def download_and_backup(transfer_client, data_loc,
                         local_ep, local_path, backup_ep=None, backup_path=None):
     """Download data from a remote host to the configured machine.
 
     Arguments:
-    mdf_transfer_client (TransferClient): An authenticated TransferClient.
+    transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+                                      Technically unnecessary for non-Globus data locations.
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
@@ -413,7 +414,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     transfer_path = local_path
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
-                                mdf_transfer_client, loc_info.netloc, local_ep,
+                                transfer_client, loc_info.netloc, local_ep,
                                 [(loc_info.path, transfer_path)],
                                 interval=app.config["TRANSFER_PING_INTERVAL"],
                                 inactivity_time=app.config["TRANSFER_DEADLINE"])
@@ -454,7 +455,7 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
-                        mdf_transfer_client, local_ep, backup_ep,
+                        transfer_client, local_ep, backup_ep,
                         [(local_path + (filename if filename else ""), backup_path)],
                         interval=app.config["TRANSFER_PING_INTERVAL"],
                         inactivity_time=app.config["TRANSFER_DEADLINE"])

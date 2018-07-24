@@ -6,6 +6,7 @@ import os
 import urllib
 
 from flask import jsonify, request, redirect
+import globus_sdk
 import jsonschema
 import mdf_toolbox
 import requests
@@ -45,8 +46,9 @@ def root_call():
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
+    bearer_token = request.headers.get("Authorization")
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
+        auth_res = authenticate_token(bearer_token, auth_level="convert")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -175,7 +177,9 @@ def accept_convert():
     try:
         spawner = Process(target=spawn_driver, name="driver_spawner", args=(metadata,
                                                                             source_id,
-                                                                            test))
+                                                                            test,
+                                                                            bearer_token,
+                                                                            user_id))
         spawner.start()
         spawner.join()
     except Exception as e:
@@ -190,15 +194,17 @@ def accept_convert():
         }), 202)
 
 
-def spawn_driver(metadata, source_id, test):
+def spawn_driver(metadata, source_id, test, access_token, user_id):
     driver = Process(target=convert_driver, name="driver_process", args=(metadata,
                                                                          source_id,
-                                                                         test))
+                                                                         test,
+                                                                         access_token,
+                                                                         user_id))
     driver.start()
     os.kill(os.getpid(), 9)
 
 
-def convert_driver(metadata, source_id, test):
+def convert_driver(metadata, source_id, test, access_token, user_id):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
@@ -215,9 +221,27 @@ def convert_driver(metadata, source_id, test):
         "services": ["transfer", "connect"]
         }
     try:
-        clients = mdf_toolbox.confidential_login(creds)
-        transfer_client = clients["transfer"]
-        connect_authorizer = clients["connect"]
+        access_token = access_token.replace("Bearer ", "")
+        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
+                                                           creds["client_secret"])
+        tokens = conf_client.oauth2_client_credentials_tokens(
+                                requested_scopes=("https://auth.globus.org/scopes/"
+                                                  "c17f27bb-f200-486a-b785-2a25e82af505/connect"
+                                                  " urn:globus:auth:scope:"
+                                                  "transfer.api.globus.org:all"))
+        mdf_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                tokens.by_resource_server
+                                                ["transfer.api.globus.org"]["access_token"])
+        mdf_transfer_client = globus_sdk.TransferClient(authorizer=mdf_transfer_authorizer)
+
+        connect_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                            tokens.by_resource_server
+                                            ["mdf_dataset_submission"]["access_token"])
+
+        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                dependent_grant.data[0]["access_token"])
+        user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
         update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
         complete_submission(source_id)
@@ -254,30 +278,58 @@ def convert_driver(metadata, source_id, test):
     local_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(app.config["BACKUP_PATH"], source_id) + "/"
     try:
-        for dl_res in download_and_backup(transfer_client,
+        # Edit ACL to allow pull
+        acl_rule = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_id,
+            "path": local_path,
+            "permissions": "rw"
+        }
+        acl_res = mdf_transfer_client.add_endpoint_acl_rule(app.config["LOCAL_EP"], acl_rule).data
+        if not acl_res.get("code") == "Created":
+            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+            raise ValueError("Internal permissions error.")
+        # Download from user
+        for dl_res in download_and_backup(user_transfer_client,
                                           metadata.pop("data", {}),
                                           app.config["LOCAL_EP"],
-                                          local_path,
-                                          app.config["BACKUP_EP"] if not test else None,
-                                          backup_path if not test else None):
+                                          local_path):
             if not dl_res["success"]:
-                update_status(source_id, "convert_download", "T",
-                                         text=dl_res["error"], except_on_fail=True)
+                msg = "During data download: " + dl_res["error"]
+                update_status(source_id, "convert_download", "T", text=msg, except_on_fail=True)
+        if not dl_res["success"]:
+            raise ValueError(dl_res["error"])
+        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(app.config["LOCAL_EP"],
+                                                               acl_res["access_id"])
+        if not acl_del.get("code") == "Deleted":
+            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
+            raise ValueError("Internal permissions error.")
+
+        # Backup to MDF
+        if not test:
+            for dl_res in download_and_backup(mdf_transfer_client,
+                                              "globus://{}{}".format(app.config["LOCAL_EP"],
+                                                                     local_path),
+                                              app.config["BACKUP_EP"],
+                                              backup_path):
+                if not dl_res["success"]:
+                    msg = "During data backup: " + dl_res["error"]
+                    update_status(source_id, "convert_download", "T", text=msg,
+                                  except_on_fail=True)
+            if not dl_res["success"]:
+                raise ValueError(dl_res["error"])
+
     except Exception as e:
         update_status(source_id, "convert_download", "F", text=repr(e),
                                  except_on_fail=True)
         complete_submission(source_id)
         return
-    if not dl_res["success"]:
-        update_status(source_id, "convert_download", "F", text=dl_res["error"],
-                                 except_on_fail=True)
-        complete_submission(source_id)
-        return
-    else:
-        update_status(source_id, "convert_download", "S", except_on_fail=True)
-        logger.info("{}: Data downloaded, {} archives extracted".format(
-                                                                    source_id,
-                                                                    dl_res["num_extracted"]))
+
+    update_status(source_id, "convert_download", "S", except_on_fail=True)
+    logger.info("{}: Data downloaded, {} archives extracted".format(
+                                                                source_id,
+                                                                dl_res["num_extracted"]))
 
     # Handle service integration data directory
     service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
@@ -388,8 +440,9 @@ def convert_driver(metadata, source_id, test):
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
+    bearer_token = request.headers.get("Authorization")
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="ingest")
+        auth_res = authenticate_token(bearer_token, auth_level="ingest")
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -560,7 +613,9 @@ def accept_ingest():
                                                                               source_id,
                                                                               services,
                                                                               data_loc,
-                                                                              service_data))
+                                                                              service_data,
+                                                                              bearer_token,
+                                                                              user_id))
         spawner.start()
         spawner.join()
     except Exception as e:
@@ -580,17 +635,21 @@ def accept_ingest():
         }), 202)
 
 
-def spawn_ingest(feedstock_location, source_id, services, data_loc, service_loc):
+def spawn_ingest(feedstock_location, source_id, services, data_loc, service_loc, access_token,
+                 user_id):
     driver = Process(target=ingest_driver, name="ingest_process", args=(feedstock_location,
                                                                         source_id,
                                                                         services,
                                                                         data_loc,
-                                                                        service_loc))
+                                                                        service_loc,
+                                                                        access_token,
+                                                                        user_id))
     driver.start()
     os.kill(os.getpid(), 9)
 
 
-def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc):
+def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc, access_token,
+                  user_id):
     """Finalize and ingest feedstock."""
     # Will need client to ingest data
     creds = {
@@ -602,10 +661,18 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
     try:
         clients = mdf_toolbox.confidential_login(creds)
         publish_client = clients["publish"]
-        transfer_client = clients["transfer"]
+        mdf_transfer_client = clients["transfer"]
 
         base_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
         final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_final.json")
+
+        access_token = access_token.replace("Bearer ", "")
+        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
+                                                           creds["client_secret"])
+        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                dependent_grant.data[0]["access_token"])
+        user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
         update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
         complete_submission(source_id)
@@ -644,13 +711,30 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
 
     update_status(source_id, "ingest_download", "P", except_on_fail=True)
     try:
-        for dl_res in download_and_backup(transfer_client,
+        # Edit ACL to allow pull
+        acl_rule = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_id,
+            "path": os.path.dirname(base_feed_path),
+            "permissions": "rw"
+        }
+        acl_res = mdf_transfer_client.add_endpoint_acl_rule(app.config["LOCAL_EP"], acl_rule).data
+        if not acl_res.get("code") == "Created":
+            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+            raise ValueError("Internal permissions error.")
+        for dl_res in download_and_backup(user_transfer_client,
                                           feedstock_location,
                                           app.config["LOCAL_EP"],
                                           base_feed_path):
             if not dl_res["success"]:
                 update_status(source_id, "ingest_download", "T",
                                          text=dl_res["error"], except_on_fail=True)
+        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(app.config["LOCAL_EP"],
+                                                               acl_res["access_id"])
+        if not acl_del.get("code") == "Deleted":
+            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
+            raise ValueError("Internal permissions error.")
     except Exception as e:
         update_status(source_id, "ingest_download", "F", text=repr(e),
                                  except_on_fail=True)
@@ -689,13 +773,32 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                 data_ep = app.config["LOCAL_EP"]
                 data_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
                 try:
-                    for dl_res in download_and_backup(transfer_client,
+                    # Edit ACL to allow pull
+                    acl_rule = {
+                        "DATA_TYPE": "access",
+                        "principal_type": "identity",
+                        "principal": user_id,
+                        "path": data_path,
+                        "permissions": "rw"
+                    }
+                    acl_res = mdf_transfer_client.add_endpoint_acl_rule(data_ep, acl_rule).data
+                    if not acl_res.get("code") == "Created":
+                        logger.error("{}: Unable to create ACL rule: '{}'".format(source_id,
+                                                                                  acl_res))
+                        raise ValueError("Internal permissions error.")
+                    for dl_res in download_and_backup(user_transfer_client,
                                                       data_loc,
                                                       data_ep,
                                                       data_path):
                         if not dl_res["success"]:
                             update_status(source_id, "ingest_download", "T",
                                                      text=dl_res["error"], except_on_fail=True)
+                    acl_del = mdf_transfer_client.delete_endpoint_acl_rule(app.config["LOCAL_EP"],
+                                                                           acl_res["access_id"])
+                    if not acl_del.get("code") == "Deleted":
+                        logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
+                                                                                     acl_del))
+                        raise ValueError("Internal permissions error.")
                 except Exception as e:
                     update_status(source_id, "ingest_download", "F", text=repr(e),
                                              except_on_fail=True)
@@ -730,13 +833,32 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
             # Will not transfer anything if already in place
             service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
             try:
-                for dl_res in download_and_backup(transfer_client,
+                # Edit ACL to allow pull
+                acl_rule = {
+                    "DATA_TYPE": "access",
+                    "principal_type": "identity",
+                    "principal": user_id,
+                    "path": service_data,
+                    "permissions": "rw"
+                }
+                acl_res = mdf_transfer_client.add_endpoint_acl_rule(app.config["LOCAL_EP"],
+                                                                    acl_rule).data
+                if not acl_res.get("code") == "Created":
+                    logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+                    raise ValueError("Internal permissions error.")
+                for dl_res in download_and_backup(user_transfer_client,
                                                   service_loc,
                                                   app.config["LOCAL_EP"],
                                                   service_data):
                     if not dl_res["success"]:
                         update_status(source_id, "ingest_integration", "T",
                                                  text=dl_res["error"], except_on_fail=True)
+                acl_del = mdf_transfer_client.delete_endpoint_acl_rule(app.config["LOCAL_EP"],
+                                                                       acl_res["access_id"])
+                if not acl_del.get("code") == "Deleted":
+                    logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
+                                                                                 acl_del))
+                    raise ValueError("Internal permissions error.")
             except Exception as e:
                 update_status(source_id, "ingest_integration", "F", text=repr(e),
                                          except_on_fail=True)
@@ -796,7 +918,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                                         source_id + "_final.json")
         try:
             transfer = mdf_toolbox.custom_transfer(
-                            transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                            mdf_transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
                             [(final_feed_path, backup_feed_path)],
                             interval=app.config["TRANSFER_PING_INTERVAL"],
                             inactivity_time=app.config["TRANSFER_DEADLINE"])
@@ -822,7 +944,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                       or services["globus_publish"].get("collection_name")
                       or app.config["DEFAULT_PUBLISH_COLLECTION"])
         try:
-            fin_res = globus_publish_data(publish_client, transfer_client,
+            fin_res = globus_publish_data(publish_client, mdf_transfer_client,
                                           dataset, collection,
                                           data_ep, data_path, data_loc)
         except Exception as e:
