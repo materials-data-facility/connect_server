@@ -11,9 +11,7 @@ CONFIG = dict_merge(KEYS, CONFIG)
 
 server = os.environ.get("FLASK_ENV")
 if server == "production":
-    #TODO: Turn on prod config for prod
-    CONFIG = dict_merge(DEV, CONFIG)
-    #CONFIG = dict_merge(PROD, CONFIG)
+    CONFIG = dict_merge(PROD, CONFIG)
 elif server == "development":
     CONFIG = dict_merge(DEV, CONFIG)
 else:

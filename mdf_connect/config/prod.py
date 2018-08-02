@@ -1,7 +1,8 @@
 PROD = {
     "SERVER_NAME": "api.materialsdatafacility.org",
 
-    "LOG_FILE": "prod.log",
+    "API_LOG_FILE": "proda.log",
+    "PROCESS_LOG_FILE": "prodp.log",
     # "LOG_LEVEL": "INFO",
     "LOG_LEVEL": "DEBUG",
 

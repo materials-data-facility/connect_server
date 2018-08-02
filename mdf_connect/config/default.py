@@ -6,6 +6,8 @@ DEFAULT = {
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
     "SERVICE_DATA": os.path.expanduser("~/integrations/"),
 
+    "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas")),
+
     "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
 
     "TRANSFER_PING_INTERVAL": 1 * 60,  # 1 minute, in seconds
@@ -47,9 +49,7 @@ DEFAULT = {
     "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a",
     "INGEST_GROUP_ID": "3ce2c53e-3752-11e8-891c-0e00fd09bf20"
 }
-with open(os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                       "schemas", "mrr_template.xml")) as f:
+with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
     DEFAULT["MRR_TEMPLATE"] = f.read()
-with open(os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                       "schemas", "mrr_contributor.xml")) as f:
+with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_contributor.xml")) as f:
     DEFAULT["MRR_CONTRIBUTOR"] = f.read()

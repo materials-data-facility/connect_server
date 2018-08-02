@@ -1,4 +1,4 @@
-{
+CONVERTER_CONF = {
     "grouping_rules": {
         "vasp": [
             "outcar",

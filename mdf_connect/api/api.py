@@ -46,6 +46,7 @@ def accept_convert():
     try:
         auth_res = authenticate_token(access_token, auth_level="convert")
     except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
@@ -77,10 +78,9 @@ def accept_convert():
             }
         except Exception:
             pass
-    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "connect_convert.json")) as schema_file:
+    with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_convert.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
                                       referrer=schema)
     try:
         jsonschema.validate(metadata, schema, resolver=resolver)
@@ -141,6 +141,7 @@ def accept_convert():
             auth_res = authenticate_token(request.headers.get("Authorization"),
                                           auth_level=collection["group"])
         except Exception as e:
+            logger.error("Group authentication failure: {}".format(e))
             return (jsonify({
                 "success": False,
                 "error": "Group authentication failed"
@@ -163,11 +164,13 @@ def accept_convert():
     try:
         status_res = create_status(status_info)
     except Exception as e:
+        logger.error("Status creation exception: {}".format(e))
         return (jsonify({
             "success": False,
             "error": repr(e)
             }), 500)
     if not status_res["success"]:
+        logger.error("Status creation error: {}".format(status_res["error"]))
         return (jsonify(status_res), 500)
 
     try:
@@ -181,8 +184,10 @@ def accept_convert():
         }
         sub_res = submit_to_queue(submission_args)
         if not sub_res["success"]:
+            logger.error("Submission to SQS error: {}".format(sub_res["error"]))
             return (jsonify(sub_res), 500)
     except Exception as e:
+        logger.error("Submission to SQS exception: {}".format(e))
         return (jsonify({
             "success": False,
             "error": repr(e)
@@ -201,6 +206,7 @@ def accept_ingest():
     try:
         auth_res = authenticate_token(access_token, auth_level="ingest")
     except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
@@ -223,10 +229,9 @@ def accept_ingest():
             }), 400)
 
     # Validate input JSON
-    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "connect_ingest.json")) as schema_file:
+    with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_ingest.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
                                       referrer=schema)
     try:
         jsonschema.validate(metadata, schema, resolver=resolver)
@@ -260,6 +265,9 @@ def accept_ingest():
                                     max(new_source_info["version"] - 1, 1))
     old_status_info = read_status(old_source_id, update_active=True)
     if not old_status_info["success"]:
+        logger.error("Prior status '{}' not in status database: {}".format(
+                                                                        old_source_id,
+                                                                        old_status_info["error"]))
         return (jsonify({
             "success": False,
             "error": "Prior submission '{}' not found in database".format(old_source_id)
@@ -273,12 +281,15 @@ def accept_ingest():
             # Check old status validity
             status_valid = validate_status(old_status, code_mode="ingest")
             if not status_valid["success"]:
+                logger.error("Prior status from database invalid: {}".format(
+                                                                        status_valid["error"]))
                 return (jsonify(status_valid), 500)
 
             # Correct version is "old" version
             source_id = old_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
+                logger.error("Status update failure: {}".format(stat_res["error"]))
                 return (jsonify(stat_res), 500)
 
         # Past submission complete, try "new" version
@@ -287,14 +298,17 @@ def accept_ingest():
             # Check new status validity
             status_valid = validate_status(new_status, code_mode="ingest")
             if not status_valid["success"]:
+                logger.error("New status invalid: {}".format(status_valid["error"]))
                 return (jsonify(status_valid), 500)
 
             # Correct version is "new" version
             source_id = new_source_id
             stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
+                logger.error("Status update failure: {}".format(stat_res["error"]))
                 return (jsonify(stat_res), 500)
         else:
+            logger.error("Current status '{}' not in status database: {}".format(old_source_id))
             return (jsonify({
                 "success": False,
                 "error": "Current submission '{}' not found in database".format(old_source_id)
@@ -327,11 +341,13 @@ def accept_ingest():
         try:
             status_res = create_status(status_info)
         except Exception as e:
+            logger.error("Status creation exception: {}".format(e))
             return (jsonify({
                 "success": False,
                 "error": repr(e)
                 }), 500)
         if not status_res["success"]:
+            logger.error("Status creation error: {}".format(status_res["error"]))
             return (jsonify(status_res), 500)
 
     if test:
@@ -378,8 +394,10 @@ def accept_ingest():
         }
         sub_res = submit_to_queue(submission_args)
         if not sub_res["success"]:
+            logger.error("Submission to SQS error: {}".format(sub_res["error"]))
             return (jsonify(sub_res), 500)
     except Exception as e:
+        logger.error("Submission to SQS exception: {}".format(e))
         stat_res = update_status(source_id, "ingest_start", "F", text=repr(e),
                                  except_on_fail=False)
         if not stat_res["success"]:
@@ -402,6 +420,7 @@ def get_status(source_id):
     try:
         auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
     except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
@@ -417,6 +436,7 @@ def get_status(source_id):
     try:
         admin_res = authenticate_token(request.headers.get("Authorization"), auth_level="admin")
     except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
