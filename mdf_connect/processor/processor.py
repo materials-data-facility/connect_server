@@ -10,11 +10,11 @@ import mdf_toolbox
 import requests
 
 from mdf_connect import CONFIG
-from mdf_connect.procesor import convert
+from mdf_connect.processor import convert, search_ingest, update_search_entry
 from mdf_connect.utils import (cancel_submission, citrine_upload, complete_submission,
-                               download_and_backup, globus_publish_data, modify_status_entry,
-                               read_status, retrieve_from_queue, search_ingest,
-                               update_search_entry, update_status)
+                               delete_from_queue, download_and_backup, globus_publish_data,
+                               modify_status_entry, read_status, retrieve_from_queue,
+                               update_status)
 
 
 # Set up root logger
@@ -41,11 +41,11 @@ def processor():
         try:
             submissions = retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
             if not submissions["success"]:
-                #TODO: Log
+                logger.debug("Submissions not retrieved: {}".format(submissions["error"]))
                 continue
             if len(submissions["entries"]):
+                logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
-                    #TODO: Log submission retrieval
                     if sub["submission_type"] == "convert":
                         driver = Process(target=convert_driver, kwargs=sub)
                     elif sub["submission_type"] == "ingest":
@@ -53,14 +53,15 @@ def processor():
                     driver.start()
                     active_processes.append(driver)
                 delete_from_queue(submissions["delete_info"])
+                logger.info("{} submissions started".format(len(submissions["entries"])))
         except Exception as e:
-            pass #TODO: Log
+            logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
                 inactive_processes.append(dead_proc)
                 active_processes.remove(dead_proc)
         except Exception as e:
-            pass #TODO: Log
+            logger.error("Error life-checking processes: {}".format(e))
         # TODO: Check status DB if inactive processes are recorded dead
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
 

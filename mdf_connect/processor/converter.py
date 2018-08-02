@@ -5,15 +5,13 @@ import multiprocessing
 import os
 from queue import Empty
 
+from mdf_connect.config import CONVERTER_CONF
 from mdf_connect.processor import transform
 
 NUM_TRANSFORMERS = 5
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "converter_conf.json")
-with open(CONFIG_PATH) as conf_f:
-    conf = json.load(conf_f)
-GROUPING_RULES = conf["grouping_rules"]
-REPOSITORY_RULES = conf["repository_rules"]
+GROUPING_RULES = CONVERTER_CONF["grouping_rules"]
+REPOSITORY_RULES = CONVERTER_CONF["repository_rules"]
 
 logger = logging.getLogger(__name__)
 
