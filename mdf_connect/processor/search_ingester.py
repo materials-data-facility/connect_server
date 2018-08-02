@@ -8,7 +8,7 @@ from queue import Empty
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
-from mdf_connect import Validator
+from mdf_connect.processor import Validator
 
 
 NUM_SUBMITTERS = 5
