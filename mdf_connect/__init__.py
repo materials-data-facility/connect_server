@@ -1,28 +1,21 @@
 import os
-from .transformer import transform
-from .converter import convert
-from .validator import Validator
-from .search_ingester import search_ingest, update_search_entry
-from flask import Flask
+
+from mdf_toolbox import dict_merge
+
+from mdf_connect.config import DEFAULT, DEV, KEYS, PROD
 
 
-app = Flask(__name__)
-# Need to pull from default.conf, keys.conf, and either prod.conf or dev.conf
-app.config.from_pyfile("config/default.conf")
-app.config.from_pyfile("config/keys.conf")
+CONFIG = {}
+CONFIG = dict_merge(DEFAULT, CONFIG)
+CONFIG = dict_merge(KEYS, CONFIG)
 
 server = os.environ.get("FLASK_ENV")
 if server == "production":
-    app.config.from_pyfile("config/prod.conf")
+    #TODO: Turn on prod config for prod
+    CONFIG = dict_merge(DEV, CONFIG)
+    #CONFIG = dict_merge(PROD, CONFIG)
 elif server == "development":
-    app.config.from_pyfile("config/dev.conf")
+    CONFIG = dict_merge(DEV, CONFIG)
 else:
-    raise EnvironmentError("FLASK_ENV not set")
-
-app.url_map.strict_slashes = False
-
-from .utils import (authenticate_token, make_source_id, download_and_backup,
-                    globus_publish_data, citrine_upload, cancel_submission,
-                    complete_submission, validate_status, read_status, create_status,
-                    update_status, modify_status_entry, translate_status)
-from mdf_connect import api
+    raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
+                           " or 'development', even for processing only.")

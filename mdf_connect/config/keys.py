@@ -1,0 +1,13 @@
+KEYS = {
+    "CITRINATION_API_KEY": "QSIR5Ktd8yRDdieP42XqQgtt",
+
+    "MRR_USERNAME": "mdf_connect",
+    "MRR_PASSWORD": "MDFConnect2018!",
+
+    "API_CLIENT_SECRET": "dQ0npVsRUS7gTAYjwgOeiumxQ9NERbPb4TOkzmBewFE=",
+
+    "AWS_ID": "557062710055",
+
+    "AWS_KEY": "AKIAJSPV45PDCOTSZ5DA",
+    "AWS_SECRET": "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"
+}
