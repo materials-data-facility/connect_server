@@ -42,7 +42,6 @@ def processor():
             submissions = retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
             if not submissions["success"]:
                 logger.debug("Submissions not retrieved: {}".format(submissions["error"]))
-                continue
             if len(submissions["entries"]):
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
