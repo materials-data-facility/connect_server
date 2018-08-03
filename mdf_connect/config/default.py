@@ -8,8 +8,8 @@ DEFAULT = {
 
     "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas")),
 
-    "PROCESSOR_WAIT_TIME": 20,
-    "PROCESSOR_SLEEP_TIME": 40,
+    "PROCESSOR_WAIT_TIME": 20,  # Seconds
+    "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
     "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
 
