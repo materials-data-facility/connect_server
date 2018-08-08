@@ -19,6 +19,6 @@ else:
                            " or 'development', even for processing only.")
 
 # Make required dirs
-os.makedirs(CONFIG["LOCAL_PATH"], mode=771, exist_ok=True)
-os.makedirs(CONFIG["FEEDSTOCK_PATH"], mode=771, exist_ok=True)
-os.makedirs(CONFIG["SERVICE_DATA"], mode=771, exist_ok=True)
+os.makedirs(CONFIG["LOCAL_PATH"], exist_ok=True)
+os.makedirs(CONFIG["FEEDSTOCK_PATH"], exist_ok=True)
+os.makedirs(CONFIG["SERVICE_DATA"], exist_ok=True)
