@@ -827,7 +827,7 @@ def validate_status(status, code_mode=None):
         }
 
 
-def read_status(source_id, update_active=False):
+def read_status(source_id)
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
@@ -839,16 +839,6 @@ def read_status(source_id, update_active=False):
             "success": False,
             "error": "ID {} not found in status database".format(source_id)
             }
-    # Check if process is a ghost - dead but not complete
-    if update_active and status_res["active"]:
-        try:
-            os.kill(status_res["pid"], 0)
-        except ProcessLookupError:
-            com_res = complete_submission(source_id)
-            if not com_res["success"]:
-                return com_res
-            status_res = table.get_item(Key={"source_id": source_id},
-                                        ConsistentRead=True).get("Item")
     return {
         "success": True,
         "status": status_res
