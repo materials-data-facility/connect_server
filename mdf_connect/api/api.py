@@ -261,12 +261,12 @@ def accept_ingest():
     # "new" source_id for new submissions
     new_source_info = make_source_id(source_name or title, test=test)
     new_source_id = new_source_info["source_id"]
-    new_status_info = read_status(new_source_id, update_active=True)
+    new_status_info = read_status(new_source_id)
     # "old" source_id for current/previous submission
     # Found by decrementing new version, to a minimum of 1
     old_source_id = "{}_v{}".format(new_source_info["source_name"],
                                     max(new_source_info["version"] - 1, 1))
-    old_status_info = read_status(old_source_id, update_active=True)
+    old_status_info = read_status(old_source_id)
     if not old_status_info["success"]:
         logger.error("Prior status '{}' not in status database: {}".format(
                                                                         old_source_id,
@@ -311,7 +311,8 @@ def accept_ingest():
                 logger.error("Status update failure: {}".format(stat_res["error"]))
                 return (jsonify(stat_res), 500)
         else:
-            logger.error("Current status '{}' not in status database: {}".format(old_source_id))
+            logger.error("Current status '{}' not in status database: {}".format(old_source_id,
+                                                                                 old_status_info))
             return (jsonify({
                 "success": False,
                 "error": "Current submission '{}' not found in database".format(old_source_id)
@@ -434,7 +435,7 @@ def get_status(source_id):
         return (jsonify(auth_res), error_code)
 
     uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_id, update_active=True)
+    raw_status = read_status(source_id)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
     try:
