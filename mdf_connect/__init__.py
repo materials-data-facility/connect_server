@@ -17,3 +17,8 @@ elif server == "development":
 else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
                            " or 'development', even for processing only.")
+
+# Make required dirs
+os.makedirs(CONFIG["LOCAL_PATH"], mode=771, exist_ok=True)
+os.makedirs(CONFIG["FEEDSTOCK_PATH"], mode=771, exist_ok=True)
+os.makedirs(CONFIG["SERVICE_DATA"], mode=771, exist_ok=True)

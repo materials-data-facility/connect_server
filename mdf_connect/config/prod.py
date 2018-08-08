@@ -16,8 +16,7 @@ PROD = {
     "INGEST_INDEX": "mdf-test",
     "INGEST_TEST_INDEX": "mdf-test",
 
-    # "LOCAL_EP": "0f1c3918-749d-11e8-93ba-0a6d4e044368",
-    "LOCAL_EP": "5f8d9c5c-7609-4fc2-83ce-c7b11213fc00",
+    "LOCAL_EP": "693e4df6-9274-4fff-ad2d-53661a1df1f1",
 
     "BACKUP_EP": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
     "BACKUP_PATH": "/MDF/mdf_connect/prod/data/",

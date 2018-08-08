@@ -42,6 +42,7 @@ def root_call():
 @app.route('/convert', methods=["POST"])
 def accept_convert():
     """Accept the JSON metadata and begin the conversion process."""
+    logger.debug("Started new convert task")
     access_token = request.headers.get("Authorization")
     try:
         auth_res = authenticate_token(access_token, auth_level="convert")
@@ -193,6 +194,7 @@ def accept_convert():
             "error": repr(e)
             }), 500)
 
+    logger.info("Convert submission '{}' accepted".format(source_id))
     return (jsonify({
         "success": True,
         "source_id": source_id
@@ -202,6 +204,7 @@ def accept_convert():
 @app.route("/ingest", methods=["POST"])
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
+    logger.debug("Started new ingest task")
     access_token = request.headers.get("Authorization")
     try:
         auth_res = authenticate_token(access_token, auth_level="ingest")
@@ -408,6 +411,7 @@ def accept_ingest():
                 "error": repr(e)
                 }), 500)
 
+    logger.info("Ingest submission '{}' accepted".format(source_id))
     return (jsonify({
         "success": True,
         "source_id": source_id
