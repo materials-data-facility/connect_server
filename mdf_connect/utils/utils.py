@@ -827,7 +827,7 @@ def validate_status(status, code_mode=None):
         }
 
 
-def read_status(source_id)
+def read_status(source_id):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
