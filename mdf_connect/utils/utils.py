@@ -266,11 +266,6 @@ def fetch_whitelist(auth_level):
 
 def make_source_id(title, test=False):
     """Make a source name out of a title."""
-    # TODO: Smarter delete_words, to catch at start/end of title.
-    #       Current behavior yields different results for multiple passes:
-    #       "A Title" => "_test_a_title" => "_test_title"
-    delete_words = []
-    '''
     delete_words = [
         "and",
         "or",
@@ -279,7 +274,6 @@ def make_source_id(title, test=False):
         "an",
         "of"
     ]
-    '''
     title = title.strip().lower()
     # Remove unimportant words
     for dw in delete_words:
@@ -288,6 +282,11 @@ def make_source_id(title, test=False):
         title = title.replace(" "+dw+" ", " ")
         # Same for underscore separation
         title = title.replace("_"+dw+"_", "_")
+        # Replace words at the start and end of the title
+        if title.startswith(dw+" "):
+            title = title[len(dw+" "):]
+        if title.endswith(" "+dw):
+            title = title[:-len(" "+dw)]
     # Replace spaces with underscores, remove leading/trailing underscores
     title = title.replace(" ", "_").strip("_")
     # Clear double underscores
