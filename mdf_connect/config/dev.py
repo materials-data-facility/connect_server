@@ -1,7 +1,8 @@
 DEV = {
     "SERVER_NAME": "dev-api.materialsdatafacility.org",
 
-    "LOG_FILE": "dev.log",
+    "API_LOG_FILE": "deva.log",
+    "PROCESS_LOG_FILE": "devp.log",
     "LOG_LEVEL": "DEBUG",
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
@@ -12,7 +13,7 @@ DEV = {
     "INGEST_INDEX": "mdf-test",
     "INGEST_TEST_INDEX": "mdf-test",
 
-    "LOCAL_EP": "faf9a276-2ebb-11e8-b8be-0ac6873fc732",
+    "LOCAL_EP": "",
 
     "BACKUP_EP": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
     "BACKUP_PATH": "/MDF/mdf_connect/dev/data/",
@@ -31,5 +32,5 @@ DEV = {
     "SQS_QUEUE": "mdfc_dev1.fifo",
     "SQS_GROUP_ID": "mdf_connect_dev",
 
-    "DYNAMO_TABLE": "dev-status-2"
+    "DYNAMO_TABLE": "dev-status-3"
 }
