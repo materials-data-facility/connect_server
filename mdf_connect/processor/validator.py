@@ -6,6 +6,8 @@ from tempfile import TemporaryFile
 from bson import ObjectId
 import jsonschema
 
+from mdf_connect import CONFIG
+
 
 class Validator:
     """Validates MDF feedstock.
@@ -28,7 +30,7 @@ class Validator:
         if schema_path:
             self.__schema_dir = schema_path
         else:
-            self.__schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
+            self.__schema_dir = CONFIG["SCHEMA_PATH"]
 
     def start_dataset(self, ds_md):
         """Validate a dataset against the MDF schema.

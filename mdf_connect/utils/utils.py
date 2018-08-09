@@ -902,11 +902,15 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
     """
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
+        if except_on_fail:
+            raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
+        if except_on_fail:
+            raise ValueError(old_status["error"])
         return old_status
     status = old_status["status"]
     # Update code
@@ -954,6 +958,8 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
 
     status_valid = validate_status(status)
     if not status_valid["success"]:
+        if except_on_fail:
+            raise ValueError(status_valid["error"])
         return status_valid
 
     try:

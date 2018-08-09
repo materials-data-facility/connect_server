@@ -370,7 +370,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             "DATA_TYPE": "access",
             "principal_type": "identity",
             "principal": user_id,
-            "path": os.path.dirname(base_feed_path),
+            "path": os.path.dirname(base_feed_path) + "/",
             "permissions": "rw"
         }
         acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
