@@ -23,7 +23,7 @@ before_install:
 - openssl aes-256-cbc -K $encrypted_d16805535c17_key -iv $encrypted_d16805535c17_iv
   -in travis.tar.enc -out travis.tar -d
 - tar xvf travis.tar
-- mv keys.conf mdf_connect/config/keys.conf
+- mv keys.py mdf_connect/config/keys.py
 after_success:
 - coveralls
 notifications:
