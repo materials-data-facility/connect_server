@@ -14,17 +14,32 @@ import jsonschema
 import mdf_toolbox
 import requests
 
-from mdf_connect import app
+from mdf_connect import CONFIG
 
 
 logger = logging.getLogger(__name__)
 
+
+# SQS setup
+SQS_CLIENT = boto3.resource('sqs',
+                            aws_access_key_id=CONFIG["AWS_KEY"],
+                            aws_secret_access_key=CONFIG["AWS_SECRET"],
+                            region_name="us-east-1")
+SQS_QUEUE_NAME = CONFIG["SQS_QUEUE"]
+assert SQS_QUEUE_NAME.endswith(".fifo")
+SQS_ATTRIBUTES = {
+    "FifoQueue": 'true',
+    "ContentBasedDeduplication": 'true',
+    "ReceiveMessageWaitTimeSeconds": '20'
+}
+SQS_GROUP = CONFIG["SQS_GROUP_ID"]
+
 # DynamoDB setup
 DMO_CLIENT = boto3.resource('dynamodb',
-                            aws_access_key_id=app.config["DYNAMO_KEY"],
-                            aws_secret_access_key=app.config["DYNAMO_SECRET"],
+                            aws_access_key_id=CONFIG["AWS_KEY"],
+                            aws_secret_access_key=CONFIG["AWS_SECRET"],
                             region_name="us-east-1")
-DMO_TABLE = app.config["DYNAMO_TABLE"]
+DMO_TABLE = CONFIG["DYNAMO_TABLE"]
 DMO_SCHEMA = {
     "TableName": DMO_TABLE,
     "AttributeDefinitions": [{
@@ -72,7 +87,7 @@ SUCCESS_CODES = [
 # Global save locations for whitelists
 CONVERT_GROUP = {
     # Globus Groups UUID
-    "group_id": app.config["CONVERT_GROUP_ID"],
+    "group_id": CONFIG["CONVERT_GROUP_ID"],
     # Group member IDs
     "whitelist": [],
     # UNIX timestamp of last update
@@ -82,13 +97,13 @@ CONVERT_GROUP = {
     "frequency": 1 * 60 * 60  # 1 hour
 }
 INGEST_GROUP = {
-    "group_id": app.config["INGEST_GROUP_ID"],
+    "group_id": CONFIG["INGEST_GROUP_ID"],
     "whitelist": [],
     "updated": 0,
     "frequency": 1 * 24 * 60 * 60  # 1 day
 }
 ADMIN_GROUP = {
-    "group_id": app.config["ADMIN_GROUP_ID"],
+    "group_id": CONFIG["ADMIN_GROUP_ID"],
     "whitelist": [],
     "updated": 0,
     "frequency": 1 * 24 * 60 * 60  # 1 day
@@ -110,8 +125,8 @@ def authenticate_token(token, auth_level):
         }
     try:
         token = token.replace("Bearer ", "")
-        auth_client = globus_sdk.ConfidentialAppAuthClient(app.config["API_CLIENT_ID"],
-                                                           app.config["API_CLIENT_SECRET"])
+        auth_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
+                                                           CONFIG["API_CLIENT_SECRET"])
         auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     except Exception as e:
         logger.error("Error authenticating token: {}".format(repr(e)))
@@ -134,8 +149,8 @@ def authenticate_token(token, auth_level):
             "error_code": 403
         }
     # Check correct scope and audience
-    if (app.config["API_SCOPE"] not in auth_res["scope"]
-            or app.config["API_SCOPE_ID"] not in auth_res["aud"]):
+    if (CONFIG["API_SCOPE"] not in auth_res["scope"]
+            or CONFIG["API_SCOPE_ID"] not in auth_res["aud"]):
         return {
             "success": False,
             "error": "Not authorized to MDF Connect scope",
@@ -178,8 +193,8 @@ def fetch_whitelist(auth_level):
     whitelist = []
     groups_auth = {
         "app_name": "MDF Open Connect",
-        "client_id": app.config["API_CLIENT_ID"],
-        "client_secret": app.config["API_CLIENT_SECRET"],
+        "client_id": CONFIG["API_CLIENT_ID"],
+        "client_secret": CONFIG["API_CLIENT_SECRET"],
         "services": ["groups"]
     }
     # Always add admin list
@@ -267,6 +282,11 @@ def make_source_id(title, test=False):
         title = title.replace(" "+dw+" ", " ")
         # Same for underscore separation
         title = title.replace("_"+dw+"_", "_")
+        # Replace words at the start and end of the title
+        if title.startswith(dw+" "):
+            title = title[len(dw+" "):]
+        if title.endswith(" "+dw):
+            title = title[:-len(" "+dw)]
     # Replace spaces with underscores, remove leading/trailing underscores
     title = title.replace(" ", "_").strip("_")
     # Clear double underscores
@@ -319,12 +339,13 @@ def make_source_id(title, test=False):
     }
 
 
-def download_and_backup(mdf_transfer_client, data_loc,
+def download_and_backup(transfer_client, data_loc,
                         local_ep, local_path, backup_ep=None, backup_path=None):
     """Download data from a remote host to the configured machine.
 
     Arguments:
-    mdf_transfer_client (TransferClient): An authenticated TransferClient.
+    transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+                                      Technically unnecessary for non-Globus data locations.
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
@@ -391,8 +412,8 @@ def download_and_backup(mdf_transfer_client, data_loc,
         elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
             # Don't use os.path.join because path starts with /
             # GDRIVE_ROOT does not end in / to make compatible
-            location = "globus://{}{}{}".format(app.config["GDRIVE_EP"],
-                                                app.config["GDRIVE_ROOT"], loc_info.path)
+            location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
+                                                CONFIG["GDRIVE_ROOT"], loc_info.path)
             loc_info = urllib.parse.urlparse(location)
 
         # Globus Transfer
@@ -413,10 +434,10 @@ def download_and_backup(mdf_transfer_client, data_loc,
                     transfer_path = local_path
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
-                                mdf_transfer_client, loc_info.netloc, local_ep,
+                                transfer_client, loc_info.netloc, local_ep,
                                 [(loc_info.path, transfer_path)],
-                                interval=app.config["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=app.config["TRANSFER_DEADLINE"])
+                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                inactivity_time=CONFIG["TRANSFER_DEADLINE"])
                 for event in transfer:
                     if not event["success"]:
                         logger.info("Transfer is_error: {} - {}".format(event["code"],
@@ -454,10 +475,10 @@ def download_and_backup(mdf_transfer_client, data_loc,
     # Back up data
     if backup_ep and backup_path:
         transfer = mdf_toolbox.custom_transfer(
-                        mdf_transfer_client, local_ep, backup_ep,
+                        transfer_client, local_ep, backup_ep,
                         [(local_path + (filename if filename else ""), backup_path)],
-                        interval=app.config["TRANSFER_PING_INTERVAL"],
-                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"])
         for event in transfer:
             if not event["success"]:
                 logger.debug(event)
@@ -492,7 +513,7 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         path = "/" + path + ("/" if not path.endswith("/") else "")
         transfer = mdf_toolbox.custom_transfer(
                         transfer_client, ep, pub_endpoint, [(path, pub_path)],
-                        inactivity_time=app.config["TRANSFER_DEADLINE"])
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"])
         for event in transfer:
             pass
         if not event["success"]:
@@ -538,7 +559,7 @@ def get_publish_metadata(metadata):
 
 
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
-                   public=app.config["DEFAULT_CITRINATION_PUBLIC"]):
+                   public=CONFIG["DEFAULT_CITRINATION_PUBLIC"]):
     cit_client = CitrinationClient(api_key).data
     source_id = mdf_dataset.get("mdf", {}).get("source_id", "NO_ID")
     try:
@@ -676,7 +697,7 @@ def cancel_submission(source_id, wait=True):
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
                                                                             current_status["pid"]))
-                time.sleep(app.config["CANCEL_WAIT_TIME"])
+                time.sleep(CONFIG["CANCEL_WAIT_TIME"])
         except ProcessLookupError:
             # Process is dead
             complete_submission(source_id)
@@ -700,7 +721,7 @@ def cancel_submission(source_id, wait=True):
     }
 
 
-def complete_submission(source_id, cleanup=app.config["DEFAULT_CLEANUP"]):
+def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     """Complete a submission.
 
     Arguments:
@@ -723,8 +744,8 @@ def complete_submission(source_id, cleanup=app.config["DEFAULT_CLEANUP"]):
     # Remove dirs containing processed data, if requested
     if cleanup:
         cleanup_paths = [
-            os.path.join(app.config["LOCAL_PATH"], source_id) + "/",
-            os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
+            os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/",
+            os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
         ]
         for cleanup in cleanup_paths:
             if os.path.exists(cleanup):
@@ -767,10 +788,9 @@ def validate_status(status, code_mode=None):
         details: Optional further details about an error.
     """
     # Load status schema
-    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "internal_status.json")) as schema_file:
+    with open(os.path.join(CONFIG["SCHEMA_PATH"], "internal_status.json")) as schema_file:
         schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
                                       referrer=schema)
     # Validate against status schema
     try:
@@ -806,7 +826,7 @@ def validate_status(status, code_mode=None):
         }
 
 
-def read_status(source_id, update_active=False):
+def read_status(source_id):
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
         return tbl_res
@@ -818,16 +838,6 @@ def read_status(source_id, update_active=False):
             "success": False,
             "error": "ID {} not found in status database".format(source_id)
             }
-    # Check if process is a ghost - dead but not complete
-    if update_active and status_res["active"]:
-        try:
-            os.kill(status_res["pid"], 0)
-        except ProcessLookupError:
-            com_res = complete_submission(source_id)
-            if not com_res["success"]:
-                return com_res
-            status_res = table.get_item(Key={"source_id": source_id},
-                                        ConsistentRead=True).get("Item")
     return {
         "success": True,
         "status": status_res
@@ -891,12 +901,15 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
     """
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
+        if except_on_fail:
+            raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
+        if except_on_fail:
+            raise ValueError(old_status["error"])
         return old_status
     status = old_status["status"]
     # Update code
@@ -941,6 +954,13 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
 
     pid = os.getpid()
     status["pid"] = pid
+
+    status_valid = validate_status(status)
+    if not status_valid["success"]:
+        if except_on_fail:
+            raise ValueError(status_valid["error"])
+        return status_valid
+
     try:
         # put_item will overwrite
         table.put_item(Item=status)
@@ -978,7 +998,6 @@ def modify_status_entry(source_id, modifications):
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
-    # TODO: Validate status
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
@@ -987,6 +1006,10 @@ def modify_status_entry(source_id, modifications):
 
     # Overwrite old status
     status = mdf_toolbox.dict_merge(modifications, status)
+
+    status_valid = validate_status(status)
+    if not status_valid["success"]:
+        return status_valid
 
     try:
         # put_item will overwrite
@@ -1207,3 +1230,164 @@ def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
             "success": True,
             "table": table
             }
+
+
+def submit_to_queue(entry):
+    """Submit entry to SQS queue.
+
+    Arguments:
+    entry (dict): The entry to submit.
+
+    Returns:
+    dict: The result.
+        success (bool): True when the entry was successfully submitted, False otherwise.
+        error (str): Present when success is False. The reason for failure.
+    """
+    queue_res = get_sqs_queue(SQS_CLIENT, SQS_QUEUE_NAME)
+    if not queue_res["success"]:
+        return queue_res
+    queue = queue_res["queue"]
+    try:
+        # Send message and check that return value has MD5OfMessageBody
+        if not queue.send_message(MessageBody=json.dumps(entry),
+                                  MessageGroupId=SQS_GROUP).get("MD5OfMessageBody"):
+            return {
+                "success": False,
+                "error": "Message unable to be sent"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        return {
+            "success": True
+        }
+
+
+def retrieve_from_queue(wait_time=0, max_entries=10):
+    """Retrieve entries from SQS queue.
+
+    Arguments:
+    wait_time (int): The number of seconds to wait on a message. Default 0.
+    max_entries (int): The maximum number of entries to return. Default 10, the AWS limit.
+
+    Returns:
+    dict: The result.
+        success (bool): True when successful, False, otherwise.
+        error (str): When success is False, the error message.
+        entries (list): When successful, the list of entries.
+        delete_info (list): When successful, the value to pass to delete_from_queue
+    """
+    queue_res = get_sqs_queue(SQS_CLIENT, SQS_QUEUE_NAME)
+    if not queue_res["success"]:
+        return queue_res
+    queue = queue_res["queue"]
+    try:
+        messages = queue.receive_messages(MaxNumberOfMessages=max_entries,
+                                          WaitTimeSeconds=wait_time)
+        entries = []
+        delete_info = []
+        for msg in messages:
+            entries.append(json.loads(msg.body))
+            delete_info.append({
+                "Id": msg.message_id,
+                "ReceiptHandle": msg.receipt_handle
+            })
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        if len(entries) != len(delete_info):
+            return {
+                "success": False,
+                "error": "Unable to match message body to ID and receipt handle."
+            }
+        else:
+            return {
+                "success": True,
+                "entries": entries,
+                "delete_info": delete_info
+            }
+
+
+def delete_from_queue(delete_info):
+    if not delete_info:
+        return {
+            "success": False,
+            "error": "No entries submitted for deletion"
+        }
+    queue_res = get_sqs_queue(SQS_CLIENT, SQS_QUEUE_NAME)
+    if not queue_res["success"]:
+        return queue_res
+    queue = queue_res["queue"]
+    try:
+        del_res = queue.delete_messages(Entries=delete_info)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        if len(del_res.get("Failed", [])):
+            return {
+                "success": False,
+                "error": del_res
+            }
+        else:
+            return {
+                "success": True
+            }
+
+
+def get_sqs_queue(client=SQS_CLIENT, queue_name=SQS_QUEUE_NAME):
+    try:
+        queue = client.get_queue_by_name(QueueName=queue_name)
+    except (ValueError, client.meta.client.exceptions.QueueDoesNotExist):
+        return {
+            "success": False,
+            "error": "Queue does not exist"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        return {
+            "success": True,
+            "queue": queue
+        }
+
+
+def initialize_sqs_queue(client=SQS_CLIENT, queue_name=SQS_QUEUE_NAME,
+                         attributes=SQS_ATTRIBUTES):
+    q_res = get_sqs_queue(client=client, queue_name=queue_name)
+    # Queue must not already exist
+    if q_res["success"]:
+        return {
+            "success": False,
+            "error": "Queue already exists"
+        }
+    # Other error indicates other problem
+    elif q_res["error"] != "Queue does not exist":
+        return q_res
+
+    try:
+        client.create_queue(QueueName=queue_name, Attributes=attributes)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    q_res = get_sqs_queue(client=client, queue_name=queue_name)
+    if not q_res["success"]:
+        return q_res
+    else:
+        return {
+            "success": True,
+            "queue": q_res["queue"]
+        }

@@ -1,6 +1,6 @@
 import json
 
-import mdf_connect.transformer as parsers
+import mdf_connect.processor.transformer as parsers
 import pytest  # noqa: F401
 
 

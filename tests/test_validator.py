@@ -1,4 +1,4 @@
-import mdf_connect
+from mdf_connect.processor import Validator
 import pytest
 
 
@@ -289,7 +289,7 @@ def test_validator():
         }
     }]
 
-    val = mdf_connect.Validator()
+    val = Validator()
     assert val.status() == "Dataset not started."
     assert val.add_record({}) == {
                             "success": False,

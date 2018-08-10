@@ -7,7 +7,7 @@ Untitled*.ipynb
 *.log
 
 *.cache*
-*keys.conf
+*keys.*
 *temp/*
 *nohup.out
 

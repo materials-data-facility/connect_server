@@ -1,204 +1,71 @@
-from datetime import datetime
 import json
 import logging
 from multiprocessing import Process
 import os
+from time import sleep
 import urllib
 
-from flask import jsonify, request, redirect
-import jsonschema
+import globus_sdk
 import mdf_toolbox
 import requests
 
-from mdf_connect import (app, convert, search_ingest, update_search_entry,
-                         authenticate_token, make_source_id, download_and_backup,
-                         globus_publish_data, citrine_upload, cancel_submission,
-                         complete_submission, validate_status, read_status, create_status,
-                         update_status, modify_status_entry, translate_status)
+from mdf_connect import CONFIG
+from mdf_connect.processor import convert, search_ingest, update_search_entry
+from mdf_connect.utils import (cancel_submission, citrine_upload, complete_submission,
+                               delete_from_queue, download_and_backup, globus_publish_data,
+                               modify_status_entry, read_status, retrieve_from_queue,
+                               update_status)
 
 
 # Set up root logger
 logger = logging.getLogger("mdf_connect")
-logger.setLevel(app.config["LOG_LEVEL"])
+logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
                                       style='{',
                                       datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
-logfile_handler = logging.FileHandler(app.config["LOG_FILE"], mode='a')
+logfile_handler = logging.FileHandler(CONFIG["PROCESS_LOG_FILE"], mode='a')
 logfile_handler.setFormatter(logfile_formatter)
 
 logger.addHandler(logfile_handler)
 
-logger.info("\n\n==========Connect service started==========\n")
+logger.info("\n\n==========Connect Process started==========\n")
 
 
-# Redirect root requests and GETs to the web form
-@app.route('/', methods=["GET", "POST"])
-@app.route('/convert', methods=["GET"])
-@app.route('/ingest', methods=["GET"])
-def root_call():
-    return redirect(app.config["FORM_URL"], code=302)
-
-
-@app.route('/convert', methods=["POST"])
-def accept_convert():
-    """Accept the JSON metadata and begin the conversion process."""
-    try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
-    if not auth_res["success"]:
-        error_code = auth_res.pop("error_code")
-        return (jsonify(auth_res), error_code)
-
-    user_id = auth_res["user_id"]
-    # username = auth_res["username"]
-    name = auth_res["name"]
-    email = auth_res["email"]
-    identities = auth_res["identities_set"]
-
-    metadata = request.get_json(force=True, silent=True)
-    if not metadata:
-        return (jsonify({
-            "success": False,
-            "error": "POST data empty or not JSON"
-            }), 400)
-
-    # Validate input JSON
-    # resourceType is always going to be Dataset, don't require from user
-    if not metadata.get("dc", {}).get("resourceType"):
+def processor():
+    active_processes = []
+    inactive_processes = []
+    while True:
         try:
-            metadata["dc"]["resourceType"] = {
-                "resourceTypeGeneral": "Dataset",
-                "resourceType": "Dataset"
-            }
-        except Exception:
-            pass
-    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "connect_convert.json")) as schema_file:
-        schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
-                                      referrer=schema)
-    try:
-        jsonschema.validate(metadata, schema, resolver=resolver)
-    except jsonschema.ValidationError as e:
-        return (jsonify({
-            "success": False,
-            "error": "Invalid submission: " + str(e).split("\n")[0],
-            "details": str(e)
-            }), 400)
-
-    # test = True if set in metadata or config
-    test = metadata.pop("test", False) or app.config["DEFAULT_TEST_FLAG"]
-
-    sub_title = metadata["dc"]["titles"][0]["title"]
-    source_id_info = make_source_id(
-                        metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
-    source_id = source_id_info["source_id"]
-    source_name = source_id_info["source_name"]
-    if (len(source_id_info["user_id_list"]) > 0
-            and not any([uid in source_id_info["user_id_list"] for uid in identities])):
-        return (jsonify({
-            "success": False,
-            "error": ("Your source_name or title has been submitted previously "
-                      "by another user.")
-            }), 400)
-    if not metadata.get("mdf"):
-        metadata["mdf"] = {}
-    metadata["mdf"]["source_id"] = source_id
-    metadata["mdf"]["source_name"] = source_name
-    metadata["mdf"]["version"] = source_id_info["version"]
-    if not metadata["mdf"].get("acl"):
-        metadata["mdf"]["acl"] = ["public"]
-
-    # If the user has set a non-test Publish collection, verify user is in correct group
-    if not test and isinstance(metadata.get("services", {}).get("globus_publish"), dict):
-        collection = str(metadata["services"]["globus_publish"].get("collection_id")
-                         or metadata["services"]["globus_publish"].get("collection_name", ""))
-        # Make sure collection is in PUBLISH_COLLECTIONS, and grab the info
-        if collection not in app.config["PUBLISH_COLLECTIONS"].keys():
-            collection = [col_val for col_val in app.config["PUBLISH_COLLECTIONS"].values()
-                          if col_val["name"].strip().lower() == collection.strip().lower()]
-            if len(collection) == 0:
-                return (jsonify({
-                    "success": False,
-                    "error": ("Submission to Globus Publish collection '{}' "
-                              "is not supported.").format(collection)
-                    }), 400)
-            elif len(collection) > 1:
-                return (jsonify({
-                    "success": False,
-                    "error": "Globus Publish collection {} is not unique.".format(collection)
-                    }), 400)
-            else:
-                collection = collection[0]
-        else:
-            collection = app.config["PUBLISH_COLLECTIONS"][collection]
-        try:
-            auth_res = authenticate_token(request.headers.get("Authorization"),
-                                          auth_level=collection["group"])
+            submissions = retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
+            if not submissions["success"]:
+                logger.debug("Submissions not retrieved: {}".format(submissions["error"]))
+            if len(submissions["entries"]):
+                logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
+                for sub in submissions["entries"]:
+                    if sub["submission_type"] == "convert":
+                        driver = Process(target=convert_driver, kwargs=sub)
+                    elif sub["submission_type"] == "ingest":
+                        driver = Process(target=ingest_driver, kwargs=sub)
+                    driver.start()
+                    active_processes.append(driver)
+                delete_from_queue(submissions["delete_info"])
+                logger.info("{} submissions started".format(len(submissions["entries"])))
         except Exception as e:
-            return (jsonify({
-                "success": False,
-                "error": "Group authentication failed"
-                }), 500)
-        if not auth_res["success"]:
-            error_code = auth_res.pop("error_code")
-            return (jsonify(auth_res), error_code)
-
-    status_info = {
-        "source_id": source_id,
-        "submission_code": "C",
-        "submission_time": datetime.utcnow().isoformat("T") + "Z",
-        "submitter": name,
-        "title": sub_title,
-        "user_id": user_id,
-        "user_email": email,
-        "acl": metadata["mdf"]["acl"],
-        "test": test
-        }
-    try:
-        status_res = create_status(status_info)
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": repr(e)
-            }), 500)
-    if not status_res["success"]:
-        return (jsonify(status_res), 500)
-
-    try:
-        spawner = Process(target=spawn_driver, name="driver_spawner", args=(metadata,
-                                                                            source_id,
-                                                                            test))
-        spawner.start()
-        spawner.join()
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": repr(e)
-            }), 500)
-
-    return (jsonify({
-        "success": True,
-        "source_id": source_id
-        }), 202)
+            logger.error("Processor error: {}".format(e))
+        try:
+            for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
+                inactive_processes.append(dead_proc)
+                active_processes.remove(dead_proc)
+        except Exception as e:
+            logger.error("Error life-checking processes: {}".format(e))
+        # TODO: Check status DB if inactive processes are recorded dead
+        sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
 
 
-def spawn_driver(metadata, source_id, test):
-    driver = Process(target=convert_driver, name="driver_process", args=(metadata,
-                                                                         source_id,
-                                                                         test))
-    driver.start()
-    os.kill(os.getpid(), 9)
-
-
-def convert_driver(metadata, source_id, test):
+def convert_driver(submission_type, metadata, source_id, test, access_token, user_id):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
@@ -206,18 +73,38 @@ def convert_driver(metadata, source_id, test):
     metadata (dict): The JSON passed to /convert.
     source_id (str): The source name of this submission.
     """
+    # TODO: Better check?
+    assert submission_type == "convert"
     # Setup
     update_status(source_id, "convert_start", "P", except_on_fail=True)
     creds = {
         "app_name": "MDF Open Connect",
-        "client_id": app.config["API_CLIENT_ID"],
-        "client_secret": app.config["API_CLIENT_SECRET"],
+        "client_id": CONFIG["API_CLIENT_ID"],
+        "client_secret": CONFIG["API_CLIENT_SECRET"],
         "services": ["transfer", "connect"]
         }
     try:
-        clients = mdf_toolbox.confidential_login(creds)
-        transfer_client = clients["transfer"]
-        connect_authorizer = clients["connect"]
+        access_token = access_token.replace("Bearer ", "")
+        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
+                                                           creds["client_secret"])
+        tokens = conf_client.oauth2_client_credentials_tokens(
+                                requested_scopes=("https://auth.globus.org/scopes/"
+                                                  "c17f27bb-f200-486a-b785-2a25e82af505/connect"
+                                                  " urn:globus:auth:scope:"
+                                                  "transfer.api.globus.org:all"))
+        mdf_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                tokens.by_resource_server
+                                                ["transfer.api.globus.org"]["access_token"])
+        mdf_transfer_client = globus_sdk.TransferClient(authorizer=mdf_transfer_authorizer)
+
+        connect_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                            tokens.by_resource_server
+                                            ["mdf_dataset_submission"]["access_token"])
+
+        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                dependent_grant.data[0]["access_token"])
+        user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
         update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
         complete_submission(source_id)
@@ -251,36 +138,64 @@ def convert_driver(metadata, source_id, test):
         complete_submission(source_id)
         return
     update_status(source_id, "convert_download", "P", except_on_fail=True)
-    local_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
-    backup_path = os.path.join(app.config["BACKUP_PATH"], source_id) + "/"
+    local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
+    backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
     try:
-        for dl_res in download_and_backup(transfer_client,
+        # Edit ACL to allow pull
+        acl_rule = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_id,
+            "path": local_path,
+            "permissions": "rw"
+        }
+        acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
+        if not acl_res.get("code") == "Created":
+            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+            raise ValueError("Internal permissions error.")
+        # Download from user
+        for dl_res in download_and_backup(user_transfer_client,
                                           metadata.pop("data", {}),
-                                          app.config["LOCAL_EP"],
-                                          local_path,
-                                          app.config["BACKUP_EP"] if not test else None,
-                                          backup_path if not test else None):
+                                          CONFIG["LOCAL_EP"],
+                                          local_path):
             if not dl_res["success"]:
-                update_status(source_id, "convert_download", "T",
-                                         text=dl_res["error"], except_on_fail=True)
+                msg = "During data download: " + dl_res["error"]
+                update_status(source_id, "convert_download", "T", text=msg, except_on_fail=True)
+        if not dl_res["success"]:
+            raise ValueError(dl_res["error"])
+        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                               acl_res["access_id"])
+        if not acl_del.get("code") == "Deleted":
+            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
+            raise ValueError("Internal permissions error.")
+
+        # Backup to MDF
+        if not test:
+            for dl_res in download_and_backup(mdf_transfer_client,
+                                              "globus://{}{}".format(CONFIG["LOCAL_EP"],
+                                                                     local_path),
+                                              CONFIG["BACKUP_EP"],
+                                              backup_path):
+                if not dl_res["success"]:
+                    msg = "During data backup: " + dl_res["error"]
+                    update_status(source_id, "convert_download", "T", text=msg,
+                                  except_on_fail=True)
+            if not dl_res["success"]:
+                raise ValueError(dl_res["error"])
+
     except Exception as e:
         update_status(source_id, "convert_download", "F", text=repr(e),
                                  except_on_fail=True)
         complete_submission(source_id)
         return
-    if not dl_res["success"]:
-        update_status(source_id, "convert_download", "F", text=dl_res["error"],
-                                 except_on_fail=True)
-        complete_submission(source_id)
-        return
-    else:
-        update_status(source_id, "convert_download", "S", except_on_fail=True)
-        logger.info("{}: Data downloaded, {} archives extracted".format(
-                                                                    source_id,
-                                                                    dl_res["num_extracted"]))
+
+    update_status(source_id, "convert_download", "S", except_on_fail=True)
+    logger.info("{}: Data downloaded, {} archives extracted".format(
+                                                                source_id,
+                                                                dl_res["num_extracted"]))
 
     # Handle service integration data directory
-    service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
+    service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
     os.makedirs(service_data)
 
     # Pull out special fields in metadata (the rest is the dataset)
@@ -288,14 +203,14 @@ def convert_driver(metadata, source_id, test):
     parse_params = metadata.pop("index", {})
     # metadata should have data location
     metadata["data"] = {
-        "endpoint_path": "globus://{}{}".format(app.config["BACKUP_EP"], backup_path),
-        "link": app.config["TRANSFER_WEB_APP_LINK"].format(app.config["BACKUP_EP"],
-                                                           urllib.parse.quote(backup_path))
+        "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
+        "link": CONFIG["TRANSFER_WEB_APP_LINK"].format(CONFIG["BACKUP_EP"],
+                                                       urllib.parse.quote(backup_path))
     }
     # Add file info data
     parse_params["file"] = {
-        "globus_endpoint": app.config["BACKUP_EP"],
-        "http_host": app.config["BACKUP_HOST"],
+        "globus_endpoint": CONFIG["BACKUP_EP"],
+        "http_host": CONFIG["BACKUP_HOST"],
         "local_path": local_path,
         "host_path": backup_path
     }
@@ -347,22 +262,22 @@ def convert_driver(metadata, source_id, test):
     update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
         # Write out feedstock
-        feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
+        feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_raw.json")
         with open(feed_path, 'w') as stock:
             for entry in feedstock:
                 json.dump(entry, stock)
                 stock.write("\n")
         ingest_args = {
-            "feedstock_location": "globus://{}{}".format(app.config["LOCAL_EP"], feed_path),
+            "feedstock_location": "globus://{}{}".format(CONFIG["LOCAL_EP"], feed_path),
             "source_name": source_id,
-            "data": ["globus://{}{}".format(app.config["LOCAL_EP"], local_path)],
+            "data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)],
             "services": services,
-            "service_data": ["globus://{}{}".format(app.config["LOCAL_EP"], service_data)],
+            "service_data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], service_data)],
             "test": test
         }
         headers = {}
         connect_authorizer.set_authorization_header(headers)
-        ingest_res = requests.post(app.config["INGEST_URL"],
+        ingest_res = requests.post(CONFIG["INGEST_URL"],
                                    json=ingest_args,
                                    headers=headers)
     except Exception as e:
@@ -385,227 +300,33 @@ def convert_driver(metadata, source_id, test):
         }
 
 
-@app.route("/ingest", methods=["POST"])
-def accept_ingest():
-    """Accept the JSON feedstock file and begin the ingestion process."""
-    try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="ingest")
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
-    if not auth_res["success"]:
-        error_code = auth_res.pop("error_code")
-        return (jsonify(auth_res), error_code)
-
-    user_id = auth_res["user_id"]
-    # username = auth_res["username"]
-    name = auth_res["name"]
-    email = auth_res["email"]
-    identities = auth_res["identities_set"]
-
-    metadata = request.get_json(force=True, silent=True)
-    if not metadata:
-        return (jsonify({
-            "success": False,
-            "error": "POST data empty or not JSON"
-            }), 400)
-
-    # Validate input JSON
-    schema_dir = os.path.join(os.path.dirname(__file__), "schemas")
-    with open(os.path.join(schema_dir, "connect_ingest.json")) as schema_file:
-        schema = json.load(schema_file)
-    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_dir),
-                                      referrer=schema)
-    try:
-        jsonschema.validate(metadata, schema, resolver=resolver)
-    except jsonschema.ValidationError as e:
-        return (jsonify({
-            "success": False,
-            "error": "Invalid submission: " + str(e).split("\n")[0],
-            "details": str(e)
-            }), 400)
-
-    feed_location = metadata["feedstock_location"]
-    services = metadata.get("services", [])
-    data_loc = metadata.get("data", [])
-    service_data = metadata.get("service_data", [])
-    title = metadata.get("title", None)
-    source_name = metadata.get("source_name", None)
-    test = metadata.get("test", False) or app.config["DEFAULT_TEST_FLAG"]
-
-    if not source_name and not title:
-        return (jsonify({
-            "success": False,
-            "error": "Either title or source_name is required"
-            }), 400)
-    # "new" source_id for new submissions
-    new_source_info = make_source_id(source_name or title, test=test)
-    new_source_id = new_source_info["source_id"]
-    new_status_info = read_status(new_source_id, update_active=True)
-    # "old" source_id for current/previous submission
-    # Found by decrementing new version, to a minimum of 1
-    old_source_id = "{}_v{}".format(new_source_info["source_name"],
-                                    max(new_source_info["version"] - 1, 1))
-    old_status_info = read_status(old_source_id, update_active=True)
-    if not old_status_info["success"]:
-        return (jsonify({
-            "success": False,
-            "error": "Prior submission '{}' not found in database".format(old_source_id)
-            }), 500)
-    old_status = old_status_info["status"]
-
-    # Submissions from Connect will have status entries, user submission will not
-    if app.config["API_CLIENT_ID"] in identities:
-        # Check if past submission is active
-        if old_status["active"]:
-            # Check old status validity
-            status_valid = validate_status(old_status, code_mode="ingest")
-            if not status_valid["success"]:
-                return (jsonify(status_valid), 500)
-
-            # Correct version is "old" version
-            source_id = old_source_id
-            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
-            if not stat_res["success"]:
-                return (jsonify(stat_res), 500)
-
-        # Past submission complete, try "new" version
-        elif new_status_info["success"]:
-            new_status = new_status_info["status"]
-            # Check new status validity
-            status_valid = validate_status(new_status, code_mode="ingest")
-            if not status_valid["success"]:
-                return (jsonify(status_valid), 500)
-
-            # Correct version is "new" version
-            source_id = new_source_id
-            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
-            if not stat_res["success"]:
-                return (jsonify(stat_res), 500)
-        else:
-            return (jsonify({
-                "success": False,
-                "error": "Current submission '{}' not found in database".format(old_source_id)
-                }), 500)
-
-    # User-submitted, not from Connect
-    # Will not have existing status
-    else:
-        # Verify user is allowed to submit the source_name
-        if (len(new_source_info["user_id_list"]) > 0
-                and not any([uid in new_source_info["user_id_list"] for uid in identities])):
-            return (jsonify({
-                "success": False,
-                "error": ("Your source_name or title has been submitted previously "
-                          "by another user.")
-                }), 400)
-        # Create new status
-        # Correct source_id is "new" always (previous user-submitted source_ids will be cancelled)
-        source_id = new_source_id
-        status_info = {
-            "source_id": source_id,
-            "submission_code": "I",
-            "submission_time": datetime.utcnow().isoformat("T") + "Z",
-            "submitter": name,
-            "title": title,
-            "user_id": user_id,
-            "user_email": email,
-            "test": test
-            }
-        try:
-            status_res = create_status(status_info)
-        except Exception as e:
-            return (jsonify({
-                "success": False,
-                "error": repr(e)
-                }), 500)
-        if not status_res["success"]:
-            return (jsonify(status_res), 500)
-
-    if test:
-        services["mdf_search"] = {
-            "index": app.config["INGEST_TEST_INDEX"]
-        }
-        if services.get("globus_publish"):
-            services["globus_publish"] = {
-                "collection_id": app.config["TEST_PUBLISH_COLLECTION"]
-            }
-        if services.get("citrine"):
-            services["citrine"] = {
-                "public": False
-            }
-        if services.get("mrr"):
-            services["mrr"] = {
-                "test": True
-            }
-    else:
-        # Put in defaults
-        if services.get("globus_publish") is True:
-            services["globus_publish"] = {
-                "collection_id": app.config["DEFAULT_PUBLISH_COLLECTION"]
-            }
-        if services.get("citrine") is True:
-            services["citrine"] = {
-                "public": app.config["DEFAULT_CITRINATION_PUBLIC"]
-            }
-        if services.get("mrr") is True:
-            services["mrr"] = {
-                "test": app.config["DEFAULT_MRR_TEST"]
-            }
-
-    try:
-        spawner = Process(target=spawn_ingest, name="ingester_spawner", args=(feed_location,
-                                                                              source_id,
-                                                                              services,
-                                                                              data_loc,
-                                                                              service_data))
-        spawner.start()
-        spawner.join()
-    except Exception as e:
-        stat_res = update_status(source_id, "ingest_start", "F", text=repr(e),
-                                 except_on_fail=False)
-        if not stat_res["success"]:
-            return (jsonify(stat_res), 500)
-        else:
-            return (jsonify({
-                "success": False,
-                "error": repr(e)
-                }), 500)
-
-    return (jsonify({
-        "success": True,
-        "source_id": source_id
-        }), 202)
-
-
-def spawn_ingest(feedstock_location, source_id, services, data_loc, service_loc):
-    driver = Process(target=ingest_driver, name="ingest_process", args=(feedstock_location,
-                                                                        source_id,
-                                                                        services,
-                                                                        data_loc,
-                                                                        service_loc))
-    driver.start()
-    os.kill(os.getpid(), 9)
-
-
-def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc):
+def ingest_driver(submission_type, feedstock_location, source_id, services, data_loc,
+                  service_loc, access_token, user_id):
     """Finalize and ingest feedstock."""
+    # TODO: Better check?
+    assert submission_type == "ingest"
     # Will need client to ingest data
     creds = {
         "app_name": "MDF Open Connect",
-        "client_id": app.config["API_CLIENT_ID"],
-        "client_secret": app.config["API_CLIENT_SECRET"],
+        "client_id": CONFIG["API_CLIENT_ID"],
+        "client_secret": CONFIG["API_CLIENT_SECRET"],
         "services": ["search_ingest", "publish", "transfer"]
         }
     try:
         clients = mdf_toolbox.confidential_login(creds)
         publish_client = clients["publish"]
-        transfer_client = clients["transfer"]
+        mdf_transfer_client = clients["transfer"]
 
-        base_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_raw.json")
-        final_feed_path = os.path.join(app.config["FEEDSTOCK_PATH"], source_id + "_final.json")
+        base_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_raw.json")
+        final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_final.json")
+
+        access_token = access_token.replace("Bearer ", "")
+        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
+                                                           creds["client_secret"])
+        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                                dependent_grant.data[0]["access_token"])
+        user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
         update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
         complete_submission(source_id)
@@ -644,13 +365,30 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
 
     update_status(source_id, "ingest_download", "P", except_on_fail=True)
     try:
-        for dl_res in download_and_backup(transfer_client,
+        # Edit ACL to allow pull
+        acl_rule = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_id,
+            "path": os.path.dirname(base_feed_path) + "/",
+            "permissions": "rw"
+        }
+        acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
+        if not acl_res.get("code") == "Created":
+            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+            raise ValueError("Internal permissions error.")
+        for dl_res in download_and_backup(user_transfer_client,
                                           feedstock_location,
-                                          app.config["LOCAL_EP"],
+                                          CONFIG["LOCAL_EP"],
                                           base_feed_path):
             if not dl_res["success"]:
                 update_status(source_id, "ingest_download", "T",
                                          text=dl_res["error"], except_on_fail=True)
+        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                               acl_res["access_id"])
+        if not acl_del.get("code") == "Deleted":
+            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
+            raise ValueError("Internal permissions error.")
     except Exception as e:
         update_status(source_id, "ingest_download", "F", text=repr(e),
                                  except_on_fail=True)
@@ -686,16 +424,35 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
             else:
                 update_status(source_id, "ingest_download", "P", except_on_fail=True)
                 # Will not transfer anything if already in place
-                data_ep = app.config["LOCAL_EP"]
-                data_path = os.path.join(app.config["LOCAL_PATH"], source_id) + "/"
+                data_ep = CONFIG["LOCAL_EP"]
+                data_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
                 try:
-                    for dl_res in download_and_backup(transfer_client,
+                    # Edit ACL to allow pull
+                    acl_rule = {
+                        "DATA_TYPE": "access",
+                        "principal_type": "identity",
+                        "principal": user_id,
+                        "path": data_path,
+                        "permissions": "rw"
+                    }
+                    acl_res = mdf_transfer_client.add_endpoint_acl_rule(data_ep, acl_rule).data
+                    if not acl_res.get("code") == "Created":
+                        logger.error("{}: Unable to create ACL rule: '{}'".format(source_id,
+                                                                                  acl_res))
+                        raise ValueError("Internal permissions error.")
+                    for dl_res in download_and_backup(user_transfer_client,
                                                       data_loc,
                                                       data_ep,
                                                       data_path):
                         if not dl_res["success"]:
                             update_status(source_id, "ingest_download", "T",
                                                      text=dl_res["error"], except_on_fail=True)
+                    acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                                           acl_res["access_id"])
+                    if not acl_del.get("code") == "Deleted":
+                        logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
+                                                                                     acl_del))
+                        raise ValueError("Internal permissions error.")
                 except Exception as e:
                     update_status(source_id, "ingest_download", "F", text=repr(e),
                                              except_on_fail=True)
@@ -728,15 +485,34 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         else:
             update_status(source_id, "ingest_integration", "P", except_on_fail=True)
             # Will not transfer anything if already in place
-            service_data = os.path.join(app.config["SERVICE_DATA"], source_id) + "/"
+            service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
             try:
-                for dl_res in download_and_backup(transfer_client,
+                # Edit ACL to allow pull
+                acl_rule = {
+                    "DATA_TYPE": "access",
+                    "principal_type": "identity",
+                    "principal": user_id,
+                    "path": service_data,
+                    "permissions": "rw"
+                }
+                acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                                    acl_rule).data
+                if not acl_res.get("code") == "Created":
+                    logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+                    raise ValueError("Internal permissions error.")
+                for dl_res in download_and_backup(user_transfer_client,
                                                   service_loc,
-                                                  app.config["LOCAL_EP"],
+                                                  CONFIG["LOCAL_EP"],
                                                   service_data):
                     if not dl_res["success"]:
                         update_status(source_id, "ingest_integration", "T",
                                                  text=dl_res["error"], except_on_fail=True)
+                acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                                       acl_res["access_id"])
+                if not acl_del.get("code") == "Deleted":
+                    logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
+                                                                                 acl_del))
+                    raise ValueError("Internal permissions error.")
             except Exception as e:
                 update_status(source_id, "ingest_integration", "F", text=repr(e),
                                          except_on_fail=True)
@@ -767,8 +543,8 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
     try:
         search_res = search_ingest(
                         creds, base_feed_path,
-                        index=search_config.get("index", app.config["INGEST_INDEX"]),
-                        batch_size=app.config["SEARCH_BATCH_SIZE"],
+                        index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+                        batch_size=CONFIG["SEARCH_BATCH_SIZE"],
                         feedstock_save=final_feed_path)
     except Exception as e:
         update_status(source_id, "ingest_search", "F", text=repr(e),
@@ -782,7 +558,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                           text=("{} batches of records failed to ingest ({} records total)"
                                 ".").format(len(search_res["errors"]),
                                             (len(search_res["errors"])
-                                             * app.config["SEARCH_BATCH_SIZE"]),
+                                             * CONFIG["SEARCH_BATCH_SIZE"]),
                                             search_res["errors"]),
                           except_on_fail=True)
             complete_submission(source_id)
@@ -792,14 +568,14 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         with open(final_feed_path) as f:
             dataset = json.loads(f.readline())
         # Back up feedstock
-        backup_feed_path = os.path.join(app.config["BACKUP_FEEDSTOCK"],
+        backup_feed_path = os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
                                         source_id + "_final.json")
         try:
             transfer = mdf_toolbox.custom_transfer(
-                            transfer_client, app.config["LOCAL_EP"], app.config["BACKUP_EP"],
+                            mdf_transfer_client, CONFIG["LOCAL_EP"], CONFIG["BACKUP_EP"],
                             [(final_feed_path, backup_feed_path)],
-                            interval=app.config["TRANSFER_PING_INTERVAL"],
-                            inactivity_time=app.config["TRANSFER_DEADLINE"])
+                            interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                            inactivity_time=CONFIG["TRANSFER_DEADLINE"])
             for event in transfer:
                 if not event["success"]:
                     logger.debug(event)
@@ -820,16 +596,16 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         # collection should be in id or name
         collection = (services["globus_publish"].get("collection_id")
                       or services["globus_publish"].get("collection_name")
-                      or app.config["DEFAULT_PUBLISH_COLLECTION"])
+                      or CONFIG["DEFAULT_PUBLISH_COLLECTION"])
         try:
-            fin_res = globus_publish_data(publish_client, transfer_client,
+            fin_res = globus_publish_data(publish_client, mdf_transfer_client,
                                           dataset, collection,
                                           data_ep, data_path, data_loc)
         except Exception as e:
             update_status(source_id, "ingest_publish", "R", text=repr(e),
                                      except_on_fail=True)
         else:
-            stat_link = app.config["PUBLISH_LINK"].format(fin_res["id"])
+            stat_link = CONFIG["PUBLISH_LINK"].format(fin_res["id"])
             update_status(source_id, "ingest_publish", "L",
                                      text=fin_res["dc.description.provenance"], link=stat_link,
                                      except_on_fail=True)
@@ -860,7 +636,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         try:
             cit_path = os.path.join(service_data, "citrine")
             cit_res = citrine_upload(cit_path,
-                                     app.config["CITRINATION_API_KEY"],
+                                     CONFIG["CITRINATION_API_KEY"],
                                      dataset,
                                      old_citrine_id,
                                      public=services["citrine"].get("public", True))
@@ -883,7 +659,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                 text = "{}/{} PIFs uploaded successfully".format(cit_res["success_count"],
                                                                  cit_res["success_count"]
                                                                  + cit_res["failure_count"])
-                link = app.config["CITRINATION_LINK"].format(cit_ds_id=cit_res["cit_ds_id"])
+                link = CONFIG["CITRINATION_LINK"].format(cit_ds_id=cit_res["cit_ds_id"])
                 update_status(source_id, "ingest_citrine", "L", text=text, link=link,
                                          except_on_fail=True)
                 stat_res_2 = modify_status_entry(source_id,
@@ -904,14 +680,14 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                 mrr_title = dataset["dc"]["titles"][0]["title"]
             mrr_entry = {
                 "title": dataset["dc"]["titles"][0]["title"],
-                "schema": app.config["MRR_SCHEMA"],
-                "content": app.config["MRR_TEMPLATE"].format(
+                "schema": CONFIG["MRR_SCHEMA"],
+                "content": CONFIG["MRR_TEMPLATE"].format(
                                 title=mrr_title,
                                 publisher=dataset["dc"]["publisher"],
                                 contributors="".join(
-                                    [app.config["MRR_CONTRIBUTOR"].format(
-                                        name=author.get("givenName", "") + " "
-                                             + author.get("familyName", ""),
+                                    [CONFIG["MRR_CONTRIBUTOR"].format(
+                                        name=(author.get("givenName", "") + " "
+                                              + author.get("familyName", "")),
                                         affiliation=author.get("affiliation", ""))
                                      for author in dataset["dc"]["creators"]]),
                                 contact_name=dataset["dc"]["creators"][0]["creatorName"],
@@ -924,9 +700,9 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
                                      except_on_fail=True)
         else:
             try:
-                mrr_res = requests.post(app.config["MRR_URL"],
-                                        auth=(app.config["MRR_USERNAME"],
-                                              app.config["MRR_PASSWORD"]),
+                mrr_res = requests.post(CONFIG["MRR_URL"],
+                                        auth=(CONFIG["MRR_USERNAME"],
+                                              CONFIG["MRR_PASSWORD"]),
                                         data=mrr_entry).json()
             except Exception as e:
                 update_status(source_id, "ingest_mrr", "F",
@@ -948,7 +724,7 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
 
     dataset["services"] = service_res
     ds_update = update_search_entry(creds,
-                                    index=search_config.get("index", app.config["INGEST_INDEX"]),
+                                    index=search_config.get("index", CONFIG["INGEST_INDEX"]),
                                     updated_entry=dataset, overwrite=False)
     if not ds_update["success"]:
         update_status(source_id, "ingest_cleanup", "F",
@@ -973,49 +749,3 @@ def ingest_driver(feedstock_location, source_id, services, data_loc, service_loc
         "success": True,
         "source_id": source_id
         }
-
-
-@app.route("/status/<source_id>", methods=["GET"])
-def get_status(source_id):
-    """Fetch and return status information"""
-    try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
-    if not auth_res["success"]:
-        error_code = auth_res.pop("error_code")
-        return (jsonify(auth_res), error_code)
-
-    uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_id, update_active=True)
-    # Failure message if status not fetched or user not allowed to view
-    # Only the submitter, ACL users, and admins can view
-    try:
-        admin_res = authenticate_token(request.headers.get("Authorization"), auth_level="admin")
-    except Exception as e:
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
-    # If actually not found
-    if (not raw_status["success"]
-        # or dataset not public
-        or (raw_status["status"]["acl"] != ["public"]
-            # and user was not submitter
-            and raw_status["status"]["user_id"] not in uid_set
-            # and user is not in ACL
-            and not any([uid in raw_status["status"]["acl"] for uid in uid_set])
-            # and user is not admin
-            and not admin_res["success"])):
-        # Summary:
-        # if (NOT found)
-        #    OR (NOT public AND user != submitter AND user not in acl_list AND user is not admin)
-        return (jsonify({
-            "success": False,
-            "error": "Submission {} not found, or not available".format(source_id)
-            }), 404)
-    else:
-        return (jsonify(translate_status(raw_status["status"])), 200)

@@ -1,4 +1,4 @@
-{
+CONVERTER_CONF = {
     "grouping_rules": {
         "vasp": [
             "outcar",
@@ -82,7 +82,8 @@
         "Center for Predictive Integrated Structural Materials Science": {
             "aliases": [
                 "PRISMS",
-                "Department of Energy Software Innovation Center for Integrated Multi-Scale Modeling of Structural Metals"
+                ("Department of Energy Software Innovation Center for Integrated "
+                 "Multi-Scale Modeling of Structural Metals")
             ],
             "parent_tags": [
                 "U.S. Department of Energy"
