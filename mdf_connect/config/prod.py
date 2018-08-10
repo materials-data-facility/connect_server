@@ -3,17 +3,14 @@ PROD = {
 
     "API_LOG_FILE": "proda.log",
     "PROCESS_LOG_FILE": "prodp.log",
-    # "LOG_LEVEL": "INFO",
-    "LOG_LEVEL": "DEBUG",
+    "LOG_LEVEL": "INFO",
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
 
-    # "DEFAULT_TEST_FLAG": False,
-    "DEFAULT_TEST_FLAG": True,
+    "DEFAULT_TEST_FLAG": False,
 
     "INGEST_URL": "https://api.materialsdatafacility.org/ingest",
-    # "INGEST_INDEX": "mdf",
-    "INGEST_INDEX": "mdf-test",
+    "INGEST_INDEX": "mdf",
     "INGEST_TEST_INDEX": "mdf-test",
 
     "LOCAL_EP": "693e4df6-9274-4fff-ad2d-53661a1df1f1",
@@ -25,15 +22,12 @@ PROD = {
 
     "DEFAULT_CLEANUP": True,
 
-    # "DEFAULT_PUBLISH_COLLECTION": 21,
-    "DEFAULT_PUBLISH_COLLECTION": 35,
+    "DEFAULT_PUBLISH_COLLECTION": 21,
     "TEST_PUBLISH_COLLECTION": 35,
 
-    # "DEFAULT_CITRINATION_PUBLIC": True,
-    "DEFAULT_CITRINATION_PUBLIC": False,
+    "DEFAULT_CITRINATION_PUBLIC": True,
 
-    # "DEFAULT_MRR_TEST": False,
-    "DEFAULT_MRR_TEST": True,
+    "DEFAULT_MRR_TEST": False,
 
     "SQS_QUEUE": "mdfc_prod.fifo",
     "SQS_GROUP_ID": "mdf_connect_prod",
