@@ -437,7 +437,7 @@ def download_and_backup(transfer_client, data_loc,
                                 transfer_client, loc_info.netloc, local_ep,
                                 [(loc_info.path, transfer_path)],
                                 interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"])
+                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
                 for event in transfer:
                     if not event["success"]:
                         logger.info("Transfer is_error: {} - {}".format(event["code"],
@@ -478,7 +478,7 @@ def download_and_backup(transfer_client, data_loc,
                         transfer_client, local_ep, backup_ep,
                         [(local_path + (filename if filename else ""), backup_path)],
                         interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"])
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
         for event in transfer:
             if not event["success"]:
                 logger.debug(event)
@@ -513,7 +513,7 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         path = "/" + path + ("/" if not path.endswith("/") else "")
         transfer = mdf_toolbox.custom_transfer(
                         transfer_client, ep, pub_endpoint, [(path, pub_path)],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"])
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
         for event in transfer:
             pass
         if not event["success"]:
