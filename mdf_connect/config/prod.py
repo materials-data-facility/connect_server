@@ -20,6 +20,8 @@ PROD = {
     "BACKUP_HOST": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
     "BACKUP_FEEDSTOCK": "/MDF/mdf_connect/prod/feedstock/",
 
+    "GDRIVE_EP": "728a8a88-605b-4605-8afd-396f087eb3fc",
+
     "DEFAULT_CLEANUP": True,
 
     "DEFAULT_PUBLISH_COLLECTION": 21,
