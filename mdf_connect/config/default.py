@@ -45,7 +45,6 @@ DEFAULT = {
     "API_SCOPE": "https://auth.globus.org/scopes/c17f27bb-f200-486a-b785-2a25e82af505/connect",
     "API_SCOPE_ID": "mdf_dataset_submission",
 
-    "GDRIVE_EP": "d3b6ddf6-1047-4b05-a777-7bd5478b3c22",
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",

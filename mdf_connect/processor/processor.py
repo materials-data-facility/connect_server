@@ -575,7 +575,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                             mdf_transfer_client, CONFIG["LOCAL_EP"], CONFIG["BACKUP_EP"],
                             [(final_feed_path, backup_feed_path)],
                             interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                            inactivity_time=CONFIG["TRANSFER_DEADLINE"])
+                            inactivity_time=CONFIG["TRANSFER_DEADLINE"],
+                            notify=False)
             for event in transfer:
                 if not event["success"]:
                     logger.debug(event)
