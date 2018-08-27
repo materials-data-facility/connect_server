@@ -450,12 +450,15 @@ def download_and_backup(transfer_client, data_loc,
                     raise ValueError(event)
         # HTTP(S)
         elif loc_info.scheme.startswith("http"):
-            # Get extension (mostly for debugging)
-            ext = os.path.splitext(loc_info.path)[1]
+            # Get filename and extension
+            http_filename = os.path.basename(loc_info.path)
+            if not http_filename:
+                http_filename = "archive"
+            ext = os.path.splitext(http_filename)[1]
             if not ext:
                 ext = ".archive"
 
-            archive_path = os.path.join(local_path, filename or "archive"+ext)
+            archive_path = os.path.join(local_path, filename or http_filename)
 
             # Fetch file
             res = requests.get(location)
