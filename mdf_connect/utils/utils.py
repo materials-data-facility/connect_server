@@ -450,7 +450,7 @@ def download_and_backup(transfer_client, data_loc,
                     raise ValueError(event)
         # HTTP(S)
         elif loc_info.scheme.startswith("http"):
-            # Get filename and extension
+            # Get default filename and extension
             http_filename = os.path.basename(loc_info.path)
             if not http_filename:
                 http_filename = "archive"
@@ -458,12 +458,38 @@ def download_and_backup(transfer_client, data_loc,
             if not ext:
                 ext = ".archive"
 
-            archive_path = os.path.join(local_path, filename or http_filename)
-
             # Fetch file
             res = requests.get(location)
+            # Get filename from header if present
+            con_disp = res.headers.get("Content-Disposition", "")
+            filename_start = con_disp.find("filename=")
+            if filename_start >= 0:
+                filename_end = con_disp.find(";", filename_start)
+                if filename_end < 0:
+                    filename_end = None
+                http_filename = con_disp[filename_start+len("filename="):filename_end]
+                http_filename = http_filename.strip("\"'; ")
+
+            # Create path for file
+            archive_path = os.path.join(local_path, filename or http_filename)
+            # Make filename unique if filename is duplicate
+            collisions = 0
+            while os.path.exists(archive_path):
+                # Save and remove extension
+                archive_path, ext = os.path.splitext(archive_path)
+                old_add = "({})".format(collisions)
+                collisions += 1
+                new_add = "({})".format(collisions)
+                # If added number already, remove before adding new number
+                if archive_path.endswith(old_add):
+                    archive_path = archive_path[:-len(old_add)]
+                # Add "($num_collisions)" to end of filename to make filename unique
+                archive_path = archive_path + new_add + ext
+
+            # Download and save file
             with open(archive_path, 'wb') as out:
                 out.write(res.content)
+            logger.debug("Downloaded HTTP file: {}".format(archive_path))
         # Not supported
         else:
             # Nothing to do
@@ -489,7 +515,8 @@ def download_and_backup(transfer_client, data_loc,
             raise ValueError("{}: {}".format(event["code"], event["description"]))
     yield {
         "success": True,
-        "num_extracted": extract_res["num_extracted"]
+        "num_extracted": extract_res["num_extracted"],
+        "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
     }
 
 
