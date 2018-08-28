@@ -101,6 +101,14 @@ CONVERTER_CONF = {
             "aliases": [
                 "NIST"
             ],
+            "parent_tags": [
+                "U.S. Department of Commerce"
+            ]
+        },
+        "U.S. Department of Commerce": {
+            "aliases": [
+                "DOC"
+            ],
             "parent_tags": []
         }
     }
