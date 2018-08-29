@@ -88,6 +88,28 @@ CONVERTER_CONF = {
             "parent_tags": [
                 "U.S. Department of Energy"
             ]
+        },
+        "NIST Materials Data Repository": {
+            "aliases": [
+                "NIST MDR", "MDR"
+            ],
+            "parent_tags": [
+                "National Institute of Standards and Technology"
+            ]
+        },
+        "National Institute of Standards and Technology": {
+            "aliases": [
+                "NIST"
+            ],
+            "parent_tags": [
+                "U.S. Department of Commerce"
+            ]
+        },
+        "U.S. Department of Commerce": {
+            "aliases": [
+                "DOC"
+            ],
+            "parent_tags": []
         }
     }
 }
