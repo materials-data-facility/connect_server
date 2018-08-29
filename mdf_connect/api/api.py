@@ -246,11 +246,12 @@ def accept_ingest():
             }), 400)
 
     feed_location = metadata["feedstock_location"]
-    services = metadata.get("services", [])
+    services = metadata.get("services", {})
     data_loc = metadata.get("data", [])
     service_data = metadata.get("service_data", [])
     title = metadata.get("title", None)
     source_name = metadata.get("source_name", None)
+    acl = metadata.get("acl", ["public"])
     test = metadata.get("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
 
     if not source_name and not title:
@@ -266,19 +267,18 @@ def accept_ingest():
     # Found by decrementing new version, to a minimum of 1
     old_source_id = "{}_v{}".format(new_source_info["source_name"],
                                     max(new_source_info["version"] - 1, 1))
-    old_status_info = read_status(old_source_id)
-    if not old_status_info["success"]:
-        logger.error("Prior status '{}' not in status database: {}".format(
-                                                                        old_source_id,
-                                                                        old_status_info["error"]))
-        return (jsonify({
-            "success": False,
-            "error": "Prior submission '{}' not found in database".format(old_source_id)
-            }), 500)
-    old_status = old_status_info["status"]
 
     # Submissions from Connect will have status entries, user submission will not
     if CONFIG["API_CLIENT_ID"] in identities:
+        old_status_info = read_status(old_source_id)
+        if not old_status_info["success"]:
+            logger.error(("Prior status '{}' not in status database: "
+                          "{}").format(old_source_id, old_status_info["error"]))
+            return (jsonify({
+                "success": False,
+                "error": "Prior submission '{}' not found in database".format(old_source_id)
+                }), 500)
+        old_status = old_status_info["status"]
         # Check if past submission is active
         if old_status["active"]:
             # Check old status validity
@@ -338,6 +338,7 @@ def accept_ingest():
             "submission_time": datetime.utcnow().isoformat("T") + "Z",
             "submitter": name,
             "title": title,
+            "acl": acl,
             "user_id": user_id,
             "user_email": email,
             "test": test
