@@ -249,7 +249,7 @@ def accept_ingest():
     services = metadata.get("services", {})
     data_loc = metadata.get("data", [])
     service_data = metadata.get("service_data", [])
-    title = metadata.get("title", None)
+    title = metadata.get("title", "Title not supplied")
     source_name = metadata.get("source_name", None)
     acl = metadata.get("acl", ["public"])
     test = metadata.get("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
