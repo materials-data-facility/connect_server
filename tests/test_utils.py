@@ -1,5 +1,20 @@
-from mdf_connect.utils import make_source_id
+from mdf_connect.utils import fetch_whitelist, make_source_id
 import pytest  # noqa: F401
+
+
+def test_fetch_whitelist():
+    # Assert admins are correct
+    jgaff = "117e8833-68f5-4cb2-afb3-05b25db69be1"
+    blaiszik = "c8745ef4-d274-11e5-bee8-3b6845397ac9"
+    admin = fetch_whitelist("admin")
+    assert jgaff in admin and blaiszik in admin
+    # Each lower level should be a superset of the previous
+    ingest = fetch_whitelist("ingest")
+    assert len(ingest) > len(admin)
+    assert all([x in ingest for x in admin])
+    convert = fetch_whitelist("convert")
+    assert len(convert) > len(ingest)
+    assert all([x in convert for x in ingest])
 
 
 def test_make_source_id():

@@ -171,17 +171,17 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
 
         # Backup to MDF
         if not test:
-            for dl_res in download_and_backup(mdf_transfer_client,
-                                              "globus://{}{}".format(CONFIG["LOCAL_EP"],
-                                                                     local_path),
-                                              CONFIG["BACKUP_EP"],
-                                              backup_path):
-                if not dl_res["success"]:
-                    msg = "During data backup: " + dl_res["error"]
+            for backup_res in download_and_backup(mdf_transfer_client,
+                                                  "globus://{}{}".format(CONFIG["LOCAL_EP"],
+                                                                         local_path),
+                                                  CONFIG["BACKUP_EP"],
+                                                  backup_path):
+                if not backup_res["success"]:
+                    msg = "During data backup: " + backup_res["error"]
                     update_status(source_id, "convert_download", "T", text=msg,
                                   except_on_fail=True)
-            if not dl_res["success"]:
-                raise ValueError(dl_res["error"])
+            if not backup_res["success"]:
+                raise ValueError(backup_res["error"])
 
     except Exception as e:
         update_status(source_id, "convert_download", "F", text=repr(e),
@@ -189,10 +189,11 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         complete_submission(source_id)
         return
 
-    update_status(source_id, "convert_download", "S", except_on_fail=True)
-    logger.info("{}: Data downloaded, {} archives extracted".format(
-                                                                source_id,
-                                                                dl_res["num_extracted"]))
+    update_status(source_id, "convert_download", "M",
+                  text=("{} files will be processed "
+                        "({} archives extracted)").format(dl_res["total_files"],
+                                                          dl_res["num_extracted"]),
+                  except_on_fail=True)
 
     # Handle service integration data directory
     service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
@@ -701,10 +702,14 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                                      except_on_fail=True)
         else:
             try:
-                mrr_res = requests.post(CONFIG["MRR_URL"],
-                                        auth=(CONFIG["MRR_USERNAME"],
-                                              CONFIG["MRR_PASSWORD"]),
-                                        data=mrr_entry).json()
+                mrr_res_raw = requests.post(CONFIG["MRR_URL"],
+                                            auth=(CONFIG["MRR_USERNAME"],
+                                                  CONFIG["MRR_PASSWORD"]),
+                                            data=mrr_entry)
+                try:
+                    mrr_res = mrr_res_raw.json()
+                except json.JSONDecodeError:
+                    raise ValueError("Invalid MRR response: {}".format(mrr_res_raw.content))
             except Exception as e:
                 update_status(source_id, "ingest_mrr", "F",
                                          text="Unable to submit MRR entry:"+repr(e),
