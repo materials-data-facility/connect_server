@@ -5,8 +5,8 @@ import multiprocessing
 import os
 from queue import Empty
 
-from mdf_connect.config import CONVERTER_CONF
-from mdf_connect.processor import transform
+from mdf_connect_server.config import CONVERTER_CONF
+from mdf_connect_server.processor import transform
 
 NUM_TRANSFORMERS = 5
 

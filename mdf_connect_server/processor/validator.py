@@ -6,7 +6,7 @@ from tempfile import TemporaryFile
 from bson import ObjectId
 import jsonschema
 
-from mdf_connect import CONFIG
+from mdf_connect_server import CONFIG
 
 
 class Validator:

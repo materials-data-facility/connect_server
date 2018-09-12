@@ -6,7 +6,7 @@ if [ "$CONDA_DEFAULT_ENV" == "proda" ]; then
     touch proda.log;
     truncate --size 0 proda.log;
     nohup gunicorn --bind 127.0.0.1:5000 --timeout 61 -w 5 --log-level info \
-        mdf_connect.api.api:app &>/dev/null & disown;
+        mdf_connect_server.api.api:app &>/dev/null & disown;
     echo "Connect Prod API started."
 elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     echo "Starting Connect API for Development";
@@ -15,14 +15,14 @@ elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     touch deva.log;
     truncate --size 0 deva.log;
     nohup gunicorn --bind 127.0.0.1:5000 --timeout 61 -w 5 --log-level debug \
-        mdf_connect.api.api:app & disown;
+        mdf_connect_server.api.api:app & disown;
     echo "Connect Dev API started."
 elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
     echo "Starting Connect Processing for Production";
     export FLASK_ENV=production;
     touch prodp.log;
     truncate --size 0 prodp.log;
-    nohup python3 -c "from mdf_connect.processor import processor; processor()" \
+    nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
         &>/dev/null & disown;
     echo "Connect Prod Processor started"
 elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
@@ -31,7 +31,7 @@ elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
     rm nohup.out;
     touch devp.log;
     truncate --size 0 devp.log;
-    nohup python3 -c "from mdf_connect.processor import processor; processor()" & disown;
+    nohup python3 -c "from mdf_connect_server.processor import processor; processor()" & disown;
     echo "Connect Dev Processor started"
 else
     echo "CONDA_DEFAULT_ENV '$CONDA_DEFAULT_ENV' invalid!";

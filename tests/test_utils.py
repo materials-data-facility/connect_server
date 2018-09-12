@@ -1,4 +1,4 @@
-from mdf_connect.utils import fetch_whitelist, make_source_id
+from mdf_connect_server.utils import fetch_whitelist, make_source_id
 import pytest  # noqa: F401
 
 

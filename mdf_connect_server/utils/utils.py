@@ -14,7 +14,7 @@ import jsonschema
 import mdf_toolbox
 import requests
 
-from mdf_connect import CONFIG
+from mdf_connect_server import CONFIG
 
 
 logger = logging.getLogger(__name__)

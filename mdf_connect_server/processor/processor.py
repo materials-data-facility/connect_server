@@ -9,16 +9,16 @@ import globus_sdk
 import mdf_toolbox
 import requests
 
-from mdf_connect import CONFIG
-from mdf_connect.processor import convert, search_ingest, update_search_entry
-from mdf_connect.utils import (cancel_submission, citrine_upload, complete_submission,
-                               delete_from_queue, download_and_backup, globus_publish_data,
-                               modify_status_entry, read_status, retrieve_from_queue,
-                               update_status)
+from mdf_connect_server import CONFIG
+from mdf_connect_server.processor import convert, search_ingest, update_search_entry
+from mdf_connect_server.utils import (cancel_submission, citrine_upload, complete_submission,
+                                      delete_from_queue, download_and_backup, globus_publish_data,
+                                      modify_status_entry, read_status, retrieve_from_queue,
+                                      update_status)
 
 
 # Set up root logger
-logger = logging.getLogger("mdf_connect")
+logger = logging.getLogger("mdf_connect_server")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
