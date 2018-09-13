@@ -8,7 +8,7 @@ import jsonschema
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server.utils import (authenticate_token, create_status, make_source_id,
-                                      read_status, submit_to_queue, translate_status, 
+                                      read_status, submit_to_queue, translate_status,
                                       update_status, validate_status)
 
 app = Flask(__name__)
