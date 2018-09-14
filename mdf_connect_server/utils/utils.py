@@ -14,7 +14,7 @@ import jsonschema
 import mdf_toolbox
 import requests
 
-from mdf_connect import CONFIG
+from mdf_connect_server import CONFIG
 
 
 logger = logging.getLogger(__name__)
@@ -679,6 +679,7 @@ def cancel_submission(source_id, wait=True):
     # Check if submission can be cancelled
     stat_res = read_status(source_id)
     if not stat_res["success"]:
+        stat_res["stopped"] = False
         return stat_res
     current_status = stat_res["status"]
     if current_status["cancelled"]:

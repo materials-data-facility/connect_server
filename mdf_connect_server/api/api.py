@@ -6,16 +6,17 @@ import os
 from flask import Flask, jsonify, redirect, request
 import jsonschema
 
-from mdf_connect import CONFIG
-from mdf_connect.utils import (authenticate_token, create_status, make_source_id, read_status,
-                               submit_to_queue, translate_status, update_status, validate_status)
+from mdf_connect_server import CONFIG
+from mdf_connect_server.utils import (authenticate_token, create_status, make_source_id,
+                                      read_status, submit_to_queue, translate_status,
+                                      update_status, validate_status)
 
 app = Flask(__name__)
 app.config.from_mapping(**CONFIG)
 app.url_map.strict_slashes = False
 
 # Set up root logger
-logger = logging.getLogger("mdf_connect")
+logger = logging.getLogger("mdf_connect_server")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
@@ -249,7 +250,7 @@ def accept_ingest():
     services = metadata.get("services", {})
     data_loc = metadata.get("data", [])
     service_data = metadata.get("service_data", [])
-    title = metadata.get("title", None)
+    title = metadata.get("title", "Title not supplied")
     source_name = metadata.get("source_name", None)
     acl = metadata.get("acl", ["public"])
     test = metadata.get("test", False) or CONFIG["DEFAULT_TEST_FLAG"]

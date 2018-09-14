@@ -2,7 +2,7 @@ import os
 
 from mdf_toolbox import dict_merge
 
-from mdf_connect.config import DEFAULT, DEV, KEYS, PROD
+from mdf_connect_server.config import DEFAULT, DEV, KEYS, PROD
 
 
 CONFIG = {}

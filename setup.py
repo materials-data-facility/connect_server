@@ -2,10 +2,10 @@ from setuptools import setup, find_packages
 
 
 setup(
-    name='mdf_connect',
-    version='0.4.0',
+    name='mdf_connect_server',
+    version='0.4.1',
     packages=find_packages(),
-    description='Materials Data Facility Connect infrastructure',
+    description='Materials Data Facility Connect Server infrastructure',
     install_requires=[
         "ase>=3.16.2",
         "boto3>=1.7.33",

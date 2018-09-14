@@ -9,16 +9,16 @@ import globus_sdk
 import mdf_toolbox
 import requests
 
-from mdf_connect import CONFIG
-from mdf_connect.processor import convert, search_ingest, update_search_entry
-from mdf_connect.utils import (cancel_submission, citrine_upload, complete_submission,
-                               delete_from_queue, download_and_backup, globus_publish_data,
-                               modify_status_entry, read_status, retrieve_from_queue,
-                               update_status)
+from mdf_connect_server import CONFIG
+from mdf_connect_server.processor import convert, search_ingest, update_search_entry
+from mdf_connect_server.utils import (cancel_submission, citrine_upload, complete_submission,
+                                      delete_from_queue, download_and_backup, globus_publish_data,
+                                      modify_status_entry, read_status, retrieve_from_queue,
+                                      update_status)
 
 
 # Set up root logger
-logger = logging.getLogger("mdf_connect")
+logger = logging.getLogger("mdf_connect_server")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
@@ -36,7 +36,6 @@ logger.info("\n\n==========Connect Process started==========\n")
 
 def processor():
     active_processes = []
-    inactive_processes = []
     while True:
         try:
             submissions = retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
@@ -46,9 +45,12 @@ def processor():
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
                     if sub["submission_type"] == "convert":
-                        driver = Process(target=convert_driver, kwargs=sub)
+                        driver = Process(target=convert_driver, kwargs=sub, name=sub["source_id"])
                     elif sub["submission_type"] == "ingest":
-                        driver = Process(target=ingest_driver, kwargs=sub)
+                        driver = Process(target=ingest_driver, kwargs=sub, name=sub["source_id"])
+                    else:
+                        raise ValueError(("Submission type '{}' "
+                                          "invalid").format(sub["submission_type"]))
                     driver.start()
                     active_processes.append(driver)
                 delete_from_queue(submissions["delete_info"])
@@ -57,11 +59,15 @@ def processor():
             logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                inactive_processes.append(dead_proc)
-                active_processes.remove(dead_proc)
+                cancel_res = cancel_submission(dead_proc.name)
+                if cancel_res["stopped"]:
+                    active_processes.remove(dead_proc)
+                else:
+                    logger.info(("Unable to cancel process for {}: "
+                                 "{}").format(dead_proc.name,
+                                              cancel_res.get("error", "No error provided")))
         except Exception as e:
             logger.error("Error life-checking processes: {}".format(e))
-        # TODO: Check status DB if inactive processes are recorded dead
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
 
 
