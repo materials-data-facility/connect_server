@@ -2,7 +2,9 @@ from werkzeug.datastructures import MultiDict
 from mdf_toolbox import MDFConnectClient
 from mdf_forge import Forge
 from tqdm import tqdm
+from time import sleep
 import requests
+import json
 
 base_url = "https://materialsdata.nist.gov/rest/"
 
@@ -139,8 +141,11 @@ def _make_failure(req):
 
 if __name__ == "__main__":
     # Make the client
-    client = MDFConnectClient(service_instance="dev")
-    forge = Forge('mdf-test')
+    client = MDFConnectClient()
+    forge = Forge()
+
+    # Create an array to store the source_id
+    source_ids = []
 
     # Loop through all items
     for item in tqdm(get_all_publications()):
@@ -155,11 +160,18 @@ if __name__ == "__main__":
         if len(client.data) == 0:
             continue
 
-        # Turn test on
-        client.set_test(True)
+        # Sleep for a minute
+        sleep(60)
 
         # Submit it
         source_id, success, error = client.submit_dataset()
         if not success:
             print(error)
             raise RuntimeError('Failed for item {}'.format(item))
+            
+        # Add the source_id to a list
+        source_ids.append(source_id)
+        
+        # Save the current status of that list to disk
+        with open('mml_source_ids.json', 'w') as fp:
+            json.dump(source_ids, fp)
