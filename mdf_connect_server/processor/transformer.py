@@ -690,6 +690,11 @@ def _translate_pif(pif):
             "Converged": "converged",
             "XC_Functional": "exchange_correlation_functional",
             "Cutoff_Energy_eV": "cutoff_energy"
+        },
+        "crystal_structure": {
+            "Space_group_number": "space_group_number",
+            "Number_of_atoms_in_unit_cell": "number_of_atoms",
+            "Unit_cell_volume_AA_3": "volume"
         }
     }
     record = {}

@@ -1,4 +1,4 @@
-from mdf_connect.processor import Validator
+from mdf_connect_server.processor import Validator
 import pytest
 
 
