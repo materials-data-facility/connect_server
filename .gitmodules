@@ -1,9 +1,3 @@
-[submodule "mdf_connect/schemas"]
-	path = mdf_connect/schemas
-	url = https://github.com/materials-data-facility/data-schemas.git
-[submodule "mdf_connect/config/schemas"]
-	path = mdf_connect/config/schemas
-	url = https://github.com/materials-data-facility/data-schemas
 [submodule "mdf_connect_server/config/schemas"]
 	path = mdf_connect_server/config/schemas
 	url = https://github.com/materials-data-facility/data-schemas.git
