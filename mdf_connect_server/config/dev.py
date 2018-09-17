@@ -13,14 +13,14 @@ DEV = {
     "INGEST_INDEX": "mdf-test",
     "INGEST_TEST_INDEX": "mdf-test",
 
-    "LOCAL_EP": "ca7550ad-55a9-4762-b558-8f2b15049039",
+    "LOCAL_EP": "cf50e712-c934-4d96-bf2f-70a646c4acc5",
 
     "BACKUP_EP": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
     "BACKUP_PATH": "/MDF/mdf_connect/dev/data/",
     "BACKUP_HOST": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
     "BACKUP_FEEDSTOCK": "/MDF/mdf_connect/dev/feedstock/",
 
-    "GDRIVE_EP": "6ab13202-7c99-4e44-b0ff-04b8fbd77c97",
+    "GDRIVE_EP": "ea400d5d-4638-40e6-8a0e-923bfc4b2ba1",
 
     "DEFAULT_CLEANUP": True,
 
