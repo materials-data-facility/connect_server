@@ -11,10 +11,10 @@ import requests
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import convert, search_ingest, update_search_entry
-from mdf_connect_server.utils import (cancel_submission, citrine_upload, complete_submission,
-                                      delete_from_queue, download_and_backup, globus_publish_data,
-                                      modify_status_entry, read_status, retrieve_from_queue,
-                                      update_status)
+from mdf_connect_server.utils import (backup_data, cancel_submission, citrine_upload,
+                                      complete_submission, delete_from_queue, download_data,
+                                      globus_publish_data, modify_status_entry, read_status,
+                                      retrieve_from_queue, update_status)
 
 
 # Set up root logger
@@ -160,10 +160,8 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
             raise ValueError("Internal permissions error.")
         # Download from user
-        for dl_res in download_and_backup(user_transfer_client,
-                                          metadata.pop("data", {}),
-                                          CONFIG["LOCAL_EP"],
-                                          local_path):
+        for dl_res in download_data(user_transfer_client, metadata.pop("data", {}),
+                                    CONFIG["LOCAL_EP"], local_path):
             if not dl_res["success"]:
                 msg = "During data download: " + dl_res["error"]
                 update_status(source_id, "convert_download", "T", text=msg, except_on_fail=True)
@@ -177,15 +175,8 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
 
         # Backup to MDF
         if not test:
-            for backup_res in download_and_backup(mdf_transfer_client,
-                                                  "globus://{}{}".format(CONFIG["LOCAL_EP"],
-                                                                         local_path),
-                                                  CONFIG["BACKUP_EP"],
-                                                  backup_path):
-                if not backup_res["success"]:
-                    msg = "During data backup: " + backup_res["error"]
-                    update_status(source_id, "convert_download", "T", text=msg,
-                                  except_on_fail=True)
+            backup_res = backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
+                                     CONFIG["BACKUP_EP"], backup_path)
             if not backup_res["success"]:
                 raise ValueError(backup_res["error"])
 
@@ -384,10 +375,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         if not acl_res.get("code") == "Created":
             logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
             raise ValueError("Internal permissions error.")
-        for dl_res in download_and_backup(user_transfer_client,
-                                          feedstock_location,
-                                          CONFIG["LOCAL_EP"],
-                                          base_feed_path):
+        for dl_res in download_data(user_transfer_client, feedstock_location,
+                                    CONFIG["LOCAL_EP"], base_feed_path):
             if not dl_res["success"]:
                 update_status(source_id, "ingest_download", "T",
                                          text=dl_res["error"], except_on_fail=True)
@@ -447,13 +436,10 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                         logger.error("{}: Unable to create ACL rule: '{}'".format(source_id,
                                                                                   acl_res))
                         raise ValueError("Internal permissions error.")
-                    for dl_res in download_and_backup(user_transfer_client,
-                                                      data_loc,
-                                                      data_ep,
-                                                      data_path):
+                    for dl_res in download_data(user_transfer_client, data_loc, data_ep, data_path):
                         if not dl_res["success"]:
                             update_status(source_id, "ingest_download", "T",
-                                                     text=dl_res["error"], except_on_fail=True)
+                                          text=dl_res["error"], except_on_fail=True)
                     acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
                                                                            acl_res["access_id"])
                     if not acl_del.get("code") == "Deleted":
@@ -507,10 +493,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 if not acl_res.get("code") == "Created":
                     logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
                     raise ValueError("Internal permissions error.")
-                for dl_res in download_and_backup(user_transfer_client,
-                                                  service_loc,
-                                                  CONFIG["LOCAL_EP"],
-                                                  service_data):
+                for dl_res in download_data(user_transfer_client, service_loc, CONFIG["LOCAL_EP"],
+                                            service_data):
                     if not dl_res["success"]:
                         update_status(source_id, "ingest_integration", "T",
                                                  text=dl_res["error"], except_on_fail=True)

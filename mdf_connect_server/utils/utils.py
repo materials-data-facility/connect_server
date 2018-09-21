@@ -339,8 +339,7 @@ def make_source_id(title, test=False):
     }
 
 
-def download_and_backup(transfer_client, data_loc,
-                        local_ep, local_path, backup_ep=None, backup_path=None):
+def download_data(transfer_client, data_loc, local_ep, local_path):
     """Download data from a remote host to the configured machine.
 
     Arguments:
@@ -349,8 +348,6 @@ def download_and_backup(transfer_client, data_loc,
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
-    backup_ep (str): The backup machine's endpoint ID. Default None for no backup.
-    backup_path (str): The path to the backup storage location Default None for no backup.
 
     Returns:
     dict: success (bool): True on success, False on failure.
@@ -501,22 +498,46 @@ def download_and_backup(transfer_client, data_loc,
     if not extract_res["success"]:
         raise IOError("Unable to extract archives in dataset")
 
-    # Back up data
-    if backup_ep and backup_path:
-        transfer = mdf_toolbox.custom_transfer(
-                        transfer_client, local_ep, backup_ep,
-                        [(local_path + (filename if filename else ""), backup_path)],
-                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-        for event in transfer:
-            if not event["success"]:
-                logger.debug(event)
-        if not event["success"]:
-            raise ValueError("{}: {}".format(event["code"], event["description"]))
     yield {
         "success": True,
         "num_extracted": extract_res["num_extracted"],
         "total_files": sum([len(files) for _, _, files in os.walk(local_path)])
+    }
+
+
+def backup_data(transfer_client, local_ep, local_path, backup_ep, backup_path):
+    """Back up data to a remote endpoint.
+
+    Arguments:
+    transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+    local_ep (str): The local machine's endpoint ID.
+    local_path (str): The path to the local storage location.
+    backup_ep (str): The backup machine's endpoint ID.
+    backup_path (str): The path to the backup storage location.
+
+    Returns:
+    dict: success (bool): True on success, False on failure.
+    """
+    filename = None
+    # If the local_path is a file and not a directory, use the directory
+    if local_path[-1] != "/":
+        # Save the filename for later
+        filename = os.path.basename(local_path)
+        local_path = os.path.dirname(local_path) + "/"
+
+    transfer = mdf_toolbox.custom_transfer(
+                    transfer_client, local_ep, backup_ep,
+                    [(local_path + (filename if filename else ""), backup_path)],
+                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+    for event in transfer:
+        if not event["success"]:
+            logger.debug(event)
+    if not event["success"]:
+        raise ValueError("{}: {}".format(event["code"], event["description"]))
+
+    return {
+        "success": event["success"]
     }
 
 
