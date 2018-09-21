@@ -174,6 +174,7 @@ def parse_crystal_structure(group, params=None):
         crystal_structure["space_group_number"] = pmg_s.get_space_group_info()[1]
         crystal_structure["number_of_atoms"] = int(pmg_s.composition.num_atoms)
         crystal_structure["volume"] = float(pmg_s.volume)
+        crystal_structure["stoichiometry"] = pmg_s.composition.anonymized_formula
 
         # Add to record
         record = toolbox.dict_merge(record, {
@@ -437,7 +438,7 @@ def parse_image(group, params=None):
                 "image": {
                     "width": im.width,
                     "height": im.height,
-                    "format": im.format
+                    "megapixels": (im.width * im.height) / 1000000
                 }
             })
         except Exception:
@@ -463,14 +464,10 @@ def parse_electron_microscopy(group, params=None):
                 inst = "TEM"
             else:
                 inst = "None"
-            em['beam_current'] = (data.get('Acquisition_instrument', {}).get(inst, {})
-                                      .get('beam_current', None))
             em['beam_energy'] = (data.get('Acquisition_instrument', {}).get(inst, {})
                                      .get('beam_energy', None))
             em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
                                        .get('magnification', None))
-            em['microscope'] = (data.get('Acquisition_instrument', {}).get(inst, {})
-                                    .get('microscope', None))
             em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
                                     .get('acquisition_mode', None))
             detector = (data.get('Acquisition_instrument', {}).get(inst, {})
