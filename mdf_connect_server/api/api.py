@@ -64,6 +64,7 @@ def accept_convert():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
+    md_copy = request.get_json(force=True, silent=True)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -72,7 +73,9 @@ def accept_convert():
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
-    if not metadata.get("dc", {}).get("resourceType"):
+    if not metadata.get("dc") or not isinstance(metadata["dc"], dict):
+        metadata["dc"] = {}
+    if not metadata["dc"].get("resourceType"):
         try:
             metadata["dc"]["resourceType"] = {
                 "resourceTypeGeneral": "Dataset",
@@ -80,6 +83,18 @@ def accept_convert():
             }
         except Exception:
             pass
+    # Move tags to dc.subjects
+    if metadata.get("tags"):
+        tags = metadata.pop("tags", [])
+        if not isinstance(tags, list):
+            tags = [tags]
+        if not metadata["dc"].get("subjects"):
+            metadata["dc"]["subjects"] = []
+        for tag in tags:
+            metadata["dc"]["subjects"].append({
+                "subject": tag
+            })
+
     with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_convert.json")) as schema_file:
         schema = json.load(schema_file)
     resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
@@ -161,7 +176,8 @@ def accept_convert():
         "user_id": user_id,
         "user_email": email,
         "acl": metadata["mdf"]["acl"],
-        "test": test
+        "test": test,
+        "original_submission": json.dumps(md_copy)
         }
     try:
         status_res = create_status(status_info)
@@ -226,6 +242,7 @@ def accept_ingest():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
+    md_copy = request.get_json(force=True, silent=True)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -342,7 +359,8 @@ def accept_ingest():
             "acl": acl,
             "user_id": user_id,
             "user_email": email,
-            "test": test
+            "test": test,
+            "original_metadata": json.dumps(md_copy)
             }
         try:
             status_res = create_status(status_info)

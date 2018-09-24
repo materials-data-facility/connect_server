@@ -6,7 +6,7 @@ DEFAULT = {
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
     "SERVICE_DATA": os.path.expanduser("~/integrations/"),
 
-    "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas")),
+    "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
 
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
