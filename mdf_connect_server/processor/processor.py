@@ -226,12 +226,13 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     # Convert data
     update_status(source_id, "converting", "P", except_on_fail=True)
     try:
-        feedstock, num_groups = convert(local_path, convert_params)
+        feedstock, num_groups, extensions = convert(local_path, convert_params)
     except Exception as e:
         update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
         complete_submission(source_id)
         return
     else:
+        modify_status_entry(source_id, {"extensions": extensions})
         # feedstock minus dataset entry is records
         num_parsed = len(feedstock) - 1
         # If nothing in feedstock, panic

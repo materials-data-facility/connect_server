@@ -46,9 +46,13 @@ def convert(root_path, convert_params):
 
     # Populate input queue
     num_groups = 0
+    extensions = set()
     for group in group_tree(root_path):
         input_queue.put(group)
         num_groups += 1
+        for f in group:
+            filename, ext = os.splitext(f)
+            extensions.add(ext or filename)
     # Mark that input is finished
     input_complete.value = True
     logger.debug("{}: Input complete".format(source_id))
@@ -91,7 +95,7 @@ def convert(root_path, convert_params):
                 logger.debug("{}: Transformers joined".format(source_id))
                 break
 
-    return (feedstock, num_groups)
+    return (feedstock, num_groups, list(extensions))
 
 
 def group_tree(root):
