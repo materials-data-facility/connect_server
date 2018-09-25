@@ -54,7 +54,7 @@ def test_validator():
             "repositories": ["MDF"]
         },
         "mrr": {
-            "dataOrigin": "experimental"
+            "dataOrigin": ["experimental"]
         },
         "foo_bar_dataset": {
             "foo": "bar"
@@ -109,25 +109,24 @@ def test_validator():
         "crystal_structure": {
             "space_group_number": 42,
             "number_of_atoms": 42,
-            "volume": 42.42
+            "volume": 42.42,
+            "stoichiometry": "AB4C42D500"
         },
         "dft": {
             "converged": False,
             "exchange_correlation_functional": "yep",
-            "cutoff_energy": 555.1234,
-            "code": "Python 4"
+            "cutoff_energy": 555.1234
         },
         "electron_microscopy": {
             "acquisition_mode": "on",
-            "beam_current": 9999,
             "beam_energy": 9998,
-            "detector": "lost"
+            "detector": "lost",
+            "magnification": -5
         },
         "image": {
             "width": 99,
             "height": 101,
-            "bits": 2,
-            "format": "picture"
+            "megapixels": 0.00001
         },
         "foo_bar_dataset": {
             "is_okay": True
@@ -211,7 +210,7 @@ def test_validator():
             'resource_type': 'dataset'
         },
         'mrr': {
-            'dataOrigin': 'experimental'
+            'dataOrigin': ['experimental']
         },
         'foo_bar_dataset': {
             'foo': 'bar'
@@ -264,25 +263,24 @@ def test_validator():
         'crystal_structure': {
             'space_group_number': 42,
             'number_of_atoms': 42,
-            'volume': 42.42
+            'volume': 42.42,
+            'stoichiometry': 'AB4C42D500'
         },
         'dft': {
             'converged': False,
             'exchange_correlation_functional': 'yep',
-            'cutoff_energy': 555.1234,
-            'code': 'Python 4'
+            'cutoff_energy': 555.1234
         },
         'electron_microscopy': {
             'acquisition_mode': 'on',
-            'beam_current': 9999,
             'beam_energy': 9998,
-            'detector': 'lost'
+            'detector': 'lost',
+            'magnification': -5
         },
         'image': {
             'width': 99,
             'height': 101,
-            'bits': 2,
-            'format': 'picture'
+            'megapixels': 0.00001
         },
         'foo_bar_dataset': {
             'is_okay': True
@@ -314,7 +312,8 @@ def test_validator():
     # Exceptions, other dataset
     with pytest.raises(ValueError):
         next(val.get_finished_dataset())
-    assert val.start_dataset(good_dataset2)["success"]
+    gd2_start_res = val.start_dataset(good_dataset2)
+    assert gd2_start_res["success"], gd2_start_res["error"]
     assert val.status() == "Dataset started and still accepting records."
     assert val.start_dataset({}) == {
                                 "success": False,
@@ -326,7 +325,8 @@ def test_validator():
     assert bad_res["success"] is False
     assert "Invalid metadata" in bad_res["error"]
 
-    assert val.add_record(good_record2)["success"]
+    gr2_add_res = val.add_record(good_record2)
+    assert gr2_add_res["success"], gr2_add_res["error"]
     res = list(val.get_finished_dataset())
     assert len(res) == 3
     # Must remove dynamic data before comparison

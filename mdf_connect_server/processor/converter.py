@@ -51,7 +51,7 @@ def convert(root_path, convert_params):
         input_queue.put(group)
         num_groups += 1
         for f in group:
-            filename, ext = os.splitext(f)
+            filename, ext = os.path.splitext(f)
             extensions.add(ext or filename)
     # Mark that input is finished
     input_complete.value = True
