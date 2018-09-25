@@ -908,6 +908,7 @@ def create_status(status):
     status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
+    status["extensions"] = []
 
     status_valid = validate_status(status, "convert")
     if not status_valid["success"]:
