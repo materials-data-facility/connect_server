@@ -202,14 +202,17 @@ def parse_tdb(group, params=None):
 
             phases = list(calphad_db.phases.keys())
 
-            material['composition'] = composition
-            calphad['phases'] = phases
+            if composition:
+                material['composition'] = composition
+            if phases:
+                calphad['phases'] = phases
 
             # Add to record
-            record = toolbox.dict_merge(record, {
-                                               "material": material,
-                                               "calphad": calphad
-                                           })
+            if material:
+                record = toolbox.dict_merge(record, {"material": material})
+            if calphad:
+                record = toolbox.dict_merge(record, {"calphad": calphad})
+
             return record
         except Exception as e:
             return {}
