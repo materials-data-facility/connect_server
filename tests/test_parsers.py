@@ -2,6 +2,7 @@ import json
 import os
 
 import mdf_connect_server.processor.transformer as parsers
+import mdf_toolbox
 import pytest  # noqa: F401
 
 
@@ -96,11 +97,9 @@ def test_tdb():
             ]
         },
         'material': {
-            # 'composition': 'SeVaTeNaSPb'
+            'composition': 'SeVaTeNaSPb'
         }
     }
-    tdb1_comp = 'SeVaTeNaSPb'
-
     tdb2_path = os.path.join(BASE_PATH, "tdb", "test_AuSi.TDB")
     tdb2_record = {
         'calphad': {
@@ -116,11 +115,9 @@ def test_tdb():
             ]
         },
         'material': {
-            # 'composition': 'SiVaAu'
+            'composition': 'SiVaAu'
         }
     }
-    tdb2_comp = 'SiVaAu'
-
     tdb3_path = os.path.join(BASE_PATH, "tdb", "test_PbTe.TDB")
     tdb3_record = {
         'calphad': {
@@ -132,21 +129,16 @@ def test_tdb():
             ]
         },
         'material': {
-            # 'composition': 'TeVaPb'
+            'composition': 'TeVaPb'
         }
     }
-    tdb3_comp = 'TeVaPb'
 
-    # Composition is parsed in inconsistent order
-    res1 = parsers.parse_tdb([tdb1_path])
-    assert list(res1["material"].pop("composition")).sort() == list(tdb1_comp).sort()
-    assert res1 == tdb1_record
-    res2 = parsers.parse_tdb([tdb2_path])
-    assert list(res2["material"].pop("composition")).sort() == list(tdb2_comp).sort()
-    assert res2 == tdb2_record
-    res3 = parsers.parse_tdb([tdb3_path])
-    assert list(res3["material"].pop("composition")).sort() == list(tdb3_comp).sort()
-    assert res3 == tdb3_record
+    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb1_path]), tdb1_record,
+                                              string_insensitive=True)
+    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb2_path]), tdb2_record,
+                                              string_insensitive=True)
+    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb3_path]), tdb3_record,
+                                              string_insensitive=True)
     assert parsers.parse_tdb([NO_DATA_FILE]) == {}
     assert parsers.parse_tdb([NA_PATH]) == {}
 
