@@ -339,6 +339,53 @@ def make_source_id(title, test=False):
     }
 
 
+def clean_start():
+    """Reset the Connect environment to a clean state, as best as possible.
+    """
+    logger.debug("Cleaning Connect state")
+    # Auth to get Transfer client
+    creds = {
+        "app_name": "MDF Open Connect",
+        "client_id": CONFIG["API_CLIENT_ID"],
+        "client_secret": CONFIG["API_CLIENT_SECRET"],
+        "services": ["transfer"]
+    }
+    transfer_client = mdf_toolbox.confidential_login(creds)["transfer"]
+    logger.debug("Cancelling active Transfer tasks")
+    # List all Transfers active on endpoint
+    all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,
+                                                           filter_status="ACTIVE,INACTIVE",
+                                                           filter_endpoint=CONFIG["LOCAL_EP"])
+    all_ids = [task["task_id"] for task in all_tasks]
+    # Terminate active Transfers
+    cancel_res = transfer_client.endpoint_manager_cancel_tasks(all_ids,
+                                                               CONFIG["TRANSFER_CANCEL_MSG"])
+    # Wait for all Transfers to be terminated
+    if not cancel_res["done"]:
+        while not transfer_client.endpoint_manager_cancel_status(cancel_res["id"])["done"]:
+            logger.debug("Waiting for all active Transfers to cancel")
+            time.sleep(CONFIG["CANCEL_WAIT_TIME"])
+    logger.debug("Active Transfer tasks cancelled")
+
+    # Delete data, feedstock, service_data
+    logger.debug("Deleting old Connect files")
+    if os.path.exists(CONFIG["LOCAL_PATH"]):
+        shutil.rmtree(CONFIG["LOCAL_PATH"])
+        os.mkdir(CONFIG["LOCAL_PATH"])
+        logger.debug("Cleaned {}".format(CONFIG["LOCAL_PATH"]))
+    if os.path.exists(CONFIG["FEEDSTOCK_PATH"]):
+        shutil.rmtree(CONFIG["FEEDSTOCK_PATH"])
+        os.mkdir(CONFIG["FEEDSTOCK_PATH"])
+        logger.debug("Cleaned {}".format(CONFIG["FEEDSTOCK_PATH"]))
+    if os.path.exists(CONFIG["SERVICE_DATA"]):
+        shutil.rmtree(CONFIG["SERVICE_DATA"])
+        os.mkdir(CONFIG["SERVICE_DATA"])
+        logger.debug("Cleaned {}".format(CONFIG["SERVICE_DATA"]))
+
+    logger.info("Connect startup state clean")
+    return
+
+
 def download_data(transfer_client, data_loc, local_ep, local_path):
     """Download data from a remote host to the configured machine.
 

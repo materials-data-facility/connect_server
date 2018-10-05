@@ -17,6 +17,10 @@ DEFAULT = {
     "TRANSFER_DEADLINE": 3 * 60 * 60,  # 3 hours, in seconds
     "TRANSFER_WEB_APP_LINK": "https://www.globus.org/app/transfer?origin_id={}&origin_path={}",
 
+    "TRANSFER_CANCEL_MSG": ("Your recent MDF Connect submission was cancelled due to a service"
+                            " restart. Please resubmit your dataset. We apologize for the"
+                            " inconvenience."),
+
     "SEARCH_BATCH_SIZE": 100,
 
     "PUBLISH_COLLECTIONS": {
