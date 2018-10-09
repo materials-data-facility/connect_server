@@ -34,5 +34,5 @@ DEV = {
     "SQS_QUEUE": "mdfc_dev1.fifo",
     "SQS_GROUP_ID": "mdf_connect_dev",
 
-    "DYNAMO_TABLE": "dev-status-3"
+    "DYNAMO_TABLE": "dev-status-alpha-1"
 }

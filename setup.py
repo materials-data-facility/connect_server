@@ -3,11 +3,12 @@ from setuptools import setup, find_packages
 
 setup(
     name='mdf_connect_server',
-    version='0.4.1',
+    version='0.5.0',
     packages=find_packages(),
     description='Materials Data Facility Connect Server infrastructure',
     install_requires=[
         "ase>=3.16.2",
+        "awscli>=1.16.24",
         "boto3>=1.7.33",
         "citrination-client>=4.1.1",
         "crossrefapi>=1.3.0",

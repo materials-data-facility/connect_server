@@ -859,6 +859,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
                     }
             else:
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
+        logger.debug("{}: File cleanup finished".format(source_id))
     # Update status to inactive
     update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:

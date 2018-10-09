@@ -43,9 +43,11 @@ def processor():
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
                     if sub["submission_type"] == "convert":
-                        driver = Process(target=convert_driver, kwargs=sub, name=sub["source_id"])
+                        driver = Process(target=convert_driver, kwargs=sub,
+                                         name="C"+sub["source_id"])
                     elif sub["submission_type"] == "ingest":
-                        driver = Process(target=ingest_driver, kwargs=sub, name=sub["source_id"])
+                        driver = Process(target=ingest_driver, kwargs=sub,
+                                         name="I"+sub["source_id"])
                     else:
                         raise ValueError(("Submission type '{}' "
                                           "invalid").format(sub["submission_type"]))
@@ -57,13 +59,21 @@ def processor():
             logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                cancel_res = utils.cancel_submission(dead_proc.name)
-                if cancel_res["stopped"]:
+                # Convert processes should not be cancelled if they finished
+                # Status PID == -1 is sentinel value for convert finished
+                if (dead_proc.name[0] == "C"
+                        and utils.read_status(dead_proc.name[1:])["status"]["pid"] == -1):
                     active_processes.remove(dead_proc)
+                    logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
                 else:
-                    logger.info(("Unable to cancel process for {}: "
-                                 "{}").format(dead_proc.name,
-                                              cancel_res.get("error", "No error provided")))
+                    cancel_res = utils.cancel_submission(dead_proc.name[1:])
+                    if cancel_res["stopped"]:
+                        active_processes.remove(dead_proc)
+                        logger.debug("{}: Dead and cancelled/cleaned up".format(dead_proc.name))
+                    else:
+                        logger.info(("Unable to cancel process for {}: "
+                                     "{}").format(dead_proc.name,
+                                                  cancel_res.get("error", "No error provided")))
         except Exception as e:
             logger.error("Error life-checking processes: {}".format(e))
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
@@ -291,6 +301,9 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             utils.complete_submission(source_id)
             return
 
+    # Set sentinel value for submission PID
+    utils.modify_status_entry(source_id, {"pid": -1})
+
     return {
         "success": True,
         "source_id": source_id
@@ -302,6 +315,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     """Finalize and ingest feedstock."""
     # TODO: Better check?
     assert submission_type == "ingest"
+    utils.modify_status_entry(source_id, {"pid": os.getpid()})
+    utils.update_status(source_id, "ingest_start", "P", except_on_fail=True)
     # Will need client to ingest data
     creds = {
         "app_name": "MDF Open Connect",
@@ -354,6 +369,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         vers -= 1
 
     utils.update_status(source_id, "ingest_start", "S", except_on_fail=True)
+    utils.modify_status_entry(source_id, {"active": True})
 
     # NOTE: Cancellation point
     if utils.read_status(source_id).get("status", {}).get("cancelled"):

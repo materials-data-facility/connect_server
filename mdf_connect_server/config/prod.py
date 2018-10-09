@@ -34,5 +34,5 @@ PROD = {
     "SQS_QUEUE": "mdfc_prod.fifo",
     "SQS_GROUP_ID": "mdf_connect_prod",
 
-    "DYNAMO_TABLE": "prod-status-2"
+    "DYNAMO_TABLE": "prod-status-alpha-1"
 }
