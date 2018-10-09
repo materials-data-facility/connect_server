@@ -642,10 +642,19 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             old_citrine_id = old_status["status"].get("citrine_id", None)
 
         try:
+            # Check for PIFs to ingest
             cit_path = os.path.join(service_data, "citrine")
-            cit_res = utils.citrine_upload(cit_path, CONFIG["CITRINATION_API_KEY"], dataset,
-                                           old_citrine_id,
-                                           public=services["citrine"].get("public", True))
+            if len(os.listdir(cit_path)) > 0:
+                cit_res = utils.citrine_upload(cit_path, CONFIG["CITRINATION_API_KEY"], dataset,
+                                               old_citrine_id,
+                                               public=services["citrine"].get("public", True))
+            else:
+                cit_res = {
+                    "success": False,
+                    "error": "No PIFs were generated from this dataset",
+                    "success_count": 0,
+                    "failure_count": 0
+                }
         except Exception as e:
             utils.update_status(source_id, "ingest_citrine", "R", text=repr(e),
                                 except_on_fail=True)
@@ -656,7 +665,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 elif cit_res.get("failure_count"):
                     text = "All {} PIFs failed to upload".format(cit_res["failure_count"])
                 elif cit_res.get("failure_count") == 0:
-                    text = "No PIFs were generated"
+                    text = "No PIFs were found"
+                    logger.warning("{}: PIFs not found!".format(source_id))
                 else:
                     text = "An error prevented PIF uploading"
                 utils.update_status(source_id, "ingest_citrine", "R", text=text,
