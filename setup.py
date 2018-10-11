@@ -21,7 +21,7 @@ setup(
         "mdf-toolbox>=0.2.6",
         "numpy>=1.14.5"
         "pandas>=0.23.0",
-        "pif-ingestor>=1.0.0",
+        "pif-ingestor>=1.1.0",
         "Pillow>=5.1.0",
         # "pycalphad>=0.7",  # Must be conda installed
         "pymatgen>=2018.5.22",
