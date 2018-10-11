@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import re
-import shutil
+import subprocess
 import time
 import urllib
 
@@ -370,19 +370,31 @@ def clean_start():
     # Delete data, feedstock, service_data
     logger.debug("Deleting old Connect files")
     if os.path.exists(CONFIG["LOCAL_PATH"]):
-        shutil.rmtree(CONFIG["LOCAL_PATH"])
-        os.mkdir(CONFIG["LOCAL_PATH"])
-        logger.debug("Cleaned {}".format(CONFIG["LOCAL_PATH"]))
+        lpath_res = local_admin_delete(CONFIG["LOCAL_PATH"])
+        if not lpath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        lpath_res["error"]))
+        else:
+            os.mkdir(CONFIG["LOCAL_PATH"])
+            logger.debug("Cleaned {}".format(CONFIG["LOCAL_PATH"]))
     if os.path.exists(CONFIG["FEEDSTOCK_PATH"]):
-        shutil.rmtree(CONFIG["FEEDSTOCK_PATH"])
-        os.mkdir(CONFIG["FEEDSTOCK_PATH"])
-        logger.debug("Cleaned {}".format(CONFIG["FEEDSTOCK_PATH"]))
+        fpath_res = local_admin_delete(CONFIG["FEEDSTOCK_PATH"])
+        if not fpath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        fpath_res["error"]))
+        else:
+            os.mkdir(CONFIG["FEEDSTOCK_PATH"])
+            logger.debug("Cleaned {}".format(CONFIG["FEEDSTOCK_PATH"]))
     if os.path.exists(CONFIG["SERVICE_DATA"]):
-        shutil.rmtree(CONFIG["SERVICE_DATA"])
-        os.mkdir(CONFIG["SERVICE_DATA"])
-        logger.debug("Cleaned {}".format(CONFIG["SERVICE_DATA"]))
+        spath_res = local_admin_delete(CONFIG["SERVICE_DATA"])
+        if not spath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        spath_res["error"]))
+        else:
+            os.mkdir(CONFIG["SERVICE_DATA"])
+            logger.debug("Cleaned {}".format(CONFIG["SERVICE_DATA"]))
 
-    logger.info("Connect startup state clean")
+    logger.info("Connect startup state clean complete")
     return
 
 
@@ -736,7 +748,7 @@ def cancel_submission(source_id, wait=True):
                  If False, will not wait.
                  Default True.
     Returns:
-    success (bool): True on success, False otherwise.
+    success (bool): True if the submission was successfully cancelled, False otherwise.
     stopped (bool): True if the submission is no longer operating. False otherwise.
                     The difference between success and stopped is that a submission
                     that completed previously was not successfully cancelled, but was stopped.
@@ -849,10 +861,15 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
         for cleanup in cleanup_paths:
             if os.path.exists(cleanup):
                 try:
-                    shutil.rmtree(cleanup)
+                    clean_res = local_admin_delete(cleanup)
+                    if not clean_res["success"]:
+                        raise IOError(clean_res["error"])
+                    elif not clean_res["deleted"]:
+                        logger.warning("{}: Cleanup path '{}' did not exist".format(source_id,
+                                                                                    cleanup))
                 except Exception as e:
-                    logger.warning("{}: Could not remove path '{}': {}".format(source_id,
-                                                                               cleanup, repr(e)))
+                    logger.error("{}: Could not remove path '{}': {}".format(source_id,
+                                                                             cleanup, e))
                     return {
                         "success": False,
                         "error": "Unable to clear processed data"
@@ -869,6 +886,72 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     return {
         "success": True
     }
+
+
+def local_admin_delete(path):
+    """Use sudo permissions to delete a path.
+    This is a separate function to isolate destructive behavior and assert sanity-checks.
+
+    Arguments:
+    path (str): The path to delete. This must be a string.
+                For safety, this must be a path inside a user's home directory.
+                Ex. "/home/[user]/[some path]"
+
+    Returns:
+    dict:
+        success (bool): True iff the path does not exist now.
+        deleted (bool): True iff the path was deleted by this function.
+                        This is more strict than success; the path must have existed
+                        before this function was called and then been removed.
+        error (str): The error message, if not successful.
+    """
+    if not isinstance(path, str):
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Path must be a string"
+        }
+    path = os.path.abspath(os.path.expanduser(path))
+    if not re.match("^/home/.+/.+", path):
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Path must be inside a user's home directory"
+        }
+    if not os.path.exists(path):
+        return {
+            "success": True,
+            "deleted": False
+        }
+
+    try:
+        if os.path.isdir(path):
+            proc_res = subprocess.run(["sudo", "rm", "-rf", path])
+        elif os.path.isfile(path):
+            proc_res = subprocess.run(["sudo", "rm", path])
+        else:
+            return {
+                "success": False,
+                "deleted": False,
+                "error": "Path must lead to a directory or file"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Exception while deleting path: {}".format(e)
+        }
+    if proc_res.returncode == 0:
+        return {
+            "success": True,
+            "deleted": True
+        }
+    else:
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Process exited with return code {}".format(proc_res.returncode)
+        }
 
 
 def validate_status(status, code_mode=None):

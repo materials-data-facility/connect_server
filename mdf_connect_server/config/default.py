@@ -2,9 +2,9 @@ import os
 
 
 DEFAULT = {
-    "LOCAL_PATH": os.path.expanduser("~/data/"),
+    "LOCAL_PATH": os.path.expanduser("~/efs/data/"),
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
-    "SERVICE_DATA": os.path.expanduser("~/integrations/"),
+    "SERVICE_DATA": os.path.expanduser("~/efs/integrations/"),
 
     "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
 
