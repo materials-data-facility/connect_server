@@ -16,6 +16,7 @@ setup(
         "dfttopif>=1.0.0",
         "flask>=1.0.2",
         "globus-sdk>=1.5.0",
+        "gunicorn>=19.9.0",
         "hyperspy>=1.3.1",
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.2.6",
