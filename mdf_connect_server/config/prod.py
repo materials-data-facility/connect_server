@@ -9,6 +9,8 @@ PROD = {
 
     "DEFAULT_TEST_FLAG": False,
 
+    "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
+
     "INGEST_URL": "https://api.materialsdatafacility.org/ingest",
     "INGEST_INDEX": "mdf",
     "INGEST_TEST_INDEX": "mdf-test",

@@ -9,6 +9,8 @@ DEV = {
 
     "DEFAULT_TEST_FLAG": True,
 
+    "TRANSFER_DEADLINE": 3 * 60 * 60,  # 3 hours, in seconds
+
     "INGEST_URL": "https://dev-api.materialsdatafacility.org/ingest",
     "INGEST_INDEX": "mdf-test",
     "INGEST_TEST_INDEX": "mdf-test",
