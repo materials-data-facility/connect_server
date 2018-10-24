@@ -11,6 +11,10 @@ DEFAULT = {
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
+    "NUM_TRANSFORMERS": 5,
+    "NUM_SUBMITTERS": 5,
+    "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
+
     "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
 
     "TRANSFER_PING_INTERVAL": 1 * 60,  # 1 minute, in seconds
