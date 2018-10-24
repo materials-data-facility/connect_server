@@ -347,7 +347,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     # Cancel the previous version(s)
     try:
         vers = int(source_id.rsplit("_v", 1)[1])
-    except Exception as e:
+    except Exception:
         utils.update_status(source_id, "ingest_start", "F",
                             text="Invalid source_id: " + source_id, except_on_fail=True)
     old_source_id = source_id

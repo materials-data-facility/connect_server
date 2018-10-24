@@ -160,7 +160,7 @@ def parse_crystal_structure(group, params=None):
                 # Convert ASE Atoms to Pymatgen Structure
                 pmg_s = ase_to_pmg.get_structure(ase_res)
         # ASE failed to read file
-        except Exception as e:
+        except Exception:
             try:
                 # Read with Pymatgen
                 pmg_s = pymatgen.Structure.from_file(data_file)
@@ -214,7 +214,7 @@ def parse_tdb(group, params=None):
                 record = toolbox.dict_merge(record, {"calphad": calphad})
 
             return record
-        except Exception as e:
+        except Exception:
             return {}
 
 
@@ -297,7 +297,7 @@ def parse_json(group, params=None):
         try:
             with open(file_path) as f:
                 file_json = json.load(f)
-        except Exception as e:
+        except Exception:
             return {}
         records.extend(_parse_json(file_json, mapping, source_name))
     return records
@@ -331,7 +331,7 @@ def parse_csv(group, params=None):
         try:
             df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","),
                              na_values=NA_VALUES)
-        except Exception as e:
+        except Exception:
             return {}
         records.extend(_parse_pandas(df, mapping, source_name))
     return records
@@ -362,7 +362,7 @@ def parse_yaml(group, params=None):
         try:
             with open(file_path) as f:
                 file_json = yaml.safe_load(f)
-        except Exception as e:
+        except Exception:
             return {}
         records.extend(_parse_json(file_json, mapping, source_name))
     return records
@@ -393,7 +393,7 @@ def parse_xml(group, params=None):
         try:
             with open(file_path) as f:
                 file_json = xmltodict.parse(f.read())
-        except Exception as e:
+        except Exception:
             return {}
         records.extend(_parse_json(file_json, mapping, source_name))
     return records
@@ -425,7 +425,7 @@ def parse_excel(group, params=None):
     for file_path in group:
         try:
             df = pd.read_excel(file_path, na_values=NA_VALUES)
-        except Exception as e:
+        except Exception:
             return {}
         records.extend(_parse_pandas(df, mapping, source_name))
     return records

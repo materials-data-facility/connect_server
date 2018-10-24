@@ -255,7 +255,7 @@ def fetch_whitelist(auth_level):
         # Get all the members
         try:
             member_list = groups_auth.get_group_memberships(auth_level)["members"]
-        except Exception as e:
+        except Exception:
             pass
         else:
             whitelist.extend([member["identity_id"]

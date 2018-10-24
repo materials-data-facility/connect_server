@@ -341,7 +341,7 @@ def test_filename():
     mapping = {
         "material.composition": "^.{2}",  # First two chars are always composition
         "__custom.foo": "foo:.{3}",  # 3 chars after foo is foo
-        "__custom.ext": "\..{3,4}$"  # 3 or 4 char extension
+        "__custom.ext": "\\..{3,4}$"  # 3 or 4 char extension
     }
     group = ["He_abcdeffoo:FOO.txt", "Al123Smith_et_al.and_co.data", "O2foo:bar"]
     correct = [{
