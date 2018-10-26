@@ -155,32 +155,34 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
     try:
-        # Edit ACL to allow pull
-        acl_rule = {
-            "DATA_TYPE": "access",
-            "principal_type": "identity",
-            "principal": user_id,
-            "path": local_path,
-            "permissions": "rw"
-        }
-        acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
-        if not acl_res.get("code") == "Created":
-            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-            raise ValueError("Internal permissions error.")
-        # Download from user
-        for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", {}),
-                                          CONFIG["LOCAL_EP"], local_path):
+        try:
+            # Edit ACL to allow pull
+            acl_rule = {
+                "DATA_TYPE": "access",
+                "principal_type": "identity",
+                "principal": user_id,
+                "path": local_path,
+                "permissions": "rw"
+            }
+            acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
+            if not acl_res.get("code") == "Created":
+                logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
+                raise ValueError("Internal permissions error.")
+            # Download from user
+            for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", {}),
+                                              CONFIG["LOCAL_EP"], local_path):
+                if not dl_res["success"]:
+                    msg = "During data download: " + dl_res["error"]
+                    utils.update_status(source_id, "convert_download", "T", text=msg,
+                                        except_on_fail=True)
             if not dl_res["success"]:
-                msg = "During data download: " + dl_res["error"]
-                utils.update_status(source_id, "convert_download", "T", text=msg,
-                                    except_on_fail=True)
-        if not dl_res["success"]:
-            raise ValueError(dl_res["error"])
-        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                               acl_res["access_id"])
-        if not acl_del.get("code") == "Deleted":
-            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
-            raise ValueError("Internal permissions error.")
+                raise ValueError(dl_res["error"])
+        finally:
+            acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
+                                                                   acl_res["access_id"])
+            if not acl_del.get("code") == "Deleted":
+                logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
+                raise ValueError("Internal permissions error.")
 
         # Backup to MDF
         if not test:
