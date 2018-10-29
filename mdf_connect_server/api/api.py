@@ -7,9 +7,8 @@ from flask import Flask, jsonify, redirect, request
 import jsonschema
 
 from mdf_connect_server import CONFIG
-from mdf_connect_server.utils import (authenticate_token, create_status, make_source_id,
-                                      read_status, submit_to_queue, translate_status,
-                                      update_status, validate_status)
+from mdf_connect_server import utils
+
 
 app = Flask(__name__)
 app.config.from_mapping(**CONFIG)
@@ -46,7 +45,7 @@ def accept_convert():
     logger.debug("Started new convert task")
     access_token = request.headers.get("Authorization")
     try:
-        auth_res = authenticate_token(access_token, auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, auth_level="convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -64,6 +63,7 @@ def accept_convert():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
+    md_copy = request.get_json(force=True, silent=True)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -72,7 +72,9 @@ def accept_convert():
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
-    if not metadata.get("dc", {}).get("resourceType"):
+    if not metadata.get("dc") or not isinstance(metadata["dc"], dict):
+        metadata["dc"] = {}
+    if not metadata["dc"].get("resourceType"):
         try:
             metadata["dc"]["resourceType"] = {
                 "resourceTypeGeneral": "Dataset",
@@ -80,6 +82,18 @@ def accept_convert():
             }
         except Exception:
             pass
+    # Move tags to dc.subjects
+    if metadata.get("tags"):
+        tags = metadata.pop("tags", [])
+        if not isinstance(tags, list):
+            tags = [tags]
+        if not metadata["dc"].get("subjects"):
+            metadata["dc"]["subjects"] = []
+        for tag in tags:
+            metadata["dc"]["subjects"].append({
+                "subject": tag
+            })
+
     with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_convert.json")) as schema_file:
         schema = json.load(schema_file)
     resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
@@ -97,8 +111,8 @@ def accept_convert():
     test = metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
 
     sub_title = metadata["dc"]["titles"][0]["title"]
-    source_id_info = make_source_id(
-                        metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+    source_id_info = utils.make_source_id(
+                            metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
     source_id = source_id_info["source_id"]
     source_name = source_id_info["source_name"]
     if (len(source_id_info["user_id_list"]) > 0
@@ -140,8 +154,8 @@ def accept_convert():
         else:
             collection = CONFIG["PUBLISH_COLLECTIONS"][collection]
         try:
-            auth_res = authenticate_token(request.headers.get("Authorization"),
-                                          auth_level=collection["group"])
+            auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                                auth_level=collection["group"])
         except Exception as e:
             logger.error("Group authentication failure: {}".format(e))
             return (jsonify({
@@ -161,10 +175,11 @@ def accept_convert():
         "user_id": user_id,
         "user_email": email,
         "acl": metadata["mdf"]["acl"],
-        "test": test
+        "test": test,
+        "original_submission": json.dumps(md_copy)
         }
     try:
-        status_res = create_status(status_info)
+        status_res = utils.create_status(status_info)
     except Exception as e:
         logger.error("Status creation exception: {}".format(e))
         return (jsonify({
@@ -184,7 +199,7 @@ def accept_convert():
             "access_token": access_token,
             "user_id": user_id
         }
-        sub_res = submit_to_queue(submission_args)
+        sub_res = utils.submit_to_queue(submission_args)
         if not sub_res["success"]:
             logger.error("Submission to SQS error: {}".format(sub_res["error"]))
             return (jsonify(sub_res), 500)
@@ -208,7 +223,7 @@ def accept_ingest():
     logger.debug("Started new ingest task")
     access_token = request.headers.get("Authorization")
     try:
-        auth_res = authenticate_token(access_token, auth_level="ingest")
+        auth_res = utils.authenticate_token(access_token, auth_level="ingest")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -226,6 +241,7 @@ def accept_ingest():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
+    md_copy = request.get_json(force=True, silent=True)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -261,9 +277,9 @@ def accept_ingest():
             "error": "Either title or source_name is required"
             }), 400)
     # "new" source_id for new submissions
-    new_source_info = make_source_id(source_name or title, test=test)
+    new_source_info = utils.make_source_id(source_name or title, test=test)
     new_source_id = new_source_info["source_id"]
-    new_status_info = read_status(new_source_id)
+    new_status_info = utils.read_status(new_source_id)
     # "old" source_id for current/previous submission
     # Found by decrementing new version, to a minimum of 1
     old_source_id = "{}_v{}".format(new_source_info["source_name"],
@@ -271,7 +287,7 @@ def accept_ingest():
 
     # Submissions from Connect will have status entries, user submission will not
     if CONFIG["API_CLIENT_ID"] in identities:
-        old_status_info = read_status(old_source_id)
+        old_status_info = utils.read_status(old_source_id)
         if not old_status_info["success"]:
             logger.error(("Prior status '{}' not in status database: "
                           "{}").format(old_source_id, old_status_info["error"]))
@@ -283,7 +299,7 @@ def accept_ingest():
         # Check if past submission is active
         if old_status["active"]:
             # Check old status validity
-            status_valid = validate_status(old_status, code_mode="ingest")
+            status_valid = utils.validate_status(old_status, code_mode="ingest")
             if not status_valid["success"]:
                 logger.error("Prior status from database invalid: {}".format(
                                                                         status_valid["error"]))
@@ -291,7 +307,7 @@ def accept_ingest():
 
             # Correct version is "old" version
             source_id = old_source_id
-            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            stat_res = utils.update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
                 logger.error("Status update failure: {}".format(stat_res["error"]))
                 return (jsonify(stat_res), 500)
@@ -300,14 +316,14 @@ def accept_ingest():
         elif new_status_info["success"]:
             new_status = new_status_info["status"]
             # Check new status validity
-            status_valid = validate_status(new_status, code_mode="ingest")
+            status_valid = utils.validate_status(new_status, code_mode="ingest")
             if not status_valid["success"]:
                 logger.error("New status invalid: {}".format(status_valid["error"]))
                 return (jsonify(status_valid), 500)
 
             # Correct version is "new" version
             source_id = new_source_id
-            stat_res = update_status(source_id, "ingest_start", "P", except_on_fail=False)
+            stat_res = utils.update_status(source_id, "ingest_start", "P", except_on_fail=False)
             if not stat_res["success"]:
                 logger.error("Status update failure: {}".format(stat_res["error"]))
                 return (jsonify(stat_res), 500)
@@ -342,10 +358,11 @@ def accept_ingest():
             "acl": acl,
             "user_id": user_id,
             "user_email": email,
-            "test": test
+            "test": test,
+            "original_metadata": json.dumps(md_copy)
             }
         try:
-            status_res = create_status(status_info)
+            status_res = utils.create_status(status_info)
         except Exception as e:
             logger.error("Status creation exception: {}".format(e))
             return (jsonify({
@@ -398,14 +415,14 @@ def accept_ingest():
             "access_token": access_token,
             "user_id": user_id
         }
-        sub_res = submit_to_queue(submission_args)
+        sub_res = utils.submit_to_queue(submission_args)
         if not sub_res["success"]:
             logger.error("Submission to SQS error: {}".format(sub_res["error"]))
             return (jsonify(sub_res), 500)
     except Exception as e:
         logger.error("Submission to SQS exception: {}".format(e))
-        stat_res = update_status(source_id, "ingest_start", "F", text=repr(e),
-                                 except_on_fail=False)
+        stat_res = utils.update_status(source_id, "ingest_start", "F", text=repr(e),
+                                       except_on_fail=False)
         if not stat_res["success"]:
             return (jsonify(stat_res), 500)
         else:
@@ -425,7 +442,8 @@ def accept_ingest():
 def get_status(source_id):
     """Fetch and return status information"""
     try:
-        auth_res = authenticate_token(request.headers.get("Authorization"), auth_level="convert")
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                            auth_level="convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -437,11 +455,12 @@ def get_status(source_id):
         return (jsonify(auth_res), error_code)
 
     uid_set = auth_res["identities_set"]
-    raw_status = read_status(source_id)
+    raw_status = utils.read_status(source_id)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
     try:
-        admin_res = authenticate_token(request.headers.get("Authorization"), auth_level="admin")
+        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                             auth_level="admin")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -466,4 +485,4 @@ def get_status(source_id):
             "error": "Submission {} not found, or not available".format(source_id)
             }), 404)
     else:
-        return (jsonify(translate_status(raw_status["status"])), 200)
+        return (jsonify(utils.translate_status(raw_status["status"])), 200)

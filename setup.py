@@ -3,11 +3,12 @@ from setuptools import setup, find_packages
 
 setup(
     name='mdf_connect_server',
-    version='0.4.1',
+    version='0.5.0',
     packages=find_packages(),
     description='Materials Data Facility Connect Server infrastructure',
     install_requires=[
         "ase>=3.16.2",
+        "awscli>=1.16.24",
         "boto3>=1.7.33",
         "citrination-client>=4.1.1",
         "crossrefapi>=1.3.0",
@@ -15,12 +16,13 @@ setup(
         "dfttopif>=1.0.0",
         "flask>=1.0.2",
         "globus-sdk>=1.5.0",
+        "gunicorn>=19.9.0",
         "hyperspy>=1.3.1",
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.2.6",
         "numpy>=1.14.5"
         "pandas>=0.23.0",
-        "pif-ingestor>=1.0.0",
+        "pif-ingestor>=1.1.0",
         "Pillow>=5.1.0",
         # "pycalphad>=0.7",  # Must be conda installed
         "pymatgen>=2018.5.22",

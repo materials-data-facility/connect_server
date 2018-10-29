@@ -1,5 +1,5 @@
-CONVERTER_CONF = {
-    "grouping_rules": {
+CONVERSION = {
+    "GROUPING_RULES": {
         "vasp": [
             "outcar",
             "incar",
@@ -16,7 +16,7 @@ CONVERTER_CONF = {
             "xdatcar"
         ]
     },
-    "repository_rules": {
+    "REPOSITORY_RULES": {
         "APS Sector 1": {
             "aliases": [
             ],

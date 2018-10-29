@@ -6,16 +6,23 @@ DEFAULT = {
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
     "SERVICE_DATA": os.path.expanduser("~/integrations/"),
 
-    "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas")),
+    "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
 
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
+    "NUM_TRANSFORMERS": 5,
+    "NUM_SUBMITTERS": 5,
+    "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
+
     "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
 
     "TRANSFER_PING_INTERVAL": 1 * 60,  # 1 minute, in seconds
-    "TRANSFER_DEADLINE": 3 * 60 * 60,  # 3 hours, in seconds
     "TRANSFER_WEB_APP_LINK": "https://www.globus.org/app/transfer?origin_id={}&origin_path={}",
+
+    "TRANSFER_CANCEL_MSG": ("Your recent MDF Connect submission was cancelled due to a service"
+                            " restart. Please resubmit your dataset. We apologize for the"
+                            " inconvenience."),
 
     "SEARCH_BATCH_SIZE": 100,
 

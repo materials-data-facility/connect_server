@@ -9,6 +9,8 @@ PROD = {
 
     "DEFAULT_TEST_FLAG": False,
 
+    "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
+
     "INGEST_URL": "https://api.materialsdatafacility.org/ingest",
     "INGEST_INDEX": "mdf",
     "INGEST_TEST_INDEX": "mdf-test",
@@ -34,5 +36,5 @@ PROD = {
     "SQS_QUEUE": "mdfc_prod.fifo",
     "SQS_GROUP_ID": "mdf_connect_prod",
 
-    "DYNAMO_TABLE": "prod-status-2"
+    "DYNAMO_TABLE": "prod-status-alpha-1"
 }

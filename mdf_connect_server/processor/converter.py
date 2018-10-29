@@ -5,13 +5,9 @@ import multiprocessing
 import os
 from queue import Empty
 
-from mdf_connect_server.config import CONVERTER_CONF
+from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import transform
 
-NUM_TRANSFORMERS = 5
-
-GROUPING_RULES = CONVERTER_CONF["grouping_rules"]
-REPOSITORY_RULES = CONVERTER_CONF["repository_rules"]
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +36,19 @@ def convert(root_path, convert_params):
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue,
                                                   input_complete, convert_params))
-                    for i in range(NUM_TRANSFORMERS)]
+                    for i in range(CONFIG["NUM_TRANSFORMERS"])]
     [t.start() for t in transformers]
     logger.debug("{}: Transformers started".format(source_id))
 
     # Populate input queue
     num_groups = 0
+    extensions = set()
     for group in group_tree(root_path):
         input_queue.put(group)
         num_groups += 1
+        for f in group:
+            filename, ext = os.path.splitext(f)
+            extensions.add(ext or filename)
     # Mark that input is finished
     input_complete.value = True
     logger.debug("{}: Input complete".format(source_id))
@@ -91,7 +91,7 @@ def convert(root_path, convert_params):
                 logger.debug("{}: Transformers joined".format(source_id))
                 break
 
-    return (feedstock, num_groups)
+    return (feedstock, num_groups, list(extensions))
 
 
 def group_tree(root):
@@ -101,7 +101,7 @@ def group_tree(root):
         # TODO: Expand grouping formats
         # File-matching groups
         # Each format specified in the rules
-        for format_type, format_name_list in GROUPING_RULES.items():
+        for format_type, format_name_list in CONFIG["GROUPING_RULES"].items():
             format_groups = {}
             # Check each file for rule matching
             # Match to appropriate group (with same pre/post pattern)
@@ -130,7 +130,7 @@ def group_tree(root):
             yield [os.path.join(path, f) for f in g]
 
 
-def expand_repository_tags(input_tags, repo_rules=REPOSITORY_RULES):
+def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
     # Remove duplicates
     input_tags = set(input_tags)
     # Tags in final form

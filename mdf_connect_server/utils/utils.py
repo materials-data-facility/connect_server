@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import re
-import shutil
+import subprocess
 import time
 import urllib
 
@@ -255,7 +255,7 @@ def fetch_whitelist(auth_level):
         # Get all the members
         try:
             member_list = groups_auth.get_group_memberships(auth_level)["members"]
-        except Exception as e:
+        except Exception:
             pass
         else:
             whitelist.extend([member["identity_id"]
@@ -337,6 +337,65 @@ def make_source_id(title, test=False):
         "version": version,
         "user_id_list": user_ids
     }
+
+
+def clean_start():
+    """Reset the Connect environment to a clean state, as best as possible.
+    """
+    logger.debug("Cleaning Connect state")
+    # Auth to get Transfer client
+    creds = {
+        "app_name": "MDF Open Connect",
+        "client_id": CONFIG["API_CLIENT_ID"],
+        "client_secret": CONFIG["API_CLIENT_SECRET"],
+        "services": ["transfer"]
+    }
+    transfer_client = mdf_toolbox.confidential_login(creds)["transfer"]
+    logger.debug("Cancelling active Transfer tasks")
+    # List all Transfers active on endpoint
+    all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,
+                                                           filter_status="ACTIVE,INACTIVE",
+                                                           filter_endpoint=CONFIG["LOCAL_EP"])
+    all_ids = [task["task_id"] for task in all_tasks]
+    # Terminate active Transfers
+    cancel_res = transfer_client.endpoint_manager_cancel_tasks(all_ids,
+                                                               CONFIG["TRANSFER_CANCEL_MSG"])
+    # Wait for all Transfers to be terminated
+    if not cancel_res["done"]:
+        while not transfer_client.endpoint_manager_cancel_status(cancel_res["id"])["done"]:
+            logger.debug("Waiting for all active Transfers to cancel")
+            time.sleep(CONFIG["CANCEL_WAIT_TIME"])
+    logger.debug("Active Transfer tasks cancelled")
+
+    # Delete data, feedstock, service_data
+    logger.debug("Deleting old Connect files")
+    if os.path.exists(CONFIG["LOCAL_PATH"]):
+        lpath_res = local_admin_delete(CONFIG["LOCAL_PATH"])
+        if not lpath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        lpath_res["error"]))
+        else:
+            os.mkdir(CONFIG["LOCAL_PATH"])
+            logger.debug("Cleaned {}".format(CONFIG["LOCAL_PATH"]))
+    if os.path.exists(CONFIG["FEEDSTOCK_PATH"]):
+        fpath_res = local_admin_delete(CONFIG["FEEDSTOCK_PATH"])
+        if not fpath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        fpath_res["error"]))
+        else:
+            os.mkdir(CONFIG["FEEDSTOCK_PATH"])
+            logger.debug("Cleaned {}".format(CONFIG["FEEDSTOCK_PATH"]))
+    if os.path.exists(CONFIG["SERVICE_DATA"]):
+        spath_res = local_admin_delete(CONFIG["SERVICE_DATA"])
+        if not spath_res["success"]:
+            logger.error("Error deleting {}: {}".format(CONFIG["LOCAL_PATH"],
+                                                        spath_res["error"]))
+        else:
+            os.mkdir(CONFIG["SERVICE_DATA"])
+            logger.debug("Cleaned {}".format(CONFIG["SERVICE_DATA"]))
+
+    logger.info("Connect startup state clean complete")
+    return
 
 
 def download_data(transfer_client, data_loc, local_ep, local_path):
@@ -689,7 +748,7 @@ def cancel_submission(source_id, wait=True):
                  If False, will not wait.
                  Default True.
     Returns:
-    success (bool): True on success, False otherwise.
+    success (bool): True if the submission was successfully cancelled, False otherwise.
     stopped (bool): True if the submission is no longer operating. False otherwise.
                     The difference between success and stopped is that a submission
                     that completed previously was not successfully cancelled, but was stopped.
@@ -802,16 +861,22 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
         for cleanup in cleanup_paths:
             if os.path.exists(cleanup):
                 try:
-                    shutil.rmtree(cleanup)
+                    clean_res = local_admin_delete(cleanup)
+                    if not clean_res["success"]:
+                        raise IOError(clean_res["error"])
+                    elif not clean_res["deleted"]:
+                        logger.warning("{}: Cleanup path '{}' did not exist".format(source_id,
+                                                                                    cleanup))
                 except Exception as e:
-                    logger.warning("{}: Could not remove path '{}': {}".format(source_id,
-                                                                               cleanup, repr(e)))
+                    logger.error("{}: Could not remove path '{}': {}".format(source_id,
+                                                                             cleanup, e))
                     return {
                         "success": False,
                         "error": "Unable to clear processed data"
                     }
             else:
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
+        logger.debug("{}: File cleanup finished".format(source_id))
     # Update status to inactive
     update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
@@ -821,6 +886,72 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     return {
         "success": True
     }
+
+
+def local_admin_delete(path):
+    """Use sudo permissions to delete a path.
+    This is a separate function to isolate destructive behavior and assert sanity-checks.
+
+    Arguments:
+    path (str): The path to delete. This must be a string.
+                For safety, this must be a path inside a user's home directory.
+                Ex. "/home/[user]/[some path]"
+
+    Returns:
+    dict:
+        success (bool): True iff the path does not exist now.
+        deleted (bool): True iff the path was deleted by this function.
+                        This is more strict than success; the path must have existed
+                        before this function was called and then been removed.
+        error (str): The error message, if not successful.
+    """
+    if not isinstance(path, str):
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Path must be a string"
+        }
+    path = os.path.abspath(os.path.expanduser(path))
+    if not re.match("^/home/.+/.+", path):
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Path must be inside a user's home directory"
+        }
+    if not os.path.exists(path):
+        return {
+            "success": True,
+            "deleted": False
+        }
+
+    try:
+        if os.path.isdir(path):
+            proc_res = subprocess.run(["sudo", "rm", "-rf", path])
+        elif os.path.isfile(path):
+            proc_res = subprocess.run(["sudo", "rm", path])
+        else:
+            return {
+                "success": False,
+                "deleted": False,
+                "error": "Path must lead to a directory or file"
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Exception while deleting path: {}".format(e)
+        }
+    if proc_res.returncode == 0:
+        return {
+            "success": True,
+            "deleted": True
+        }
+    else:
+        return {
+            "success": False,
+            "deleted": False,
+            "error": "Process exited with return code {}".format(proc_res.returncode)
+        }
 
 
 def validate_status(status, code_mode=None):
@@ -908,6 +1039,7 @@ def create_status(status):
     status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
+    status["extensions"] = []
 
     status_valid = validate_status(status, "convert")
     if not status_valid["success"]:

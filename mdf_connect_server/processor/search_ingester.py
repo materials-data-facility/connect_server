@@ -8,17 +8,15 @@ from queue import Empty
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
+from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import Validator
 
-
-NUM_SUBMITTERS = 5
-SUBJECT_PATTERN = "https://materialsdatafacility.org/data/{}/{}"
 
 logger = logging.getLogger(__name__)
 
 
 def search_ingest(ingest_creds, feedstock, index, batch_size,
-                  num_submitters=NUM_SUBMITTERS, feedstock_save=None):
+                  num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:
@@ -78,7 +76,7 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
     submitters = [multiprocessing.Process(target=submit_ingests,
                                           args=(ingest_queue, error_queue, ingest_creds,
                                                 index, input_done, source_id))
-                  for i in range(NUM_SUBMITTERS)]
+                  for i in range(num_submitters)]
     # Create queue populator
     populator = multiprocessing.Process(target=populate_queue,
                                         args=(ingest_queue, val, batch_size,
@@ -135,8 +133,9 @@ def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_i
             save_loc.write("\n")
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
-            iden = SUBJECT_PATTERN.format(entry["mdf"].get("parent_id", entry["mdf"]["mdf_id"]),
-                                          entry["mdf"]["mdf_id"])
+            iden = (CONFIG["SEARCH_SUBJECT_PATTERN"]
+                    .format(entry["mdf"].get("parent_id", entry["mdf"]["mdf_id"]),
+                            entry["mdf"]["mdf_id"]))
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size
@@ -236,10 +235,10 @@ def update_search_entry(ingest_creds, index, updated_entry,
 
     if not subject:
         try:
-            subject = SUBJECT_PATTERN.format(updated_entry["mdf"].get(
-                                                                   "parent_id",
-                                                                   updated_entry["mdf"]["mdf_id"]),
-                                             updated_entry["mdf"]["mdf_id"])
+            subject = (CONFIG["SEARCH_SUBJECT_PATTERN"]
+                       .format(updated_entry["mdf"].get("parent_id",
+                                                        updated_entry["mdf"]["mdf_id"]),
+                               updated_entry["mdf"]["mdf_id"]))
         except KeyError as e:
             return {
                 "success": False,
