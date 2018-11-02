@@ -508,11 +508,14 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
                                 inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
                 for event in transfer:
                     if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}".format(event["code"],
-                                                                        event["description"]))
+                        logger.info("Transfer is_error: {} - {}"
+                                    .format(event.get("code", "No code found"),
+                                            event.get("description", "No description found")))
                         yield {
                             "success": False,
-                            "error": "{} - {}".format(event["code"], event["description"])
+                            "error": "{} - {}".format(event.get("code", "No code found"),
+                                                      event.get("description",
+                                                                "No description found"))
                         }
                 if not event["success"]:
                     raise ValueError(event)
@@ -605,7 +608,8 @@ def backup_data(transfer_client, local_ep, local_path, backup_ep, backup_path):
         if not event["success"]:
             logger.debug(event)
     if not event["success"]:
-        raise ValueError("{}: {}".format(event["code"], event["description"]))
+        raise ValueError("{}: {}".format(event.get("code", "No code found"),
+                                         event.get("description", "No description found")))
 
     return {
         "success": event["success"]
@@ -639,7 +643,8 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         for event in transfer:
             pass
         if not event["success"]:
-            raise ValueError(event["code"]+": "+event["description"])
+            raise ValueError("{}: {}".format(event.get("code", "No code found"),
+                                             event.get("description", "No description found")))
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 

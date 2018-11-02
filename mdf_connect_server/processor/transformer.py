@@ -128,8 +128,10 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                 record = toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
-        logger.warning("{}: Transformer error: {}".format(source_id, str(e)))
-
+        logger.error("{}: Transformer error: {}".format(source_id, str(e)))
+    # Log all exceptions!
+    except BaseException as e:
+        logger.error("{}: Transformer BaseException: {}".format(source_id, str(e)))
     return
 
 

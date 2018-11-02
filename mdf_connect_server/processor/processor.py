@@ -590,7 +590,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 if not event["success"]:
                     logger.debug(event)
             if not event["success"]:
-                raise ValueError(event["code"]+": "+event["description"])
+                raise ValueError(event.get("code", "No code")
+                                 + ": " + event.get("description", "No description"))
         except Exception as e:
             utils.update_status(source_id, "ingest_search", "R",
                                 text="Feedstock backup failed: {}".format(str(e)),
