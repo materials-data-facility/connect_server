@@ -172,7 +172,7 @@ def parse_crystal_structure(group, params=None):
         material["composition"] = pmg_s.formula.replace(" ", "")
         # Parse crystal_structure block
         crystal_structure["space_group_number"] = pmg_s.get_space_group_info()[1]
-        crystal_structure["number_of_atoms"] = int(pmg_s.composition.num_atoms)
+        crystal_structure["number_of_atoms"] = float(pmg_s.composition.num_atoms)
         crystal_structure["volume"] = float(pmg_s.volume)
         crystal_structure["stoichiometry"] = pmg_s.composition.anonymized_formula
 
@@ -685,24 +685,27 @@ def _follow_path(json_data, json_path):
 
 def _translate_pif(pif):
     """Translate the dict form of a PIF into an MDF record."""
+    # block: { PIF field: (MDF field, translation function) }
     translations = {
         "dft": {
-            "Converged": "converged",
-            "XC_Functional": "exchange_correlation_functional",
-            "Cutoff_Energy_eV": "cutoff_energy"
+            "Converged": ("converged", bool),
+            "XC_Functional": ("exchange_correlation_functional", str),
+            "Cutoff_Energy_eV": ("cutoff_energy", float)
         },
         "crystal_structure": {
-            "Space_group_number": "space_group_number",
-            "Number_of_atoms_in_unit_cell": "number_of_atoms",
-            "Unit_cell_volume_AA_3": "volume"
+            "Space_group_number": ("space_group_number", int),
+            "Number_of_atoms_in_unit_cell": ("number_of_atoms", float),
+            "Unit_cell_volume_AA_3": ("volume", float)
         }
     }
     record = {}
     for block, mapping in translations.items():
         new_block = {}
-        for pif_field, mdf_field in mapping.items():
+        for pif_field, mdf_field_info in mapping.items():
+            mdf_field = mdf_field_info[0]
+            translator = mdf_field_info[1]
             if pif_field in pif.keys():
-                new_block[mdf_field] = pif[pif_field]
+                new_block[mdf_field] = translator(pif[pif_field])
         if new_block:
             record[block] = new_block
     return record
