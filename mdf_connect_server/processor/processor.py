@@ -169,7 +169,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
                 logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
                 raise ValueError("Internal permissions error.")
             # Download from user
-            for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", {}),
+            for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
                                               CONFIG["LOCAL_EP"], local_path):
                 if not dl_res["success"]:
                     msg = "During data download: " + dl_res["error"]
@@ -590,7 +590,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 if not event["success"]:
                     logger.debug(event)
             if not event["success"]:
-                raise ValueError(event["code"]+": "+event["description"])
+                raise ValueError(event.get("code", "No code")
+                                 + ": " + event.get("description", "No description"))
         except Exception as e:
             utils.update_status(source_id, "ingest_search", "R",
                                 text="Feedstock backup failed: {}".format(str(e)),

@@ -466,10 +466,19 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             loc_info = urllib.parse.urlparse(location)
         # Google Drive protocol into globus:// form
         elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
-            # Don't use os.path.join because path starts with /
+            # Correct form is "google:///path/file.dat"
+            # (three slashes - two for scheme end, one for path start)
+            # But if a user uses two slashes, the netloc will incorrectly be the top dir
+            # (netloc="path", path="/file.dat")
+            # Otherwise netloc is nothing
+            if loc_info.netloc:
+                gpath = "/" + loc_info.netloc + loc_info.path
+            else:
+                gpath = loc_info.path
+            # Don't use os.path.join because gpath starts with /
             # GDRIVE_ROOT does not end in / to make compatible
             location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
-                                                CONFIG["GDRIVE_ROOT"], loc_info.path)
+                                                CONFIG["GDRIVE_ROOT"], gpath)
             loc_info = urllib.parse.urlparse(location)
 
         # Globus Transfer
@@ -477,6 +486,8 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             # Check that data not already in place
             if (loc_info.netloc != local_ep
                     and loc_info.path != (local_path + (filename if filename else ""))):
+                # This check now in quick_transfer and more robust
+                '''
                 # If there is a dir mismatch (one has trailing slash, other does not)
                 # has_slash XOR has_slash
                 if (loc_info.path[-1] == "/") != (local_path[-1] == "/"):
@@ -488,19 +499,23 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
                     transfer_path = os.path.join(local_path, f_name)
                 else:
                     transfer_path = local_path
+                '''
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
                                 transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, transfer_path)],
+                                [(loc_info.path, local_path)],
                                 interval=CONFIG["TRANSFER_PING_INTERVAL"],
                                 inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
                 for event in transfer:
                     if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}".format(event["code"],
-                                                                        event["description"]))
+                        logger.info("Transfer is_error: {} - {}"
+                                    .format(event.get("code", "No code found"),
+                                            event.get("description", "No description found")))
                         yield {
                             "success": False,
-                            "error": "{} - {}".format(event["code"], event["description"])
+                            "error": "{} - {}".format(event.get("code", "No code found"),
+                                                      event.get("description",
+                                                                "No description found"))
                         }
                 if not event["success"]:
                     raise ValueError(event)
@@ -593,7 +608,8 @@ def backup_data(transfer_client, local_ep, local_path, backup_ep, backup_path):
         if not event["success"]:
             logger.debug(event)
     if not event["success"]:
-        raise ValueError("{}: {}".format(event["code"], event["description"]))
+        raise ValueError("{}: {}".format(event.get("code", "No code found"),
+                                         event.get("description", "No description found")))
 
     return {
         "success": event["success"]
@@ -627,7 +643,8 @@ def globus_publish_data(publish_client, transfer_client, metadata, collection,
         for event in transfer:
             pass
         if not event["success"]:
-            raise ValueError(event["code"]+": "+event["description"])
+            raise ValueError("{}: {}".format(event.get("code", "No code found"),
+                                             event.get("description", "No description found")))
     # Complete submission
     fin_res = publish_client.complete_submission(submission_id)
 
