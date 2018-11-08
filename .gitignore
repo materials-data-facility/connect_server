@@ -5,11 +5,11 @@
 *.ipynb_checkpoints
 Untitled*.ipynb
 *.log
+*.out
 
 *.cache*
 *keys.*
 *temp/*
-*nohup.out
 
 */build/*
 */dist/*

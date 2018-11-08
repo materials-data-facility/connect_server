@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 import json
 import logging
@@ -1153,9 +1154,6 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
 
-    pid = os.getpid()
-    status["pid"] = pid
-
     status_valid = validate_status(status)
     if not status_valid["success"]:
         if except_on_fail:
@@ -1174,14 +1172,15 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
                 "error": repr(e)
             }
     else:
-        logger.info("[{}]{}: {}: {}, {}, {}".format(pid, source_id, step, code, text, link))
+        logger.info("[{}]{}: {}: {}, {}, {}".format(status["pid"], source_id, step, code,
+                                                    text, link))
         return {
             "success": True,
             "status": status
             }
 
 
-def modify_status_entry(source_id, modifications):
+def modify_status_entry(source_id, modifications, except_on_fail=False):
     """Change the status entry of a given submission.
     This is a generalized (and more powerful) version of update_status.
     This function should be used carefully, as most fields in the status DB should never change.
@@ -1189,6 +1188,8 @@ def modify_status_entry(source_id, modifications):
     Arguments:
     source_id (str): The source_id of the submission.
     modifications (dict): The keys and values to update.
+    except_on_fail (bool): If True, will raise an Exception if the status cannot be updated.
+                           If False, will return a dict as normal, with success=False.
 
     Returns:
     dict: success (bool): Success state
@@ -1197,30 +1198,39 @@ def modify_status_entry(source_id, modifications):
     """
     tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
     if not tbl_res["success"]:
+        if except_on_fail:
+            raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
     old_status = read_status(source_id)
     if not old_status["success"]:
+        if except_on_fail:
+            raise ValueError(old_status["error"])
         return old_status
     status = old_status["status"]
 
     # Overwrite old status
-    status = mdf_toolbox.dict_merge(modifications, status)
+    status = mdf_toolbox.dict_merge(deepcopy(modifications), status)
 
     status_valid = validate_status(status)
     if not status_valid["success"]:
+        if except_on_fail:
+            raise ValueError(status_valid["error"])
         return status_valid
 
     try:
         # put_item will overwrite
         table.put_item(Item=status)
     except Exception as e:
+        if except_on_fail:
+            raise
         return {
             "success": False,
             "error": repr(e)
             }
     else:
+        logger.info("[{}]{}: Modified: '{}'".format(status["pid"], source_id, modifications))
         return {
             "success": True,
             "status": status
