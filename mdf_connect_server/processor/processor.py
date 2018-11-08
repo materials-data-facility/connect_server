@@ -60,12 +60,12 @@ def processor():
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
                 # Convert processes should not be cancelled if they finished
-                # Status PID == -1 is sentinel value for convert finished
+                # 'converted' is sentinel value for convert finished
                 logger.info("Dead: {} ({})"
                             .format(dead_proc.name,
-                                    utils.read_status(dead_proc.name[1:])["status"]["pid"] == -1))
+                                    utils.read_status(dead_proc.name[1:])["status"]["converted"]))
                 if (dead_proc.name[0] == "C"
-                        and utils.read_status(dead_proc.name[1:])["status"]["pid"] == -1):
+                        and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
                     active_processes.remove(dead_proc)
                     logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
                 else:
@@ -87,8 +87,12 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     Modifies the status database as steps are completed.
 
     Arguments:
+    submission_type (str): "convert" (used for error-checking).
     metadata (dict): The JSON passed to /convert.
     source_id (str): The source name of this submission.
+    test (bool): If the submission is a test submission.
+    access_token (str): The Globus Auth access token for the submitting user.
+    user_id (str): The Globus ID of the submitting user.
     """
     # TODO: Better check?
     assert submission_type == "convert"
@@ -182,6 +186,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
                                         except_on_fail=True)
             if not dl_res["success"]:
                 raise ValueError(dl_res["error"])
+        # Always remove ACL to MDF storage
         finally:
             acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
                                                                    acl_res["access_id"])
@@ -310,8 +315,8 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             utils.complete_submission(source_id)
             return
 
-    # Set sentinel value for submission PID
-    utils.modify_status_entry(source_id, {"pid": -1}, except_on_fail=True)
+    # Set sentinel for convert finished
+    utils.modify_status_entry(source_id, {"converted": True}, except_on_fail=True)
 
     return {
         "success": True,
@@ -321,7 +326,18 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
 
 def ingest_driver(submission_type, feedstock_location, source_id, services, data_loc,
                   service_loc, access_token, user_id):
-    """Finalize and ingest feedstock."""
+    """Finalize and ingest feedstock.
+
+    Arguments:
+    submission_type (str): "ingest" (used for error-checking).
+    feedstock_location (str or list of str): The location(s) of the MDF-format feedstock.
+    source_id (str): The source name of this submission.
+    services (dict): The optional services and configurations requested.
+    data_loc (str or list of str): The location of the data.
+    service_loc (str or list of str): The location of service integration data.
+    access_token (str): The Globus Auth access token for the submitting user.
+    user_id (str): The Globus ID of the submitting user.
+    """
     # TODO: Better check?
     assert submission_type == "ingest"
     utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
