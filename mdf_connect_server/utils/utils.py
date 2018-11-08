@@ -487,20 +487,6 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             # Check that data not already in place
             if (loc_info.netloc != local_ep
                     and loc_info.path != (local_path + (filename if filename else ""))):
-                # This check now in quick_transfer and more robust
-                '''
-                # If there is a dir mismatch (one has trailing slash, other does not)
-                # has_slash XOR has_slash
-                if (loc_info.path[-1] == "/") != (local_path[-1] == "/"):
-                    # If Transferring file to dir, add file to dir
-                    # Otherwise error - cannot transfer dir into file
-                    f_name = filename or os.path.basename(loc_info.path)
-                    if not f_name:
-                        raise ValueError("Cannot back up a directory into a file")
-                    transfer_path = os.path.join(local_path, f_name)
-                else:
-                    transfer_path = local_path
-                '''
                 # Transfer locally
                 transfer = mdf_toolbox.custom_transfer(
                                 transfer_client, loc_info.netloc, local_ep,
@@ -1058,6 +1044,7 @@ def create_status(status):
     status["cancelled"] = False
     status["pid"] = os.getpid()
     status["extensions"] = []
+    status["converted"] = False
 
     status_valid = validate_status(status, "convert")
     if not status_valid["success"]:
