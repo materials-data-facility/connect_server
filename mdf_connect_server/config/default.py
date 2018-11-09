@@ -25,6 +25,7 @@ DEFAULT = {
                             " inconvenience."),
 
     "SEARCH_BATCH_SIZE": 100,
+    "SEARCH_RETRIES": 3,
 
     "PUBLISH_COLLECTIONS": {
         "21": {

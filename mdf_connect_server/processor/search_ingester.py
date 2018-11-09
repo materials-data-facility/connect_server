@@ -54,7 +54,21 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
                 "q": "mdf.source_id:" + old_source_id,
                 "advanced": True
                 }
-            del_res = ingest_client.delete_by_query(index, del_q)
+            # Try deleting from Search until success or try limit reached
+            # Necessary because Search will 5xx on large deletions,
+            # which "may or may not have succeeded"
+            i = 0
+            while True:
+                try:
+                    del_res = ingest_client.delete_by_query(index, del_q)
+                    break
+                except GlobusAPIError as e:
+                    if i < CONFIG["SEARCH_RETRIES"]:
+                        logger.warning("{}: Retrying Search delete error: {}"
+                                       .format(source_id, repr(e)))
+                        i += 1
+                    else:
+                        raise
             if del_res["num_subjects_deleted"]:
                 logger.info(("{}: {} Search entries cleared from "
                              "{}").format(source_id, del_res["num_subjects_deleted"],
@@ -171,12 +185,19 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
                 continue
         # Ingest, with error handling
         try:
-            # Allow one retry
-            try:
-                res = ingest_client.ingest(index, ingestable)
-            except Exception as e:
-                logger.error("{}: Retrying Search error: {}".format(source_id, repr(e)))
-                res = ingest_client.ingest(index, ingestable)
+            # Allow retries
+            i = 0
+            while True:
+                try:
+                    res = ingest_client.ingest(index, ingestable)
+                    break
+                except GlobusAPIError as e:
+                    if i < CONFIG["SEARCH_RETRIES"]:
+                        logger.warning("{}: Retrying Search ingest error: {}"
+                                       .format(source_id, repr(e)))
+                        i += 1
+                    else:
+                        raise
             if not res["success"]:
                 raise ValueError("Ingest failed: " + str(res))
             elif res["num_documents_ingested"] <= 0:
@@ -184,7 +205,7 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
             else:
                 logger.debug("{}: Search batch ingested".format(source_id))
         except GlobusAPIError as e:
-            logger.error("{}: Search Globus API Error: {}".format(source_id, e.raw_json))
+            logger.error("{}: Search ingest error: {}".format(source_id, e.raw_json))
             # logger.debug('Stack trace:', exc_info=True)
             # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
@@ -193,7 +214,7 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
             }
             error_queue.put(json.dumps(err))
         except Exception as e:
-            logger.error("{}: Generic Search error: {}".format(source_id, repr(e)))
+            logger.error("{}: Generic ingest error: {}".format(source_id, repr(e)))
             # logger.debug('Stack trace:', exc_info=True)
             # logger.debug("Full ingestable:\n{}\n".format(ingestable))
             err = {
