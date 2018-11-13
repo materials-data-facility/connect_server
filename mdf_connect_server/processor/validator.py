@@ -112,7 +112,7 @@ class Validator:
         except (ValueError, json.JSONDecodeError) as e:
             return {
                 "success": False,
-                "error": "Invalid JSON: {}".format(str(e))
+                "error": "Invalid JSON: {}".format(str(e)),
                 "details": repr(e)
                 }
 
@@ -255,7 +255,7 @@ class Validator:
         except (ValueError, json.JSONDecodeError) as e:
             return {
                 "success": False,
-                "error": "Invalid JSON: {}".format(str(e))
+                "error": "Invalid JSON: {}".format(str(e)),
                 "details": repr(e)
                 }
 
