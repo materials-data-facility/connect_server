@@ -69,6 +69,19 @@ def accept_convert():
             "success": False,
             "error": "POST data empty or not JSON"
             }), 400)
+    # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
+    try:
+        json.dumps(metadata, allow_nan=False)
+    except ValueError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(str(e))
+            }), 400)
+    except json.JSONDecodeError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(repr(e))
+            }), 400)
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
@@ -246,6 +259,19 @@ def accept_ingest():
         return (jsonify({
             "success": False,
             "error": "POST data empty or not JSON"
+            }), 400)
+    # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
+    try:
+        json.dumps(metadata, allow_nan=False)
+    except ValueError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(str(e))
+            }), 400)
+    except json.JSONDecodeError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(repr(e))
             }), 400)
 
     # Validate input JSON
