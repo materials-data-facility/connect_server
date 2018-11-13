@@ -399,7 +399,8 @@ def clean_start():
     return
 
 
-def download_data(transfer_client, data_loc, local_ep, local_path):
+def download_data(transfer_client, data_loc, local_ep, local_path,
+                  admin_client=None, user_id=None):
     """Download data from a remote host to the configured machine.
 
     Arguments:
@@ -408,10 +409,21 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
+    admin_client (TransferClient): An authenticated TransferClient with Access Manager
+                                   permissions on the local endpoint/GDrive.
+                                   Optional if permission changes are not needed.
+    user_id (str): The ID of the identity authenticated to the transfer_client.
+                   Used for permission changes. Optional if permission changes are not needed.
 
     Returns:
     dict: success (bool): True on success, False on failure.
     """
+    # admin_client and user_id must both be supplied if one is supplied
+    # Effectively if (admin_client XOR user_id)
+    if ((admin_client is not None or user_id is not None)
+            and not (admin_client is not None and user_id is not None)):
+        raise ValueError("admin_client and user_id must both be supplied if one is supplied")
+    tc = None  # Correct TransferClient
     filename = None
     # If the local_path is a file and not a directory, use the directory
     if local_path[-1] != "/":
@@ -465,6 +477,9 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             # Make new location
             location = "globus://{}{}".format(ep_id, path)
             loc_info = urllib.parse.urlparse(location)
+            # Use user's TransferClient
+            tc = transfer_client
+
         # Google Drive protocol into globus:// form
         elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
             # Correct form is "google:///path/file.dat"
@@ -481,31 +496,74 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
                                                 CONFIG["GDRIVE_ROOT"], gpath)
             loc_info = urllib.parse.urlparse(location)
+            # Use admin's TransferClient if present
+            tc = admin_client or transfer_client
+
+        else:
+            # Use default (user's) TransferClient
+            tc = transfer_client
 
         # Globus Transfer
         if loc_info.scheme == "globus":
             # Check that data not already in place
             if (loc_info.netloc != local_ep
                     and loc_info.path != (local_path + (filename if filename else ""))):
-                # Transfer locally
-                transfer = mdf_toolbox.custom_transfer(
-                                transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, local_path)],
-                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-                for event in transfer:
-                    if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}"
-                                    .format(event.get("code", "No code found"),
-                                            event.get("description", "No description found")))
-                        yield {
-                            "success": False,
-                            "error": "{} - {}".format(event.get("code", "No code found"),
-                                                      event.get("description",
-                                                                "No description found"))
+                try:
+                    if admin_client is not None:
+                        # Edit ACL to allow pull
+                        acl_rule = {
+                            "DATA_TYPE": "access",
+                            "principal_type": "identity",
+                            "principal": user_id,
+                            "path": local_path,
+                            "permissions": "rw"
                         }
-                if not event["success"]:
-                    raise ValueError(event)
+                        try:
+                            acl_res = admin_client.add_endpoint_acl_rule(local_ep, acl_rule).data
+                        except Exception as e:
+                            logger.error("ACL rule creation exception for '{}': {}"
+                                         .format(acl_rule, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_res.get("code") == "Created":
+                            logger.error("Unable to create ACL rule '{}': {}"
+                                         .format(acl_rule, acl_res))
+                            raise ValueError("Internal permissions error.")
+                    else:
+                        acl_res = None
+
+                    # Transfer locally
+                    transfer = mdf_toolbox.custom_transfer(
+                                    tc, loc_info.netloc, local_ep,
+                                    [(loc_info.path, local_path)],
+                                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                    for event in transfer:
+                        if not event["success"]:
+                            logger.info("Transfer is_error: {} - {}"
+                                        .format(event.get("code", "No code found"),
+                                                event.get("description", "No description found")))
+                            yield {
+                                "success": False,
+                                "error": "{} - {}".format(event.get("code", "No code found"),
+                                                          event.get("description",
+                                                                    "No description found"))
+                            }
+                    if not event["success"]:
+                        logger.error("Transfer failed: {}".format(event))
+                        raise ValueError(event)
+                finally:
+                    if acl_res is not None:
+                        try:
+                            acl_del = admin_client.delete_endpoint_acl_rule(
+                                                        local_ep, acl_res["access_id"])
+                        except Exception as e:
+                            logger.critical("ACL rule deletion exception for '{}': {}"
+                                            .format(acl_res, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_del.get("code") == "Deleted":
+                            logger.critical("Unable to delete ACL rule '{}': {}"
+                                            .format(acl_res, acl_del))
+                            raise ValueError("Internal permissions error.")
         # HTTP(S)
         elif loc_info.scheme.startswith("http"):
             # Get default filename and extension

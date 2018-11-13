@@ -164,35 +164,16 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
     try:
-        try:
-            # Edit ACL to allow pull
-            acl_rule = {
-                "DATA_TYPE": "access",
-                "principal_type": "identity",
-                "principal": user_id,
-                "path": local_path,
-                "permissions": "rw"
-            }
-            acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
-            if not acl_res.get("code") == "Created":
-                logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-                raise ValueError("Internal permissions error.")
-            # Download from user
-            for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
-                                              CONFIG["LOCAL_EP"], local_path):
-                if not dl_res["success"]:
-                    msg = "During data download: " + dl_res["error"]
-                    utils.update_status(source_id, "convert_download", "T", text=msg,
-                                        except_on_fail=True)
+        # Download from user
+        for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
+                                          CONFIG["LOCAL_EP"], local_path,
+                                          admin_client=mdf_transfer_client, user_id=user_id):
             if not dl_res["success"]:
-                raise ValueError(dl_res["error"])
-        # Always remove ACL to MDF storage
-        finally:
-            acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                   acl_res["access_id"])
-            if not acl_del.get("code") == "Deleted":
-                logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
-                raise ValueError("Internal permissions error.")
+                msg = "During data download: " + dl_res["error"]
+                utils.update_status(source_id, "convert_download", "T", text=msg,
+                                    except_on_fail=True)
+        if not dl_res["success"]:
+            raise ValueError(dl_res["error"])
 
         # Backup to MDF
         if not test:
@@ -406,28 +387,12 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
 
     utils.update_status(source_id, "ingest_download", "P", except_on_fail=True)
     try:
-        # Edit ACL to allow pull
-        acl_rule = {
-            "DATA_TYPE": "access",
-            "principal_type": "identity",
-            "principal": user_id,
-            "path": os.path.dirname(base_feed_path) + "/",
-            "permissions": "rw"
-        }
-        acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
-        if not acl_res.get("code") == "Created":
-            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-            raise ValueError("Internal permissions error.")
         for dl_res in utils.download_data(user_transfer_client, feedstock_location,
-                                          CONFIG["LOCAL_EP"], base_feed_path):
+                                          CONFIG["LOCAL_EP"], base_feed_path,
+                                          admin_client=mdf_transfer_client, user_id=user_id):
             if not dl_res["success"]:
                 utils.update_status(source_id, "ingest_download", "T",
                                     text=dl_res["error"], except_on_fail=True)
-        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                               acl_res["access_id"])
-        if not acl_del.get("code") == "Deleted":
-            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
-            raise ValueError("Internal permissions error.")
     except Exception as e:
         utils.update_status(source_id, "ingest_download", "F", text=repr(e),
                             except_on_fail=True)
@@ -466,30 +431,13 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 data_ep = CONFIG["LOCAL_EP"]
                 data_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
                 try:
-                    # Edit ACL to allow pull
-                    acl_rule = {
-                        "DATA_TYPE": "access",
-                        "principal_type": "identity",
-                        "principal": user_id,
-                        "path": data_path,
-                        "permissions": "rw"
-                    }
-                    acl_res = mdf_transfer_client.add_endpoint_acl_rule(data_ep, acl_rule).data
-                    if not acl_res.get("code") == "Created":
-                        logger.error("{}: Unable to create ACL rule: '{}'".format(source_id,
-                                                                                  acl_res))
-                        raise ValueError("Internal permissions error.")
                     for dl_res in utils.download_data(user_transfer_client, data_loc,
-                                                      data_ep, data_path):
+                                                      data_ep, data_path,
+                                                      admin_client=mdf_transfer_client,
+                                                      user_id=user_id):
                         if not dl_res["success"]:
                             utils.update_status(source_id, "ingest_download", "T",
                                                 text=dl_res["error"], except_on_fail=True)
-                    acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                           acl_res["access_id"])
-                    if not acl_del.get("code") == "Deleted":
-                        logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
-                                                                                     acl_del))
-                        raise ValueError("Internal permissions error.")
                 except Exception as e:
                     utils.update_status(source_id, "ingest_download", "F", text=repr(e),
                                         except_on_fail=True)
@@ -524,30 +472,13 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             # Will not transfer anything if already in place
             service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
             try:
-                # Edit ACL to allow pull
-                acl_rule = {
-                    "DATA_TYPE": "access",
-                    "principal_type": "identity",
-                    "principal": user_id,
-                    "path": service_data,
-                    "permissions": "rw"
-                }
-                acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                    acl_rule).data
-                if not acl_res.get("code") == "Created":
-                    logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-                    raise ValueError("Internal permissions error.")
                 for dl_res in utils.download_data(user_transfer_client, service_loc,
-                                                  CONFIG["LOCAL_EP"], service_data):
+                                                  CONFIG["LOCAL_EP"], service_data,
+                                                  admin_client=mdf_transfer_client,
+                                                  user_id=user_id):
                     if not dl_res["success"]:
                         utils.update_status(source_id, "ingest_integration", "T",
                                             text=dl_res["error"], except_on_fail=True)
-                acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                       acl_res["access_id"])
-                if not acl_del.get("code") == "Deleted":
-                    logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
-                                                                                 acl_del))
-                    raise ValueError("Internal permissions error.")
             except Exception as e:
                 utils.update_status(source_id, "ingest_integration", "F", text=repr(e),
                                     except_on_fail=True)
