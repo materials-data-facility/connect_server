@@ -297,6 +297,8 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             "test": test
         }
         headers = {}
+        # Always regen token, minor overhead
+        connect_authorizer.handle_missing_authorization()
         connect_authorizer.set_authorization_header(headers)
         ingest_res = requests.post(CONFIG["INGEST_URL"],
                                    json=ingest_args,
