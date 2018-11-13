@@ -75,12 +75,12 @@ def accept_convert():
     except ValueError as e:
         return (jsonify({
             "success": False,
-            "error": "{}, Submission must be valid JSON".format(str(e))
+            "error": "{}, submission must be valid JSON".format(str(e))
             }), 400)
     except json.JSONDecodeError as e:
         return (jsonify({
             "success": False,
-            "error": "{}, Submission must be valid JSON".format(repr(e))
+            "error": "{}, submission must be valid JSON".format(repr(e))
             }), 400)
 
     # Validate input JSON
