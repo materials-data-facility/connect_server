@@ -139,7 +139,7 @@ def accept_convert():
         metadata["mdf"] = {}
     metadata["mdf"]["source_id"] = source_id
     metadata["mdf"]["source_name"] = source_name
-    metadata["mdf"]["version"] = source_id_info["version"]
+    metadata["mdf"]["version"] = source_id_info["search_version"]
     if not metadata["mdf"].get("acl"):
         metadata["mdf"]["acl"] = ["public"]
 
@@ -306,10 +306,20 @@ def accept_ingest():
     new_source_info = utils.make_source_id(source_name or title, test=test)
     new_source_id = new_source_info["source_id"]
     new_status_info = utils.read_status(new_source_id)
-    # "old" source_id for current/previous submission
-    # Found by decrementing new version, to a minimum of 1
-    old_source_id = "{}_v{}".format(new_source_info["source_name"],
-                                    max(new_source_info["version"] - 1, 1))
+    # Get "old" source_id for current/previous submission
+    scan_res = utils.scan_status(fields="source_id",
+                                 filters=[("source_id", "^", new_source_info["source_name"]),
+                                          ("source_id", "!=", new_source_id)])
+    if not scan_res["success"]:
+        return (jsonify({
+            "success": False,
+            "error": "Unable to scan status database: {}".format(scan_res["error"])
+        }), 500)
+    # max() works exactly the right way on strings for this case
+    if scan_res["results"]:
+        old_source_id = max([sub["source_id"] for sub in scan_res["results"]])
+    else:
+        old_source_id = ""
 
     # Submissions from Connect will have status entries, user submission will not
     if CONFIG["API_CLIENT_ID"] in identities:
