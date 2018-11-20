@@ -127,7 +127,8 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
                             except_on_fail=True)
         utils.complete_submission(source_id)
         return
-    for old_source_id in scan_res["results"]:
+    for old_source in scan_res["results"]:
+        old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
             utils.update_status(source_id, "convert_start", "F",
@@ -355,7 +356,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                             except_on_fail=True)
         utils.complete_submission(source_id)
         return
-    for old_source_id in scan_res["results"]:
+    for old_source in scan_res["results"]:
+        old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
             utils.update_status(source_id, "ingest_start", "F",

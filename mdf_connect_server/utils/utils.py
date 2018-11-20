@@ -431,7 +431,7 @@ def clean_start():
     # Auth to get Transfer client
     transfer_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["search_ingest"]}))["transfer"]
+                                               {"services": ["transfer"]}))["transfer"]
     logger.debug("Cancelling active Transfer tasks")
     # List all Transfers active on endpoint
     all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,
