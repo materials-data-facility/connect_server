@@ -124,8 +124,14 @@ def accept_convert():
     test = metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
 
     sub_title = metadata["dc"]["titles"][0]["title"]
-    source_id_info = utils.make_source_id(
-                            metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+    try:
+        source_id_info = utils.make_source_id(
+                                metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+        }), 500)
     source_id = source_id_info["source_id"]
     source_name = source_id_info["source_name"]
     if (len(source_id_info["user_id_list"]) > 0
@@ -303,7 +309,13 @@ def accept_ingest():
             "error": "Either title or source_name is required"
             }), 400)
     # "new" source_id for new submissions
-    new_source_info = utils.make_source_id(source_name or title, test=test)
+    try:
+        new_source_info = utils.make_source_id(source_name or title, test=test)
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+        }), 500)
     new_source_id = new_source_info["source_id"]
     new_status_info = utils.read_status(new_source_id)
     # Get "old" source_id for current/previous submission
@@ -395,7 +407,7 @@ def accept_ingest():
             "user_id": user_id,
             "user_email": email,
             "test": test,
-            "original_metadata": json.dumps(md_copy)
+            "original_submission": json.dumps(md_copy)
             }
         try:
             status_res = utils.create_status(status_info)

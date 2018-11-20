@@ -1285,7 +1285,9 @@ def scan_status(fields=None, filters=None):
         }
 
     # Make scan arguments
-    scan_args = {}
+    scan_args = {
+        "ConsistentRead": True
+    }
     if proj_exp is not None:
         scan_args["ProjectionExpression"] = proj_exp
     if filter_exps is not None:
