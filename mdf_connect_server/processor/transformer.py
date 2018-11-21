@@ -284,6 +284,7 @@ def parse_json(group, params=None):
         parsers (dict):
             json (dict):
                 mapping (dict): The mapping of mdf_fields: json_fields
+                na_values (list of str): Values to treat as N/A. Default None.
 
     Returns:
     dict: The record(s) parsed.
@@ -291,6 +292,7 @@ def parse_json(group, params=None):
     try:
         mapping = params["parsers"]["json"]["mapping"]
         source_name = params["dataset"]["mdf"]["source_name"]
+        na_values = params["parsers"]["json"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -301,7 +303,7 @@ def parse_json(group, params=None):
                 file_json = json.load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name))
+        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
     return records
 
 
@@ -332,7 +334,7 @@ def parse_csv(group, params=None):
     for file_path in group:
         try:
             df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","),
-                             na_values=NA_VALUES)
+                             na_values=csv_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
         records.extend(_parse_pandas(df, mapping, source_name))
@@ -356,6 +358,7 @@ def parse_yaml(group, params=None):
     try:
         mapping = params["parsers"]["yaml"]["mapping"]
         source_name = params["dataset"]["mdf"]["source_name"]
+        na_values = params["parsers"]["yaml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -366,7 +369,7 @@ def parse_yaml(group, params=None):
                 file_json = yaml.safe_load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name))
+        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
     return records
 
 
@@ -387,6 +390,7 @@ def parse_xml(group, params=None):
     try:
         mapping = params["parsers"]["xml"]["mapping"]
         source_name = params["dataset"]["mdf"]["source_name"]
+        na_values = params["parsers"]["xml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -397,7 +401,7 @@ def parse_xml(group, params=None):
                 file_json = xmltodict.parse(f.read())
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name))
+        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
     return records
 
 
@@ -426,7 +430,7 @@ def parse_excel(group, params=None):
     records = []
     for file_path in group:
         try:
-            df = pd.read_excel(file_path, na_values=NA_VALUES)
+            df = pd.read_excel(file_path, na_values=excel_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
         records.extend(_parse_pandas(df, mapping, source_name))
@@ -619,11 +623,15 @@ def _parse_pandas(df, mapping, source_name):
     return records
 
 
-def _parse_json(file_json, mapping, source_name):
+def _parse_json(file_json, mapping, source_name, na_values=None):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
         file_json = [file_json]
+    if na_values is None:
+        na_values = []
+    elif not isinstance(na_values, list):
+        na_values = [na_values]
 
     records = []
     for data in file_json:
@@ -637,8 +645,8 @@ def _parse_json(file_json, mapping, source_name):
                 value = _follow_path(data, json_path)
             except KeyError:
                 value = None
-            # Only add value if value exists
-            if value is not None:
+            # Only add value if value exists and is not N/A
+            if value is not None and value not in na_values:
                 fields = mdf_path.split(".")
                 last_field = fields.pop()
                 current_field = record
