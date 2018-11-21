@@ -52,6 +52,7 @@ DEFAULT = {
     "API_CLIENT_ID": "c17f27bb-f200-486a-b785-2a25e82af505",
     "API_SCOPE": "https://auth.globus.org/scopes/c17f27bb-f200-486a-b785-2a25e82af505/connect",
     "API_SCOPE_ID": "mdf_dataset_submission",
+    "TRANSFER_SCOPE": "urn:globus:auth:scope:transfer.api.globus.org:all",
 
     "GDRIVE_ROOT": "/Shared With Me",
 

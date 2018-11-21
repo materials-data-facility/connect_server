@@ -20,23 +20,27 @@ def test_fetch_whitelist():
 def test_make_source_id():
     # Standard usage
     correct1 = {
-        "source_id": "foo_bar_study_v1",
-        "source_name": "foo_bar_study",
-        "version": 1,
+        "source_id": "foo_bar_v123_study_v1-1",
+        "source_name": "foo_bar_v123_study",
+        "search_version": 1,
+        "submission_version": 1,
         "user_id_list": set()
     }
-    assert utils.make_source_id("Foo and Bar:,; a !@#$ Study", test=False) == correct1
-    assert utils.make_source_id("foo_bar_study_v1", test=False) == correct1
+    assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Study", test=False) == correct1
+    assert utils.make_source_id("foo_bar_v123_study_v1", test=False) == correct1
+    assert utils.make_source_id("foo_bar_v123_study_v1-1", test=False) == correct1
 
     # Test usage
     correct2 = {
-        "source_id": "_test_foo_bar_study_v1",
-        "source_name": "_test_foo_bar_study",
-        "version": 1,
+        "source_id": "_test_foo_bar_v123_study_v1-1",
+        "source_name": "_test_foo_bar_v123_study",
+        "search_version": 1,
+        "submission_version": 1,
         "user_id_list": set()
     }
-    assert utils.make_source_id("Foo and Bar:,; a !@#$ Study", test=True) == correct2
-    assert utils.make_source_id("foo_bar_study_v1", test=True) == correct2
+    assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Study", test=True) == correct2
+    assert utils.make_source_id("foo_bar_v123_study_v1", test=True) == correct2
+    assert utils.make_source_id("foo_bar_v123_study_v1-1", test=True) == correct2
 
     # Double usage should not mutate
     assert utils.make_source_id(correct1["source_id"], test=False) == correct1
@@ -50,3 +54,99 @@ def test_make_source_id():
     # assert res["version"] > 1
     # assert res["source_name"] == ""
     # assert res["source_id"].endswith(str(res["version"]))
+
+
+def test_split_source_id():
+    # Standard form
+    assert utils.split_source_id("_test_foo_bar_study_v1-1") == {
+        "success": True,
+        "source_name": "_test_foo_bar_study",
+        "search_version": 1,
+        "submission_version": 1
+    }
+    assert utils.split_source_id("study_v8_engines_v2-8") == {
+        "success": True,
+        "source_name": "study_v8_engines",
+        "search_version": 2,
+        "submission_version": 8
+    }
+    # Incorrect form
+    assert utils.split_source_id("just_this") == {
+        "success": False,
+        "source_name": "just_this",
+        "search_version": 0,
+        "submission_version": 0
+    }
+
+    # TODO: Remove legacy-form support
+    # Legacy form
+    assert utils.split_source_id("_test_old_oqmd_v13") == {
+        "success": True,
+        "source_name": "_test_old_oqmd",
+        "search_version": 13,
+        "submission_version": 13
+    }
+    assert utils.split_source_id("ser_v1_ng_stuff_v2") == {
+        "success": True,
+        "source_name": "ser_v1_ng_stuff",
+        "search_version": 2,
+        "submission_version": 2
+    }
+
+
+def test_scan_status():
+    # Regular usage
+    # TODO: Set/find known static source_id in StatusDB
+    res = utils.scan_status()
+    assert res["success"]
+    count1 = len(res["results"])
+    sample1 = res["results"][0]
+
+    res = utils.scan_status(fields="source_id")
+    assert res["success"]
+    # Fields arg should not restrict results
+    assert len(res["results"]) == count1
+    # Only 'source_id' should be in results
+    assert all([("source_id" in entry.keys() and len(entry.keys()) == 1)
+                for entry in res["results"]])
+
+    res = utils.scan_status(fields=["source_id", "test"])
+    assert res["success"]
+    assert len(res["results"]) == count1
+    assert all([("source_id" in entry.keys() and "test" in entry.keys() and len(entry.keys()) == 2)
+                for entry in res["results"]])
+
+    res = utils.scan_status(filters=("submission_code", "!=", None))  # Exists
+    assert res["success"]
+    assert len(res["results"]) == count1
+
+    res = utils.scan_status(filters=[("source_id", "!=", sample1["source_id"])])
+    assert res["success"]
+    assert len(res["results"]) == count1 - 1
+
+    res = utils.scan_status(filters=[("source_id", "==", sample1["source_id"])])
+    assert res["success"]
+    assert len(res["results"]) == 1
+    assert res["results"][0] == sample1
+
+    res = utils.scan_status(filters=("submission_time", ">", sample1["submission_time"]))
+    assert res["success"]
+    count2 = len(res["results"])
+    assert count2 < count1
+
+    res = utils.scan_status(filters=[("submission_time", ">", sample1["submission_time"]),
+                                     ("code", "<", sample1["code"])])
+    assert res["success"]
+    count3 = len(res["results"])
+    assert count3 < count2
+
+    # Errors
+    res = utils.scan_status(fields=True)
+    assert not res["success"] and res.get("error", None) is not None
+    res = utils.scan_status(filters=("field", "[]", "ab"))
+    assert not res["success"] and res.get("error", None) is not None
+    res = utils.scan_status(filters=("field", "in", "ab"))
+    assert not res["success"] and res.get("error", None) is not None
+    res = utils.scan_status(filters=("field", "@", "ab"))
+    assert not res["success"] and res.get("error", None) is not None
+    res = utils.scan_status(filters={"field": "val"})

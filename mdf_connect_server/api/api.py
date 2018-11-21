@@ -69,6 +69,19 @@ def accept_convert():
             "success": False,
             "error": "POST data empty or not JSON"
             }), 400)
+    # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
+    try:
+        json.dumps(metadata, allow_nan=False)
+    except ValueError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, submission must be valid JSON".format(str(e))
+            }), 400)
+    except json.JSONDecodeError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, submission must be valid JSON".format(repr(e))
+            }), 400)
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
@@ -111,8 +124,14 @@ def accept_convert():
     test = metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
 
     sub_title = metadata["dc"]["titles"][0]["title"]
-    source_id_info = utils.make_source_id(
-                            metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+    try:
+        source_id_info = utils.make_source_id(
+                                metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+        }), 500)
     source_id = source_id_info["source_id"]
     source_name = source_id_info["source_name"]
     if (len(source_id_info["user_id_list"]) > 0
@@ -126,7 +145,7 @@ def accept_convert():
         metadata["mdf"] = {}
     metadata["mdf"]["source_id"] = source_id
     metadata["mdf"]["source_name"] = source_name
-    metadata["mdf"]["version"] = source_id_info["version"]
+    metadata["mdf"]["version"] = source_id_info["search_version"]
     if not metadata["mdf"].get("acl"):
         metadata["mdf"]["acl"] = ["public"]
 
@@ -247,6 +266,19 @@ def accept_ingest():
             "success": False,
             "error": "POST data empty or not JSON"
             }), 400)
+    # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
+    try:
+        json.dumps(metadata, allow_nan=False)
+    except ValueError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(str(e))
+            }), 400)
+    except json.JSONDecodeError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, Submission must be valid JSON".format(repr(e))
+            }), 400)
 
     # Validate input JSON
     with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_ingest.json")) as schema_file:
@@ -277,13 +309,29 @@ def accept_ingest():
             "error": "Either title or source_name is required"
             }), 400)
     # "new" source_id for new submissions
-    new_source_info = utils.make_source_id(source_name or title, test=test)
+    try:
+        new_source_info = utils.make_source_id(source_name or title, test=test)
+    except Exception as e:
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+        }), 500)
     new_source_id = new_source_info["source_id"]
     new_status_info = utils.read_status(new_source_id)
-    # "old" source_id for current/previous submission
-    # Found by decrementing new version, to a minimum of 1
-    old_source_id = "{}_v{}".format(new_source_info["source_name"],
-                                    max(new_source_info["version"] - 1, 1))
+    # Get "old" source_id for current/previous submission
+    scan_res = utils.scan_status(fields="source_id",
+                                 filters=[("source_id", "^", new_source_info["source_name"]),
+                                          ("source_id", "!=", new_source_id)])
+    if not scan_res["success"]:
+        return (jsonify({
+            "success": False,
+            "error": "Unable to scan status database: {}".format(scan_res["error"])
+        }), 500)
+    # max() works exactly the right way on strings for this case
+    if scan_res["results"]:
+        old_source_id = max([sub["source_id"] for sub in scan_res["results"]])
+    else:
+        old_source_id = ""
 
     # Submissions from Connect will have status entries, user submission will not
     if CONFIG["API_CLIENT_ID"] in identities:
@@ -359,7 +407,7 @@ def accept_ingest():
             "user_id": user_id,
             "user_email": email,
             "test": test,
-            "original_metadata": json.dumps(md_copy)
+            "original_submission": json.dumps(md_copy)
             }
         try:
             status_res = utils.create_status(status_info)

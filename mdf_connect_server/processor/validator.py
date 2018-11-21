@@ -106,6 +106,16 @@ class Validator:
         # Data
         ds_md["data"] = ds_md.get("data", {})
 
+        # Require strict JSON
+        try:
+            json.dumps(ds_md, allow_nan=False)
+        except (ValueError, json.JSONDecodeError) as e:
+            return {
+                "success": False,
+                "error": "Invalid JSON: {}".format(str(e)),
+                "details": repr(e)
+                }
+
         # Validate against schema
         try:
             jsonschema.validate(ds_md, schema, resolver=resolver)
@@ -238,6 +248,16 @@ class Validator:
 #                    record["elements"] = list_of_elem
 
             rc_md["material"]["elements"] = list_of_elem
+
+        # Require strict JSON
+        try:
+            json.dumps(rc_md, allow_nan=False)
+        except (ValueError, json.JSONDecodeError) as e:
+            return {
+                "success": False,
+                "error": "Invalid JSON: {}".format(str(e)),
+                "details": repr(e)
+                }
 
         # Validate against schema
         try:

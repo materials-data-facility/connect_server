@@ -9,9 +9,8 @@ import globus_sdk
 import mdf_toolbox
 import requests
 
-from mdf_connect_server import CONFIG
+from mdf_connect_server import CONFIG, utils
 from mdf_connect_server.processor import convert, search_ingest, update_search_entry
-from mdf_connect_server import utils
 
 
 # Set up root logger
@@ -99,31 +98,17 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     # Setup
     utils.update_status(source_id, "convert_start", "P", except_on_fail=True)
     utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
-    creds = {
-        "app_name": "MDF Open Connect",
-        "client_id": CONFIG["API_CLIENT_ID"],
-        "client_secret": CONFIG["API_CLIENT_SECRET"],
-        "services": ["transfer", "connect"]
-        }
     try:
-        access_token = access_token.replace("Bearer ", "")
-        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
-                                                           creds["client_secret"])
-        tokens = conf_client.oauth2_client_credentials_tokens(
-                                requested_scopes=("https://auth.globus.org/scopes/"
-                                                  "c17f27bb-f200-486a-b785-2a25e82af505/connect"
-                                                  " urn:globus:auth:scope:"
-                                                  "transfer.api.globus.org:all"))
-        mdf_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                                tokens.by_resource_server
-                                                ["transfer.api.globus.org"]["access_token"])
+        # Connect auth
+        mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
+                                                               CONFIG["API_CLIENT_SECRET"])
+        mdf_transfer_authorizer = globus_sdk.ClientCredentialsAuthorizer(
+                                                mdf_conf_client, scopes=CONFIG["TRANSFER_SCOPE"])
         mdf_transfer_client = globus_sdk.TransferClient(authorizer=mdf_transfer_authorizer)
 
-        connect_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                            tokens.by_resource_server
-                                            ["mdf_dataset_submission"]["access_token"])
-
-        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
+        # User auth
+        access_token = access_token.replace("Bearer ", "")
+        dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
         user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
                                                 dependent_grant.data[0]["access_token"])
         user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
@@ -133,10 +118,17 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         return
 
     # Cancel the previous version(s)
-    vers = metadata["mdf"]["version"]
-    old_source_id = source_id
-    while vers > 1:
-        old_source_id = old_source_id.replace("_v"+str(vers), "_v"+str(vers-1))
+    source_info = utils.split_source_id(source_id)
+    scan_res = utils.scan_status(fields="source_id",
+                                 filters=[("source_id", "^", source_info["source_name"]),
+                                          ("source_id", "!=", source_id)])
+    if not scan_res["success"]:
+        utils.update_status(source_id, "convert_start", "F", text=scan_res["error"],
+                            except_on_fail=True)
+        utils.complete_submission(source_id)
+        return
+    for old_source in scan_res["results"]:
+        old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
             utils.update_status(source_id, "convert_start", "F",
@@ -150,7 +142,6 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
         else:
             logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
-        vers -= 1
 
     utils.update_status(source_id, "convert_start", "S", except_on_fail=True)
 
@@ -164,35 +155,16 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
     backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
     try:
-        try:
-            # Edit ACL to allow pull
-            acl_rule = {
-                "DATA_TYPE": "access",
-                "principal_type": "identity",
-                "principal": user_id,
-                "path": local_path,
-                "permissions": "rw"
-            }
-            acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
-            if not acl_res.get("code") == "Created":
-                logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-                raise ValueError("Internal permissions error.")
-            # Download from user
-            for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
-                                              CONFIG["LOCAL_EP"], local_path):
-                if not dl_res["success"]:
-                    msg = "During data download: " + dl_res["error"]
-                    utils.update_status(source_id, "convert_download", "T", text=msg,
-                                        except_on_fail=True)
+        # Download from user
+        for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
+                                          CONFIG["LOCAL_EP"], local_path,
+                                          admin_client=mdf_transfer_client, user_id=user_id):
             if not dl_res["success"]:
-                raise ValueError(dl_res["error"])
-        # Always remove ACL to MDF storage
-        finally:
-            acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                   acl_res["access_id"])
-            if not acl_del.get("code") == "Deleted":
-                logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
-                raise ValueError("Internal permissions error.")
+                msg = "During data download: " + dl_res["error"]
+                utils.update_status(source_id, "convert_download", "T", text=msg,
+                                    except_on_fail=True)
+        if not dl_res["success"]:
+            raise ValueError(dl_res["error"])
 
         # Backup to MDF
         if not test:
@@ -297,6 +269,11 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             "test": test
         }
         headers = {}
+        tokens = mdf_conf_client.oauth2_client_credentials_tokens(
+                                    requested_scopes=CONFIG["API_SCOPE"])
+        connect_authorizer = globus_sdk.AccessTokenAuthorizer(
+                                            tokens.by_resource_server
+                                            ["mdf_dataset_submission"]["access_token"])
         connect_authorizer.set_authorization_header(headers)
         ingest_res = requests.post(CONFIG["INGEST_URL"],
                                    json=ingest_args,
@@ -343,14 +320,11 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
     utils.update_status(source_id, "ingest_start", "P", except_on_fail=True)
     # Will need client to ingest data
-    creds = {
-        "app_name": "MDF Open Connect",
-        "client_id": CONFIG["API_CLIENT_ID"],
-        "client_secret": CONFIG["API_CLIENT_SECRET"],
-        "services": ["search_ingest", "publish", "transfer"]
-        }
     try:
-        clients = mdf_toolbox.confidential_login(creds)
+        clients = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(
+                            CONFIG["GLOBUS_CREDS"],
+                            {"services": ["search_ingest", "publish", "transfer"]}))
         publish_client = clients["publish"]
         mdf_transfer_client = clients["transfer"]
 
@@ -358,8 +332,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_final.json")
 
         access_token = access_token.replace("Bearer ", "")
-        conf_client = globus_sdk.ConfidentialAppAuthClient(creds["client_id"],
-                                                           creds["client_secret"])
+        conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
+                                                           CONFIG["API_CLIENT_SECRET"])
         dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
         user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
                                                 dependent_grant.data[0]["access_token"])
@@ -370,14 +344,20 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         return
 
     # Cancel the previous version(s)
-    try:
-        vers = int(source_id.rsplit("_v", 1)[1])
-    except Exception:
+    source_info = utils.split_source_id(source_id)
+    if not source_info["success"]:
         utils.update_status(source_id, "ingest_start", "F",
                             text="Invalid source_id: " + source_id, except_on_fail=True)
-    old_source_id = source_id
-    while vers > 1:
-        old_source_id = old_source_id.replace("_v"+str(vers), "_v"+str(vers-1))
+    scan_res = utils.scan_status(fields="source_id",
+                                 filters=[("source_id", "^", source_info["source_name"]),
+                                          ("source_id", "!=", source_id)])
+    if not scan_res["success"]:
+        utils.update_status(source_id, "ingest_start", "F", text=scan_res["error"],
+                            except_on_fail=True)
+        utils.complete_submission(source_id)
+        return
+    for old_source in scan_res["results"]:
+        old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
             utils.update_status(source_id, "ingest_start", "F",
@@ -391,7 +371,6 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
         else:
             logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
-        vers -= 1
 
     utils.update_status(source_id, "ingest_start", "S", except_on_fail=True)
     utils.modify_status_entry(source_id, {"active": True}, except_on_fail=True)
@@ -404,28 +383,12 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
 
     utils.update_status(source_id, "ingest_download", "P", except_on_fail=True)
     try:
-        # Edit ACL to allow pull
-        acl_rule = {
-            "DATA_TYPE": "access",
-            "principal_type": "identity",
-            "principal": user_id,
-            "path": os.path.dirname(base_feed_path) + "/",
-            "permissions": "rw"
-        }
-        acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"], acl_rule).data
-        if not acl_res.get("code") == "Created":
-            logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-            raise ValueError("Internal permissions error.")
         for dl_res in utils.download_data(user_transfer_client, feedstock_location,
-                                          CONFIG["LOCAL_EP"], base_feed_path):
+                                          CONFIG["LOCAL_EP"], base_feed_path,
+                                          admin_client=mdf_transfer_client, user_id=user_id):
             if not dl_res["success"]:
                 utils.update_status(source_id, "ingest_download", "T",
                                     text=dl_res["error"], except_on_fail=True)
-        acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                               acl_res["access_id"])
-        if not acl_del.get("code") == "Deleted":
-            logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id, acl_del))
-            raise ValueError("Internal permissions error.")
     except Exception as e:
         utils.update_status(source_id, "ingest_download", "F", text=repr(e),
                             except_on_fail=True)
@@ -464,30 +427,13 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 data_ep = CONFIG["LOCAL_EP"]
                 data_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
                 try:
-                    # Edit ACL to allow pull
-                    acl_rule = {
-                        "DATA_TYPE": "access",
-                        "principal_type": "identity",
-                        "principal": user_id,
-                        "path": data_path,
-                        "permissions": "rw"
-                    }
-                    acl_res = mdf_transfer_client.add_endpoint_acl_rule(data_ep, acl_rule).data
-                    if not acl_res.get("code") == "Created":
-                        logger.error("{}: Unable to create ACL rule: '{}'".format(source_id,
-                                                                                  acl_res))
-                        raise ValueError("Internal permissions error.")
                     for dl_res in utils.download_data(user_transfer_client, data_loc,
-                                                      data_ep, data_path):
+                                                      data_ep, data_path,
+                                                      admin_client=mdf_transfer_client,
+                                                      user_id=user_id):
                         if not dl_res["success"]:
                             utils.update_status(source_id, "ingest_download", "T",
                                                 text=dl_res["error"], except_on_fail=True)
-                    acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                           acl_res["access_id"])
-                    if not acl_del.get("code") == "Deleted":
-                        logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
-                                                                                     acl_del))
-                        raise ValueError("Internal permissions error.")
                 except Exception as e:
                     utils.update_status(source_id, "ingest_download", "F", text=repr(e),
                                         except_on_fail=True)
@@ -522,30 +468,13 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             # Will not transfer anything if already in place
             service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
             try:
-                # Edit ACL to allow pull
-                acl_rule = {
-                    "DATA_TYPE": "access",
-                    "principal_type": "identity",
-                    "principal": user_id,
-                    "path": service_data,
-                    "permissions": "rw"
-                }
-                acl_res = mdf_transfer_client.add_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                    acl_rule).data
-                if not acl_res.get("code") == "Created":
-                    logger.error("{}: Unable to create ACL rule: '{}'".format(source_id, acl_res))
-                    raise ValueError("Internal permissions error.")
                 for dl_res in utils.download_data(user_transfer_client, service_loc,
-                                                  CONFIG["LOCAL_EP"], service_data):
+                                                  CONFIG["LOCAL_EP"], service_data,
+                                                  admin_client=mdf_transfer_client,
+                                                  user_id=user_id):
                     if not dl_res["success"]:
                         utils.update_status(source_id, "ingest_integration", "T",
                                             text=dl_res["error"], except_on_fail=True)
-                acl_del = mdf_transfer_client.delete_endpoint_acl_rule(CONFIG["LOCAL_EP"],
-                                                                       acl_res["access_id"])
-                if not acl_del.get("code") == "Deleted":
-                    logger.critical("{}: Unable to delete ACL rule: '{}'".format(source_id,
-                                                                                 acl_del))
-                    raise ValueError("Internal permissions error.")
             except Exception as e:
                 utils.update_status(source_id, "ingest_integration", "F", text=repr(e),
                                     except_on_fail=True)
@@ -576,10 +505,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     search_config = services.get("mdf_search", {})
     try:
         search_res = search_ingest(
-                        creds, base_feed_path,
-                        index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                        batch_size=CONFIG["SEARCH_BATCH_SIZE"],
-                        feedstock_save=final_feed_path)
+                        base_feed_path, index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+                        batch_size=CONFIG["SEARCH_BATCH_SIZE"], feedstock_save=final_feed_path)
     except Exception as e:
         utils.update_status(source_id, "ingest_search", "F", text=repr(e),
                             except_on_fail=True)
@@ -653,21 +580,19 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     if services.get("citrine"):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
-        # Check if this is a new version
-        version = dataset.get("mdf", {}).get("version", 1)
-        old_citrine_id = None
-        # Get base (no version) source_id by removing _v#
-        base_source_id = source_id.rsplit("_v"+str(version), 1)[0]
-        # Find the last version uploaded to Citrine, if there was one
-        while version > 1 and not old_citrine_id:
-            # Get the old source name by adding the old version
-            version -= 1
-            old_source_id = base_source_id + "_v" + str(version)
-            # Get the old version's citrine_id
-            old_status = utils.read_status(old_source_id)
-            if not old_status["success"]:
-                raise ValueError(str(old_status))
-            old_citrine_id = old_status["status"].get("citrine_id", None)
+        # Get old Citrine dataset version, if exists
+        scan_res = utils.scan_status(fields=["source_id", "citrine_id"],
+                                     filters=[("source_name", "==", source_info["source_name"]),
+                                              ("citrine_id", "!=", None)])
+        if not scan_res["success"]:
+            logger.error("Status scan failed: {}".format(scan_res["error"]))
+        old_cit_subs = scan_res.get("results", [])
+        if len(old_cit_subs) == 0:
+            old_citrine_id = None
+        elif len(old_cit_subs) == 1:
+            old_citrine_id = old_cit_subs[0]["citrine_id"]
+        else:
+            old_citrine_id = max([sub["citrine_id"] for sub in old_cit_subs])
 
         try:
             # Check for PIFs to ingest
@@ -771,8 +696,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     utils.update_status(source_id, "ingest_cleanup", "P", except_on_fail=True)
 
     dataset["services"] = service_res
-    ds_update = update_search_entry(creds,
-                                    index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+    ds_update = update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
                                     updated_entry=dataset, overwrite=False)
     if not ds_update["success"]:
         utils.update_status(source_id, "ingest_cleanup", "F",

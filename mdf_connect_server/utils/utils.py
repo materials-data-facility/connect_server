@@ -9,6 +9,7 @@ import time
 import urllib
 
 import boto3
+from boto3.dynamodb.conditions import Attr
 from citrination_client import CitrinationClient
 import globus_sdk
 import jsonschema
@@ -265,8 +266,10 @@ def fetch_whitelist(auth_level):
     return whitelist
 
 
-def make_source_id(title, test=False):
+def make_source_id(title, test=False, index=None):
     """Make a source name out of a title."""
+    if index is None:
+        index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
     delete_words = [
         "and",
         "or",
@@ -314,29 +317,110 @@ def make_source_id(title, test=False):
 
     # Determine version number to add
     # Remove any existing version number
-    source_id = re.sub("_v[0-9]+$", "", source_id)
-    # Save source_name
-    source_name = source_id
-    version = 1
-    user_ids = set()
-    while True:
-        # Try new source name
-        new_source_id = source_id + "_v{}".format(version)
-        status_res = read_status(new_source_id)
-        # If name already exists, increment version and try again
-        if status_res["success"]:
-            version += 1
-            user_ids.add(status_res["status"]["user_id"])
-        # Otherwise, correct name found
-        else:
-            source_id = new_source_id
-            break
+    source_name = split_source_id(source_id)["source_name"]
+    # Get last Search version
+    search_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["search"]}))["search"]
+    old_q = {
+        "q": "mdf.source_name:{} AND mdf.resource_type:dataset".format(source_name),
+        "advanced": True,
+        "limit": 2,  # Should only ever be one, if two are returned there's a problem
+        "offset": 0
+    }
+    old_search = mdf_toolbox.gmeta_pop(search_client.post_search(
+                                            mdf_toolbox.translate_index(index), old_q))
+    if len(old_search) == 0:
+        search_version = 1
+    elif len(old_search) == 1:
+        search_version = old_search[0]["mdf"]["version"] + 1
+    else:
+        logger.error("{}: {} dataset entries found in Search: {}"
+                     .format(source_name, len(old_search), old_search))
+        raise ValueError("Dataset entry in Search has error")
+
+    # Get old submission information
+    scan_res = scan_status(fields=["source_id", "user_id"],
+                           filters=[("source_id", "^", source_name)])
+    if not scan_res["success"]:
+        logger.error("Unable to scan status database for '{}': '{}'"
+                     .format(source_name, scan_res["error"]))
+        raise ValueError("Dataset status has error")
+    user_ids = set([sub["user_id"] for sub in scan_res["results"]])
+    # Get most recent previous source_id and info
+    if scan_res["results"]:
+        old_source_id = max([sub["source_id"] for sub in scan_res["results"]])
+    else:
+        old_source_id = ""
+    old_source_info = split_source_id(old_source_id)
+    old_search_version = old_source_info["search_version"]
+    old_sub_version = old_source_info["submission_version"]
+    # If new Search version > old Search version, sub version should reset
+    if search_version > old_search_version:
+        sub_version = 1
+    # If they're the same, sub version should increment
+    elif search_version == old_search_version:
+        sub_version = old_sub_version + 1
+    # Old > new is an error
+    else:
+        logger.error("Old Search version '{}' > new '{}': {}"
+                     .format(old_search_version, search_version, source_id))
+        raise ValueError("Dataset entry in Search has error")
+
+    source_id = "{}_v{}-{}".format(source_name, search_version, sub_version)
 
     return {
         "source_id": source_id,
         "source_name": source_name,
-        "version": version,
+        "search_version": search_version,
+        "submission_version": sub_version,
         "user_id_list": user_ids
+    }
+
+
+def split_source_id(source_id):
+    """Retrieve the source_name and version information from a source_id.
+    Not complex logic, but easier to have in one location.
+    Standard form: {source_name}_v{search_version}-{submission_version}
+    Legacy form: {source_name}_v{legacy_version}
+        The legacy version is both the search version and submission version.
+
+    Arguments:
+    source_id (str): The source_id to split. If this is not a valid-form source_id,
+                     the entire string will be assumed to be the source_name
+                     and the versions will be 0.
+
+    Returns:
+    dict:
+        success (bool): True if the versions were extracted, False otherwise.
+        source_name (str): The base source_name.
+        search_version (int): The Search version from the source_id.
+        submission_version (int): The Connect version from the source_id.
+    """
+    # Check if source_id is valid
+    # TODO: Remove legacy-form support
+    if not (re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
+        return {
+            "success": False,
+            "source_name": source_id,
+            "search_version": 0,
+            "submission_version": 0
+        }
+
+    source_name, versions = source_id.rsplit("_v", 1)
+    # TODO: Remove legacy-form support
+    v_info = versions.split("-", 1)
+    if len(v_info) == 2:
+        search_version, submission_version = v_info
+    else:
+        search_version = v_info[0]
+        submission_version = v_info[0]
+
+    return {
+        "success": True,
+        "source_name": source_name,
+        "search_version": int(search_version),
+        "submission_version": int(submission_version)
     }
 
 
@@ -345,13 +429,9 @@ def clean_start():
     """
     logger.debug("Cleaning Connect state")
     # Auth to get Transfer client
-    creds = {
-        "app_name": "MDF Open Connect",
-        "client_id": CONFIG["API_CLIENT_ID"],
-        "client_secret": CONFIG["API_CLIENT_SECRET"],
-        "services": ["transfer"]
-    }
-    transfer_client = mdf_toolbox.confidential_login(creds)["transfer"]
+    transfer_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["transfer"]}))["transfer"]
     logger.debug("Cancelling active Transfer tasks")
     # List all Transfers active on endpoint
     all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,
@@ -399,7 +479,8 @@ def clean_start():
     return
 
 
-def download_data(transfer_client, data_loc, local_ep, local_path):
+def download_data(transfer_client, data_loc, local_ep, local_path,
+                  admin_client=None, user_id=None):
     """Download data from a remote host to the configured machine.
 
     Arguments:
@@ -408,10 +489,21 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
     data_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
+    admin_client (TransferClient): An authenticated TransferClient with Access Manager
+                                   permissions on the local endpoint/GDrive.
+                                   Optional if permission changes are not needed.
+    user_id (str): The ID of the identity authenticated to the transfer_client.
+                   Used for permission changes. Optional if permission changes are not needed.
 
     Returns:
     dict: success (bool): True on success, False on failure.
     """
+    # admin_client and user_id must both be supplied if one is supplied
+    # Effectively if (admin_client XOR user_id)
+    if ((admin_client is not None or user_id is not None)
+            and not (admin_client is not None and user_id is not None)):
+        raise ValueError("admin_client and user_id must both be supplied if one is supplied")
+    tc = None  # Correct TransferClient
     filename = None
     # If the local_path is a file and not a directory, use the directory
     if local_path[-1] != "/":
@@ -465,6 +557,9 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             # Make new location
             location = "globus://{}{}".format(ep_id, path)
             loc_info = urllib.parse.urlparse(location)
+            # Use user's TransferClient
+            tc = transfer_client
+
         # Google Drive protocol into globus:// form
         elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
             # Correct form is "google:///path/file.dat"
@@ -481,31 +576,74 @@ def download_data(transfer_client, data_loc, local_ep, local_path):
             location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
                                                 CONFIG["GDRIVE_ROOT"], gpath)
             loc_info = urllib.parse.urlparse(location)
+            # Use admin's TransferClient if present
+            tc = admin_client or transfer_client
+
+        else:
+            # Use default (user's) TransferClient
+            tc = transfer_client
 
         # Globus Transfer
         if loc_info.scheme == "globus":
             # Check that data not already in place
             if (loc_info.netloc != local_ep
                     and loc_info.path != (local_path + (filename if filename else ""))):
-                # Transfer locally
-                transfer = mdf_toolbox.custom_transfer(
-                                transfer_client, loc_info.netloc, local_ep,
-                                [(loc_info.path, local_path)],
-                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-                for event in transfer:
-                    if not event["success"]:
-                        logger.info("Transfer is_error: {} - {}"
-                                    .format(event.get("code", "No code found"),
-                                            event.get("description", "No description found")))
-                        yield {
-                            "success": False,
-                            "error": "{} - {}".format(event.get("code", "No code found"),
-                                                      event.get("description",
-                                                                "No description found"))
+                try:
+                    if admin_client is not None:
+                        # Edit ACL to allow pull
+                        acl_rule = {
+                            "DATA_TYPE": "access",
+                            "principal_type": "identity",
+                            "principal": user_id,
+                            "path": local_path,
+                            "permissions": "rw"
                         }
-                if not event["success"]:
-                    raise ValueError(event)
+                        try:
+                            acl_res = admin_client.add_endpoint_acl_rule(local_ep, acl_rule).data
+                        except Exception as e:
+                            logger.error("ACL rule creation exception for '{}': {}"
+                                         .format(acl_rule, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_res.get("code") == "Created":
+                            logger.error("Unable to create ACL rule '{}': {}"
+                                         .format(acl_rule, acl_res))
+                            raise ValueError("Internal permissions error.")
+                    else:
+                        acl_res = None
+
+                    # Transfer locally
+                    transfer = mdf_toolbox.custom_transfer(
+                                    tc, loc_info.netloc, local_ep,
+                                    [(loc_info.path, local_path)],
+                                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                    for event in transfer:
+                        if not event["success"]:
+                            logger.info("Transfer is_error: {} - {}"
+                                        .format(event.get("code", "No code found"),
+                                                event.get("description", "No description found")))
+                            yield {
+                                "success": False,
+                                "error": "{} - {}".format(event.get("code", "No code found"),
+                                                          event.get("description",
+                                                                    "No description found"))
+                            }
+                    if not event["success"]:
+                        logger.error("Transfer failed: {}".format(event))
+                        raise ValueError(event)
+                finally:
+                    if acl_res is not None:
+                        try:
+                            acl_del = admin_client.delete_endpoint_acl_rule(
+                                                        local_ep, acl_res["access_id"])
+                        except Exception as e:
+                            logger.critical("ACL rule deletion exception for '{}': {}"
+                                            .format(acl_res, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_del.get("code") == "Deleted":
+                            logger.critical("Unable to delete ACL rule '{}': {}"
+                                            .format(acl_res, acl_del))
+                            raise ValueError("Internal permissions error.")
         # HTTP(S)
         elif loc_info.scheme.startswith("http"):
             # Get default filename and extension
@@ -1029,6 +1167,163 @@ def read_status(source_id):
         "success": True,
         "status": status_res
         }
+
+
+def scan_status(fields=None, filters=None):
+    """Scan the status database.
+
+    Arguments:
+    fields (list of str): The fields from the results to return.
+                          Default None, to return all fields.
+    filters (list of tuples): The filters to apply. Format: (field, operator, value)
+                              For an entry to be returned, all filters must match.
+                              Default None, to return all entries.
+                           field: The status field to filter on.
+                           operator: The relation of field to value. Valid operators:
+                                     ^: Begins with
+                                     *: Contains
+                                     ==: Equal to (or field does not exist, if value is None)
+                                     !=: Not equal to (or field exists, if value is None)
+                                     >: Greater than
+                                     >=: Greater than or equal to
+                                     <: Less than
+                                     <=: Less than or equal to
+                                     []: Between, inclusive (requires a list of two values)
+                                     in: Is one of the values (requires a list of values)
+                                         This operator effectively allows OR-ing '=='
+                           value: The value of the field.
+
+    Returns:
+    dict: The results of the scan.
+        success (bool): True on success, False otherwise.
+        results (list of dict): The status entries returned.
+        error (str): If success is False, the error that occurred.
+    """
+    # Get Dynamo table
+    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Translate fields
+    if isinstance(fields, str) or fields is None:
+        proj_exp = fields
+    elif isinstance(fields, list):
+        proj_exp = ",".join(fields)
+    else:
+        return {
+            "success": False,
+            "error": "Invalid fields type {}: '{}'".format(type(fields), fields)
+        }
+
+    # Translate filters
+    # 0 = field
+    # 1 = operator
+    # 2 = value
+    if isinstance(filters, tuple):
+        filters = [filters]
+    if filters is None or (isinstance(filters, list) and len(filters) == 0):
+        filter_exps = None
+    elif isinstance(filters, list):
+        filter_exps = []
+        for fil in filters:
+            # Begins with
+            if fil[1] == "^":
+                filter_exps.append(Attr(fil[0]).begins_with(fil[2]))
+            # Contains
+            elif fil[1] == "*":
+                filter_exps.append(Attr(fil[0]).contains(fil[2]))
+            # Equal to (or field does not exist, if value is None)
+            elif fil[1] == "==":
+                if fil[2] is None:
+                    filter_exps.append(Attr(fil[0]).not_exists())
+                else:
+                    filter_exps.append(Attr(fil[0]).eq(fil[2]))
+            # Not equal to (or field exists, if value is None)
+            elif fil[1] == "!=":
+                if fil[2] is None:
+                    filter_exps.append(Attr(fil[0]).exists())
+                else:
+                    filter_exps.append(Attr(fil[0]).ne(fil[2]))
+            # Greater than
+            elif fil[1] == ">":
+                filter_exps.append(Attr(fil[0]).gt(fil[2]))
+            # Greater than or equal to
+            elif fil[1] == ">=":
+                filter_exps.append(Attr(fil[0]).gte(fil[2]))
+            # Less than
+            elif fil[1] == "<":
+                filter_exps.append(Attr(fil[0]).lt(fil[2]))
+            # Less than or equal to
+            elif fil[1] == "<=":
+                filter_exps.append(Attr(fil[0]).lte(fil[2]))
+            # Between, inclusive (requires a list of two values)
+            elif fil[1] == "[]":
+                if not isinstance(fil[2], list) or len(fil[2]) != 2:
+                    return {
+                        "success": False,
+                        "error": "Invalid between ('[]') operator values: '{}'".format(fil[2])
+                    }
+                filter_exps.append(Attr(fil[0]).between(fil[2][0], fil[2][1]))
+            # Is one of the values (requires a list of values)
+            elif fil[1] == "in":
+                if not isinstance(fil[2], list):
+                    return {
+                        "success": False,
+                        "error": "Invalid 'in' operator values: '{}'".format(fil[2])
+                    }
+                filter_exps.append(Attr(fil[0]).is_in(fil[2]))
+            else:
+                return {
+                    "success": False,
+                    "error": "Invalid filter operator '{}'".format(fil[1])
+                }
+    else:
+        return {
+            "success": False,
+            "error": "Invalid filters type {}: '{}'".format(type(filters), filters)
+        }
+
+    # Make scan arguments
+    scan_args = {
+        "ConsistentRead": True
+    }
+    if proj_exp is not None:
+        scan_args["ProjectionExpression"] = proj_exp
+    if filter_exps is not None:
+        # Create valid FilterExpression
+        # Each Attr must be combined with &
+        filter_expression = filter_exps[0]
+        for i in range(1, len(filter_exps)):
+            filter_expression = filter_expression & filter_exps[i]
+        scan_args["FilterExpression"] = filter_expression
+
+    # Make scan call, paging through if too many entries are scanned
+    result_entries = []
+    while True:
+        scan_res = table.scan(**scan_args)
+        # Check for success
+        if scan_res["ResponseMetadata"]["HTTPStatusCode"] >= 300:
+            return {
+                "success": False,
+                "error": ("HTTP code {} returned: {}"
+                          .format(scan_res["ResponseMetadata"]["HTTPStatusCode"],
+                                  scan_res["ResponseMetadata"]))
+            }
+        # Add results to list
+        result_entries.extend(scan_res["Items"])
+        # Check for completeness
+        # If LastEvaluatedKey exists, need to page through more results
+        if scan_res.get("LastEvaluatedKey", None) is not None:
+            scan_args["ExclusiveStartKey"] = scan_res["LastEvaluatedKey"]
+        # Otherwise, all results retrieved
+        else:
+            break
+
+    return {
+        "success": True,
+        "results": result_entries
+    }
 
 
 def create_status(status):

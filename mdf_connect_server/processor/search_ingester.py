@@ -8,19 +8,18 @@ from queue import Empty
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
-from mdf_connect_server import CONFIG
+from mdf_connect_server import CONFIG, utils
 from mdf_connect_server.processor import Validator
 
 
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(ingest_creds, feedstock, index, batch_size,
+def search_ingest(feedstock, index, batch_size,
                   num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:
-    ingest_creds (dict): The credentials with which to ingest.
     feedstock (str): The path to feedstock to ingest.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
@@ -31,8 +30,9 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
     dict: success (bool): True on success.
           errors (list): The errors encountered.
     """
-    ingest_creds["services"] = ["search_ingest"]
-    ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
+    ingest_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
 
     # Validate feedstock
@@ -44,36 +44,30 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
             raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(ds_res)))
 
         # Delete previous version of this dataset in Search
-        version = dataset_entry["mdf"]["version"]
         source_id = dataset_entry["mdf"]["source_id"]
-        old_source_id = source_id
-        # Find previous version with entries
-        while version > 1:
-            old_source_id = old_source_id.replace("_v"+str(version), "_v"+str(version-1))
-            del_q = {
-                "q": "mdf.source_id:" + old_source_id,
-                "advanced": True
-                }
-            # Try deleting from Search until success or try limit reached
-            # Necessary because Search will 5xx on large deletions,
-            # which "may or may not have succeeded"
-            i = 0
-            while True:
-                try:
-                    del_res = ingest_client.delete_by_query(index, del_q)
-                    break
-                except GlobusAPIError as e:
-                    if i < CONFIG["SEARCH_RETRIES"]:
-                        logger.warning("{}: Retrying Search delete error: {}"
-                                       .format(source_id, repr(e)))
-                        i += 1
-                    else:
-                        raise
-            if del_res["num_subjects_deleted"]:
-                logger.info(("{}: {} Search entries cleared from "
-                             "{}").format(source_id, del_res["num_subjects_deleted"],
-                                          old_source_id))
-            version -= 1
+        source_info = utils.split_source_id(source_id)
+        del_q = {
+            "q": "mdf.source_name:{}".format(source_info["source_name"]),
+            "advanced": True
+        }
+        # Try deleting from Search until success or try limit reached
+        # Necessary because Search will 5xx but possibly succeed on large deletions
+        i = 0
+        while True:
+            try:
+                del_res = ingest_client.delete_by_query(index, del_q)
+                break
+            except GlobusAPIError as e:
+                if i < CONFIG["SEARCH_RETRIES"]:
+                    logger.warning("{}: Retrying Search delete error: {}"
+                                   .format(source_id, repr(e)))
+                    i += 1
+                else:
+                    raise
+        if del_res["num_subjects_deleted"]:
+            logger.info(("{}: {} Search entries cleared from "
+                         "{}").format(source_id, del_res["num_subjects_deleted"],
+                                      source_info["source_name"]))
 
         for rc in stock:
             record = json.loads(rc)
@@ -88,7 +82,7 @@ def search_ingest(ingest_creds, feedstock, index, batch_size,
 
     # Create submitters
     submitters = [multiprocessing.Process(target=submit_ingests,
-                                          args=(ingest_queue, error_queue, ingest_creds,
+                                          args=(ingest_queue, error_queue,
                                                 index, input_done, source_id))
                   for i in range(num_submitters)]
     # Create queue populator
@@ -168,9 +162,11 @@ def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_i
     return
 
 
-def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, source_id):
+def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
     """Submit entry ingests to Globus Search."""
-    ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
+    ingest_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["search_ingest"]}))["search_ingest"]
     while True:
         # Try getting an ingest from the queue
         try:
@@ -225,11 +221,10 @@ def submit_ingests(ingest_queue, error_queue, ingest_creds, index, input_done, s
     return
 
 
-def update_search_entry(ingest_creds, index, updated_entry,
+def update_search_entry(index, updated_entry,
                         subject=None, acl=None, overwrite=False):
     """Update an entry in Search.
     Arguments:
-    ingest_creds (dict): The credentials with which to ingest.
     index (str): The Search index to ingest into.
     updated_entry (dict): The updated version of the entry (not in GMetaFormat).
     subject (str): The identifier for the entry, used to find the old entry.
@@ -250,8 +245,9 @@ def update_search_entry(ingest_creds, index, updated_entry,
         error (str): If success is False, contains an error message about the failure.
                      Otherwise missing.
     """
-    ingest_creds["services"] = ["search_ingest"]
-    ingest_client = mdf_toolbox.confidential_login(ingest_creds)["search_ingest"]
+    ingest_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
 
     if not subject:
