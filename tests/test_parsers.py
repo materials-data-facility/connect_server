@@ -160,7 +160,8 @@ def test_json(tmpdir):
                 "field3": "value3"
             }
         },
-        "compost": "CN25"
+        "compost": "CN25",
+        "na_val": "na"
     }
     json_file = tmpdir.join("test.json")
     with json_file.open(mode='w', ensure=True) as f:
@@ -169,7 +170,8 @@ def test_json(tmpdir):
     mapping1 = {
         "__custom": {
             "foo": "dict1.field1",
-            "bar": "dict2.nested1.field1"
+            "bar": "dict2.nested1.field1",
+            "missing": "na_val"
         },
         "material": {
             "composition": "compost"
@@ -178,6 +180,7 @@ def test_json(tmpdir):
     mapping2 = {
         "__custom.foo": "dict1.field1",
         "__custom.bar": "dict2.nested1.field1",
+        "__custom.missing": "na_val",
         "material.composition": "compost"
     }
     correct_record = {
@@ -189,8 +192,37 @@ def test_json(tmpdir):
             "bar": True
         }
     }
+    with_na_record = {
+        "material": {
+            "composition": "CN25"
+        },
+        "test_dataset": {
+            "foo": "value1",
+            "bar": True,
+            "missing": "na"
+        }
+    }
 
     # Test with proper mappings
+    assert parsers.parse_json(group, params={
+                                        "dataset": DATASET_PARAM,
+                                        "parsers": {
+                                            "json": {
+                                                "mapping": mapping1,
+                                                "na_values": ["na"]
+                                            }
+                                        }
+                                     }) == [correct_record]
+    assert parsers.parse_json(group, params={
+                                        "dataset": DATASET_PARAM,
+                                        "parsers": {
+                                            "json": {
+                                                "mapping": mapping2,
+                                                "na_values": "na"
+                                            }
+                                        }
+                                     }) == [correct_record]
+    # With na included
     assert parsers.parse_json(group, params={
                                         "dataset": DATASET_PARAM,
                                         "parsers": {
@@ -198,15 +230,8 @@ def test_json(tmpdir):
                                                 "mapping": mapping1
                                             }
                                         }
-                                     }) == [correct_record]
-    assert parsers.parse_json(group, params={
-                                        "dataset": DATASET_PARAM,
-                                        "parsers": {
-                                            "json": {
-                                                "mapping": mapping2
-                                            }
-                                        }
-                                     }) == [correct_record]
+                                     }) == [with_na_record]
+
     # Test failure modes
     assert parsers.parse_json(group, {}) == {}
     assert parsers.parse_json([], params={
