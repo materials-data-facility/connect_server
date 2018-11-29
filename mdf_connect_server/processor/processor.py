@@ -121,7 +121,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     source_info = utils.split_source_id(source_id)
     scan_res = utils.scan_status(fields="source_id",
                                  filters=[("source_id", "^", source_info["source_name"]),
-                                          ("source_id", "!=", source_id)])
+                                          ("source_id", "<", source_id)])
     if not scan_res["success"]:
         utils.update_status(source_id, "convert_start", "F", text=scan_res["error"],
                             except_on_fail=True)
