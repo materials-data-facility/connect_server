@@ -18,7 +18,7 @@ DEFAULT = {
     "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
 
     "TRANSFER_PING_INTERVAL": 1 * 60,  # 1 minute, in seconds
-    "TRANSFER_WEB_APP_LINK": "https://www.globus.org/app/transfer?origin_id={}&origin_path={}",
+    "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}",
 
     "TRANSFER_CANCEL_MSG": ("Your recent MDF Connect submission was cancelled due to a service"
                             " restart. Please resubmit your dataset. We apologize for the"
