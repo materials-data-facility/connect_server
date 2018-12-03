@@ -27,58 +27,75 @@ logfile_handler.setFormatter(logfile_formatter)
 
 logger.addHandler(logfile_handler)
 
-logger.info("\n\n==========Connect Process started==========\n")
-
 
 def processor():
+    logger.info("\n\n==========Connect Process started==========\n")
+    # Write out Processor PID
+    with open("pid.log", 'w') as pf:
+        pf.write(os.getpid())
     utils.clean_start()
     active_processes = []
-    while True:
-        try:
-            submissions = utils.retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
-            if not submissions["success"]:
-                logger.debug("Submissions not retrieved: {}".format(submissions["error"]))
-            if len(submissions["entries"]):
-                logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
-                for sub in submissions["entries"]:
-                    if sub["submission_type"] == "convert":
-                        driver = Process(target=convert_driver, kwargs=sub,
-                                         name="C"+sub["source_id"])
-                    elif sub["submission_type"] == "ingest":
-                        driver = Process(target=ingest_driver, kwargs=sub,
-                                         name="I"+sub["source_id"])
-                    else:
-                        raise ValueError(("Submission type '{}' "
-                                          "invalid").format(sub["submission_type"]))
-                    driver.start()
-                    active_processes.append(driver)
-                utils.delete_from_queue(submissions["delete_info"])
-                logger.info("{} submissions started".format(len(submissions["entries"])))
-        except Exception as e:
-            logger.error("Processor error: {}".format(e))
-        try:
-            for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                # Convert processes should not be cancelled if they finished
-                # 'converted' is sentinel value for convert finished
-                logger.info("Dead: {} ({})"
-                            .format(dead_proc.name,
+    try:
+        while True:
+            try:
+                submissions = utils.retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
+                if not submissions["success"]:
+                    logger.debug("Submissions not retrieved: {}".format(submissions["error"]))
+                if len(submissions["entries"]):
+                    logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
+                    for sub in submissions["entries"]:
+                        if sub["submission_type"] == "convert":
+                            driver = Process(target=convert_driver, kwargs=sub,
+                                             name="C"+sub["source_id"])
+                        elif sub["submission_type"] == "ingest":
+                            driver = Process(target=ingest_driver, kwargs=sub,
+                                             name="I"+sub["source_id"])
+                        else:
+                            raise ValueError(("Submission type '{}' "
+                                              "invalid").format(sub["submission_type"]))
+                        driver.start()
+                        active_processes.append(driver)
+                    utils.delete_from_queue(submissions["delete_info"])
+                    logger.info("{} submissions started".format(len(submissions["entries"])))
+            except Exception as e:
+                logger.error("Processor error: {}".format(e))
+            try:
+                for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
+                    # Convert processes should not be cancelled if they finished
+                    # 'converted' is sentinel value for convert finished
+                    logger.info("Dead: {} ({})"
+                                .format(
+                                    dead_proc.name,
                                     utils.read_status(dead_proc.name[1:])["status"]["converted"]))
-                if (dead_proc.name[0] == "C"
-                        and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
-                    active_processes.remove(dead_proc)
-                    logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
-                else:
-                    cancel_res = utils.cancel_submission(dead_proc.name[1:])
-                    if cancel_res["stopped"]:
+                    if (dead_proc.name[0] == "C"
+                            and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
                         active_processes.remove(dead_proc)
-                        logger.debug("{}: Dead and cancelled/cleaned up".format(dead_proc.name))
+                        logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
                     else:
-                        logger.info(("Unable to cancel process for {}: "
-                                     "{}").format(dead_proc.name,
-                                                  cancel_res.get("error", "No error provided")))
-        except Exception as e:
-            logger.error("Error life-checking processes: {}".format(e))
-        sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
+                        cancel_res = utils.cancel_submission(dead_proc.name[1:])
+                        if cancel_res["stopped"]:
+                            active_processes.remove(dead_proc)
+                            logger.debug("{}: Dead and cancelled/cleaned up"
+                                         .format(dead_proc.name))
+                        else:
+                            logger.info(("Unable to cancel process for {}: "
+                                         "{}").format(
+                                                dead_proc.name,
+                                                cancel_res.get("error", "No error provided")))
+            except Exception as e:
+                logger.error("Error life-checking processes: {}".format(e))
+            sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
+    # SIGINT turns into KeyboardInterrupt, should exit gracefully
+    except KeyboardInterrupt:
+        logger.info("Shutting down Connect")
+        for proc in active_processes:
+            cancel_res = utils.cancel_submission(proc.name[1:])
+            if cancel_res["stopped"]:
+                logger.debug("{}: Shutdown".format(proc.name))
+            else:
+                logger.info("Unable to shut down process for {}: {}"
+                            .format(proc.name, cancel_res.get("error", "No error provided")))
+        logger.info("Connect gracefully shut down")
 
 
 def convert_driver(submission_type, metadata, source_id, test, access_token, user_id):
