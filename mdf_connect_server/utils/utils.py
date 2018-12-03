@@ -1352,7 +1352,7 @@ def create_status(status):
             "error": "ID {} already exists in database".format(status["source_id"])
             }
     try:
-        table.put_item(Item=status, ConditionalExpression=Attr("source_id").not_exists())
+        table.put_item(Item=status, ConditionExpression=Attr("source_id").not_exists())
     except Exception as e:
         return {
             "success": False,
