@@ -43,10 +43,10 @@ def convert(root_path, convert_params):
     # Populate input queue
     num_groups = 0
     extensions = set()
-    for group in group_tree(root_path):
-        input_queue.put(group)
+    for group_info in group_tree(root_path):
+        input_queue.put(group_info)
         num_groups += 1
-        for f in group:
+        for f in group_info["files"]:
             filename, ext = os.path.splitext(f)
             extensions.add(ext or filename)
     # Mark that input is finished
@@ -101,7 +101,8 @@ def group_tree(root):
         # TODO: Expand grouping formats
         # File-matching groups
         # Each format specified in the rules
-        for format_type, format_name_list in CONFIG["GROUPING_RULES"].items():
+        for format_type, format_rules in CONFIG["GROUPING_RULES"].items():
+            format_name_list = format_rules["files"]
             format_groups = {}
             # Check each file for rule matching
             # Match to appropriate group (with same pre/post pattern)
@@ -119,15 +120,23 @@ def group_tree(root):
             for g in format_groups.values():
                 for f in g:
                     files.remove(f)
-                groups.append(g)
+                group_info = {
+                    "files": [os.path.join(path, f) for f in g],
+                    "parsers": format_rules["parsers"],
+                    "params": format_rules["params"]
+                }
+                groups.append(group_info)
 
         # NOTE: Keep this grouping last!
         # Default grouping: Each file is a group
-        groups.extend([[f] for f in files])
+        groups.extend([{"files": [os.path.join(path, f)],
+                        "parsers": [],
+                        "params": {}}
+                       for f in files])
 
-        # Add path to filenames and yield each group
+        # Yield each group
         for g in groups:
-            yield [os.path.join(path, f) for f in g]
+            yield g
 
 
 def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):

@@ -13,7 +13,7 @@ import ase.io  # noqa: E402
 from bson import ObjectId  # noqa: E402
 import hyperspy.api as hs  # noqa: E402
 import magic  # noqa: E402
-from mdf_toolbox import toolbox  # noqa: E402
+import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
 from PIL import Image  # noqa: E402
 import pycalphad  # noqa: E402
@@ -40,14 +40,7 @@ SUPER_DEBUG = False
 
 
 def transform(input_queue, output_queue, queue_done, parse_params):
-    """Parse data files however possible.
-
-    Arguments:
-    group (list of str): One group of files to parse.
-    parse_params (dict): Run parsers with these parameters.
-        dataset (dict): The dataset entry.
-        parsers (dict): The parser-specific information.
-        service_data (str): The path to the integration-specific data store.
+    """Parse data files.
 
     Returns:
     list of dict: The metadata parsed from the file.
@@ -60,7 +53,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         while True:
             # Fetch group from queue
             try:
-                group = input_queue.get(timeout=5)
+                group_info = input_queue.get(timeout=5)
             # No group fetched
             except Empty:
                 # Queue is permanently depleted, stop processing
@@ -73,12 +66,15 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Process fetched group
             single_record = {}
             multi_records = []
-            for parser in ALL_PARSERS:
+            for parser_name in group_info["parsers"] or ALL_PARSERS.values():
                 try:
-                    parser_res = parser(group=group, params=parse_params)
+                    specific_params = mdf_toolbox.dict_merge(parse_params or {},
+                                                             group_info["params"])
+                    parser_res = ALL_PARSERS[parser_name](group=group_info["files"],
+                                                          params=specific_params)
                 except Exception as e:
                     logger.warn(("{} Parser {} failed with "
-                                 "exception {}").format(source_id, parser.__name__, repr(e)))
+                                 "exception {}").format(source_id, parser_name, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -89,7 +85,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     if parser_res:
                         # If a single record was returned, merge with others
                         if isinstance(parser_res, dict):
-                            single_record = toolbox.dict_merge(single_record, parser_res)
+                            single_record = mdf_toolbox.dict_merge(single_record, parser_res)
                         # If multiple records were returned, add to list
                         elif isinstance(parser_res, list):
                             # Only add records with data
@@ -97,16 +93,16 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                         # Else, panic
                         else:
                             raise TypeError(("Parser '{p}' returned "
-                                             "type '{t}'!").format(p=parser.__name__,
+                                             "type '{t}'!").format(p=parser_name,
                                                                    t=type(parser_res)))
                         logger.debug("{}: {} parsed {}".format(source_id,
-                                                               parser.__name__, group))
+                                                               parser_name, group_info))
                     elif SUPER_DEBUG:
                         logger.debug("{}: {} could not parse {}".format(source_id,
-                                                                        parser.__name__, group))
+                                                                        parser_name, group_info))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
-                records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
+                records = [mdf_toolbox.dict_merge(r, single_record) for r in multi_records if r]
             # Else, if single_record exists, make it a list
             elif single_record:
                 records = [single_record]
@@ -120,12 +116,12 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Push records to output queue
             # Get the file info
             try:
-                file_info = _parse_file_info(group=group, params=parse_params)
+                file_info = _parse_file_info(group=group_info["files"], params=parse_params)
             except Exception as e:
                 logger.warning("{}: File info parser failed: {}".format(source_id, repr(e)))
             for record in records:
                 # TODO: Should files be handled differently?
-                record = toolbox.dict_merge(record, file_info)
+                record = mdf_toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
         logger.error("{}: Transformer error: {}".format(source_id, str(e)))
@@ -179,7 +175,7 @@ def parse_crystal_structure(group, params=None):
         crystal_structure["stoichiometry"] = pmg_s.composition.anonymized_formula
 
         # Add to record
-        record = toolbox.dict_merge(record, {
+        record = mdf_toolbox.dict_merge(record, {
                                                 "material": material,
                                                 "crystal_structure": crystal_structure
                                             })
@@ -211,9 +207,9 @@ def parse_tdb(group, params=None):
 
             # Add to record
             if material:
-                record = toolbox.dict_merge(record, {"material": material})
+                record = mdf_toolbox.dict_merge(record, {"material": material})
             if calphad:
-                record = toolbox.dict_merge(record, {"calphad": calphad})
+                record = mdf_toolbox.dict_merge(record, {"calphad": calphad})
 
             return record
         except Exception:
@@ -233,7 +229,8 @@ def parse_pif(group, params=None):
     mdf_records = []
 
     try:
-        raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[])
+        raw_pifs = cit_manager.run_extensions(group, include=params.get("include", None),
+                                              exclude=[])
     except Exception as e:
         logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
@@ -539,20 +536,19 @@ def parse_filename(group, params=None):
     return records
 
 
-# List of all non-internal parsers
-ALL_PARSERS = [
-    parse_crystal_structure,
-    parse_tdb,
-    parse_pif,
-    parse_json,
-    parse_csv,
-    parse_yaml,
-    parse_xml,
-    parse_excel,
-    parse_image,
-    parse_electron_microscopy,
-    parse_filename
-]
+ALL_PARSERS = {
+    "crystal_structure": parse_crystal_structure,
+    "tdb": parse_tdb,
+    "pif": parse_pif,
+    "json": parse_json,
+    "csv": parse_csv,
+    "yaml": parse_yaml,
+    "xml": parse_xml,
+    "excel": parse_excel,
+    "image": parse_image,
+    "electron_microscopy": parse_electron_microscopy,
+    "filename": parse_filename
+}
 
 
 def _parse_file_info(group, params=None):
