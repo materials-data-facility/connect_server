@@ -13,7 +13,12 @@ if [ "$CONDA_DEFAULT_ENV" == "proda" ]; then
     nohup gunicorn --bind 127.0.0.1:5000 --timeout $GUNICORN_TIMEOUT -w $GUNICORN_WORKERS \
         --graceful-timeout $(($GUNICORN_TIMEOUT * 2)) --log-level info \
         mdf_connect_server.api.api:app | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    echo "Connect Prod API started.";
+    sleep 3;
+    if [ `cat exit.log` == `cat /dev/null` ]; then
+        echo "Connect Prod API started.";
+    else
+        echo "Error starting Prod API:\n\n$(cat exit.log)";
+    fi
 
 elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     echo "Starting Connect API for Development";
@@ -24,7 +29,12 @@ elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     nohup gunicorn --bind 127.0.0.1:5000 --timeout $GUNICORN_TIMEOUT -w $GUNICORN_WORKERS \
         --graceful-timeout $(($GUNICORN_TIMEOUT * 2)) --log-level debug \
         mdf_connect_server.api.api:app | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    echo "Connect Dev API started.";
+    sleep 5;
+    if [ `cat exit.log` == `cat /dev/null` ]; then
+        echo "Connect Dev API started.";
+    else
+        echo "Error starting Dev API:\n\n$(cat exit.log)";
+    fi
 
 elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
     echo "Starting Connect Processing for Production";
@@ -34,7 +44,12 @@ elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
     truncate --size 0 prodp.log;
     nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
         | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    echo "Connect Prod Processor started";
+    sleep 5;
+    if [ `cat exit.log` == `cat /dev/null` ]; then
+        echo "Connect Prod Processor started.";
+    else
+        echo "Error starting Prod Processor:\n\n$(cat exit.log)";
+    fi
 
 elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
     echo "Starting Connect Processing for Development";
@@ -44,7 +59,12 @@ elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
     truncate --size 0 devp.log;
     nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
         | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    echo "Connect Dev Processor started";
+    sleep 5;
+    if [ `cat exit.log` == `cat /dev/null` ]; then
+        echo "Connect Dev Processor started.";
+    else
+        echo "Error starting Dev Processor:\n\n$(cat exit.log)";
+    fi
 
 else
     echo "CONDA_DEFAULT_ENV '$CONDA_DEFAULT_ENV' invalid!";

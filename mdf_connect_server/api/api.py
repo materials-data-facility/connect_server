@@ -489,6 +489,7 @@ def accept_ingest():
 @app.route("/status/<source_id>", methods=["GET"])
 def get_status(source_id):
     """Fetch and return status information"""
+    # User auth
     try:
         auth_res = utils.authenticate_token(request.headers.get("Authorization"),
                                             auth_level="convert")
@@ -501,11 +502,7 @@ def get_status(source_id):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-
-    uid_set = auth_res["identities_set"]
-    raw_status = utils.read_status(source_id)
-    # Failure message if status not fetched or user not allowed to view
-    # Only the submitter, ACL users, and admins can view
+    # Admin auth (allowed to fail)
     try:
         admin_res = utils.authenticate_token(request.headers.get("Authorization"),
                                              auth_level="admin")
@@ -515,14 +512,19 @@ def get_status(source_id):
             "success": False,
             "error": "Authentication failed"
             }), 500)
+
+    raw_status = utils.read_status(source_id)
+    # Failure message if status not fetched or user not allowed to view
+    # Only the submitter, ACL users, and admins can view
+
     # If actually not found
     if (not raw_status["success"]
         # or dataset not public
         or (raw_status["status"]["acl"] != ["public"]
             # and user was not submitter
-            and raw_status["status"]["user_id"] not in uid_set
+            and raw_status["status"]["user_id"] not in auth_res["identities_set"]
             # and user is not in ACL
-            and not any([uid in raw_status["status"]["acl"] for uid in uid_set])
+            and not any([uid in raw_status["status"]["acl"] for uid in auth_res["identities_set"]])
             # and user is not admin
             and not admin_res["success"])):
         # Summary:
@@ -539,10 +541,11 @@ def get_status(source_id):
             }), 200)
 
 
+@app.route("/submissions", methods=["GET"])
 @app.route("/submissions/<user_id>", methods=["GET"])
 def get_user_submissions(user_id=None):
     """Get all submission statuses by a user."""
-    # Regular authentication
+    # User auth
     try:
         auth_res = utils.authenticate_token(request.headers.get("Authorization"),
                                             auth_level="convert")
@@ -555,7 +558,7 @@ def get_user_submissions(user_id=None):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-    # Admin authentication
+    # Admin auth (allowed to fail)
     try:
         admin_res = utils.authenticate_token(request.headers.get("Authorization"),
                                              auth_level="admin")
@@ -595,5 +598,5 @@ def get_user_submissions(user_id=None):
 
     return (jsonify({
         "success": True,
-        "submissions": [utils.translate_status(sub["status"]) for sub in scan_res["results"]]
+        "submissions": [utils.translate_status(sub) for sub in scan_res["results"]]
         }), 200)
