@@ -539,8 +539,8 @@ def get_status(source_id):
             }), 200)
 
 
-@app.route("/user/<user_id>", methods=["GET"])
-def get_user_submissions(user_id):
+@app.route("/submissions/<user_id>", methods=["GET"])
+def get_user_submissions(user_id=None):
     """Get all submission statuses by a user."""
     # Regular authentication
     try:
@@ -566,12 +566,12 @@ def get_user_submissions(user_id):
             "error": "Authentication failed"
             }), 500)
 
-    # Users can request only their own submissions
+    # Users can request only their own submissions (by user_id or by default)
     # Admins can request any user's submissions
-    if not (admin_res["success"] or user_id in auth_res["identities_set"]):
+    if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
         return (jsonify({
             "success": False,
-            "error": "You are not authenticated as that user."
+            "error": "You are not authenticated as that user"
             }), 403)
 
     # Create scan filter
@@ -580,6 +580,8 @@ def get_user_submissions(user_id):
         filters = None
     elif admin_res["success"] and user_id == "active":
         filters = [("active", "==", True)]
+    elif user_id is None:
+        filters = [("user_id", "in", auth_res["identities_set"])]
     else:
         filters = [("user_id", "==", user_id)]
     scan_res = utils.scan_status(filters=filters)
@@ -588,7 +590,7 @@ def get_user_submissions(user_id):
     if len(scan_res["results"]) == 0:
         return (jsonify({
             "success": False,
-            "error": "No submissions found for user '{}'".format(user_id)
+            "error": "No submissions available"
             }), 404)
 
     return (jsonify({
