@@ -533,4 +533,65 @@ def get_status(source_id):
             "error": "Submission {} not found, or not available".format(source_id)
             }), 404)
     else:
-        return (jsonify(utils.translate_status(raw_status["status"])), 200)
+        return (jsonify({
+            "success": True,
+            "status": utils.translate_status(raw_status["status"])
+            }), 200)
+
+
+@app.route("/user/<user_id>", methods=["GET"])
+def get_user_submissions(user_id):
+    """Get all submission statuses by a user."""
+    # Regular authentication
+    try:
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                            auth_level="convert")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+    if not auth_res["success"]:
+        error_code = auth_res.pop("error_code")
+        return (jsonify(auth_res), error_code)
+    # Admin authentication
+    try:
+        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                             auth_level="admin")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+
+    # Users can request only their own submissions
+    # Admins can request any user's submissions
+    if not (admin_res["success"] or user_id in auth_res["identities_set"]):
+        return (jsonify({
+            "success": False,
+            "error": "You are not authenticated as that user."
+            }), 403)
+
+    # Create scan filter
+    # Admins can request a special function instead of a user ID
+    if admin_res["success"] and user_id == "all":
+        filters = None
+    elif admin_res["success"] and user_id == "active":
+        filters = [("active", "==", True)]
+    else:
+        filters = [("user_id", "==", user_id)]
+    scan_res = utils.scan_status(filters=filters)
+
+    # Error message if no submissions
+    if len(scan_res["results"]) == 0:
+        return (jsonify({
+            "success": False,
+            "error": "No submissions found for user '{}'".format(user_id)
+            }), 404)
+
+    return (jsonify({
+        "success": True,
+        "submissions": [utils.translate_status(sub["status"]) for sub in scan_res["results"]]
+        }), 200)
