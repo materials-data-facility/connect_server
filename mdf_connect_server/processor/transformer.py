@@ -288,7 +288,6 @@ def parse_json(group, params=None):
     """
     try:
         mapping = params["parsers"]["json"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["json"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -300,7 +299,7 @@ def parse_json(group, params=None):
                 file_json = json.load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -323,7 +322,6 @@ def parse_csv(group, params=None):
     try:
         csv_params = params["parsers"]["csv"]
         mapping = csv_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -334,7 +332,7 @@ def parse_csv(group, params=None):
                              na_values=csv_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
-        records.extend(_parse_pandas(df, mapping, source_name))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -354,7 +352,6 @@ def parse_yaml(group, params=None):
     """
     try:
         mapping = params["parsers"]["yaml"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["yaml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -366,7 +363,7 @@ def parse_yaml(group, params=None):
                 file_json = yaml.safe_load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -386,7 +383,6 @@ def parse_xml(group, params=None):
     """
     try:
         mapping = params["parsers"]["xml"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["xml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -398,7 +394,7 @@ def parse_xml(group, params=None):
                 file_json = xmltodict.parse(f.read())
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -420,7 +416,6 @@ def parse_excel(group, params=None):
     try:
         excel_params = params["parsers"]["excel"]
         mapping = excel_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -430,7 +425,7 @@ def parse_excel(group, params=None):
             df = pd.read_excel(file_path, na_values=excel_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
-        records.extend(_parse_pandas(df, mapping, source_name))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -509,7 +504,6 @@ def parse_filename(group, params=None):
     try:
         filename_params = params["parsers"]["filename"]
         mapping = filename_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -518,7 +512,6 @@ def parse_filename(group, params=None):
         record = {}
         filename = os.path.basename(file_path)
         for mdf_path, pattern in _flatten_struct(mapping):
-            mdf_path = mdf_path.replace("__custom", source_name)
             match = re.search(pattern, filename)
             if match:
                 fields = mdf_path.split(".")
@@ -605,7 +598,7 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping, source_name):
+def _parse_pandas(df, mapping):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
@@ -615,11 +608,11 @@ def _parse_pandas(df, mapping, source_name):
         new_map = {}
         for path, value in _flatten_struct(mapping):
             new_map[path] = value + "." + str(index)
-        records.extend(_parse_json(df_json, new_map, source_name))
+        records.extend(_parse_json(df_json, new_map))
     return records
 
 
-def _parse_json(file_json, mapping, source_name, na_values=None):
+def _parse_json(file_json, mapping, na_values=None):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
@@ -635,8 +628,6 @@ def _parse_json(file_json, mapping, source_name, na_values=None):
         # Get (path, value) pairs from the key structure
         # Loop over each
         for mdf_path, json_path in _flatten_struct(mapping):
-            mdf_path = mdf_path.replace("__custom", source_name)
-            json_path = json_path.replace("__custom", source_name)
             try:
                 value = _follow_path(data, json_path)
             except KeyError:

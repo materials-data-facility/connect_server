@@ -55,24 +55,24 @@ def convert(root_path, convert_params):
 
     # Process dataset entry
     full_dataset = convert_params["dataset"]
-    # Fetch custom block descriptors
+    # Fetch custom block descriptors, cast values to str
     new_custom = {}
-    # __custom block descriptors
+    # custom block descriptors
     # Turn _description => _desc
-    for key, val in full_dataset.pop("__custom", {}).items():
+    for key, val in full_dataset.pop("custom", {}).items():
         if key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = val
+            new_custom[key[:-len("ription")]] = str(val)
         else:
-            new_custom[key] = val
-    for key, val in full_dataset.pop("__custom_desc", {}).items():
+            new_custom[key] = str(val)
+    for key, val in full_dataset.pop("custom_desc", {}).items():
         if key.endswith("_desc"):
-            new_custom[key] = val
+            new_custom[key] = str(val)
         elif key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = val
+            new_custom[key[:-len("ription")]] = str(val)
         else:
-            new_custom[key+"_desc"] = val
+            new_custom[key+"_desc"] = str(val)
     if new_custom:
-        full_dataset[full_dataset.get("mdf", {}).get("source_name", "unknown")] = new_custom
+        full_dataset["custom"] = new_custom
 
     if full_dataset.get("mdf", {}).get("repositories"):
         full_dataset["mdf"]["repositories"] = list(expand_repository_tags(

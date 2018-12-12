@@ -138,9 +138,24 @@ CONVERSION = {
                 "U.S. Department of Energy"
             ]
         },
+        "NanoMFG": {
+            "aliases": [
+            ],
+            "parent_tags": [
+                "National Science Foundation"
+            ]
+        },
+        "National Science Foundation": {
+            "aliases": [
+                "NSF"
+            ],
+            "parent_tags": [
+            ]
+        },
         "NIST Materials Data Repository": {
             "aliases": [
-                "NIST MDR", "MDR"
+                "NIST MDR",
+                "MDR"
             ],
             "parent_tags": [
                 "National Institute of Standards and Technology"
@@ -156,7 +171,7 @@ CONVERSION = {
         },
         "U.S. Department of Commerce": {
             "aliases": [
-                "DOC"
+                "DoC"
             ],
             "parent_tags": []
         }

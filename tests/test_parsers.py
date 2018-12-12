@@ -5,12 +5,13 @@ import mdf_connect_server.processor.transformer as parsers
 import mdf_toolbox
 import pytest  # noqa: F401
 
-
+'''
 DATASET_PARAM = {
     "mdf": {
         "source_name": "test_dataset"
     }
 }
+'''
 BASE_PATH = os.path.join(os.path.dirname(__file__), "test_files")
 NO_DATA_FILE = os.path.join(BASE_PATH, "no_data.dat")
 NA_PATH = os.path.join(BASE_PATH, "does_not_exist.dat")
@@ -168,7 +169,7 @@ def test_json(tmpdir):
         json.dump(json_data, f)
     group = [json_file.strpath]
     mapping1 = {
-        "__custom": {
+        "custom": {
             "foo": "dict1.field1",
             "bar": "dict2.nested1.field1",
             "missing": "na_val"
@@ -178,16 +179,16 @@ def test_json(tmpdir):
         }
     }
     mapping2 = {
-        "__custom.foo": "dict1.field1",
-        "__custom.bar": "dict2.nested1.field1",
-        "__custom.missing": "na_val",
+        "custom.foo": "dict1.field1",
+        "custom.bar": "dict2.nested1.field1",
+        "custom.missing": "na_val",
         "material.composition": "compost"
     }
     correct_record = {
         "material": {
             "composition": "CN25"
         },
-        "test_dataset": {
+        "custom": {
             "foo": "value1",
             "bar": True
         }
@@ -196,7 +197,7 @@ def test_json(tmpdir):
         "material": {
             "composition": "CN25"
         },
-        "test_dataset": {
+        "custom": {
             "foo": "value1",
             "bar": True,
             "missing": "na"
@@ -205,7 +206,6 @@ def test_json(tmpdir):
 
     # Test with proper mappings
     assert parsers.parse_json(group, params={
-                                        "dataset": DATASET_PARAM,
                                         "parsers": {
                                             "json": {
                                                 "mapping": mapping1,
@@ -214,7 +214,6 @@ def test_json(tmpdir):
                                         }
                                      }) == [correct_record]
     assert parsers.parse_json(group, params={
-                                        "dataset": DATASET_PARAM,
                                         "parsers": {
                                             "json": {
                                                 "mapping": mapping2,
@@ -224,7 +223,6 @@ def test_json(tmpdir):
                                      }) == [correct_record]
     # With na included
     assert parsers.parse_json(group, params={
-                                        "dataset": DATASET_PARAM,
                                         "parsers": {
                                             "json": {
                                                 "mapping": mapping1
@@ -235,7 +233,6 @@ def test_json(tmpdir):
     # Test failure modes
     assert parsers.parse_json(group, {}) == {}
     assert parsers.parse_json([], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "json": {
                                             "mapping": mapping2
@@ -243,7 +240,6 @@ def test_json(tmpdir):
                                     }
                                   }) == []
     assert parsers.parse_json([NO_DATA_FILE], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "json": {
                                             "mapping": mapping2
@@ -251,7 +247,6 @@ def test_json(tmpdir):
                                     }
                                   }) == {}
     assert parsers.parse_json([NA_PATH], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "json": {
                                             "mapping": mapping2
@@ -279,7 +274,7 @@ def test_xml(tmpdir):
         f.write(xml_data)
     group = [xml_file.strpath]
     mapping1 = {
-        "__custom": {
+        "custom": {
             "foo": "root.dict1.field1",
             "bar": "root.dict2.nested1.field1"
         },
@@ -288,15 +283,15 @@ def test_xml(tmpdir):
         }
     }
     mapping2 = {
-        "__custom.foo": "root.dict1.field1",
-        "__custom.bar": "root.dict2.nested1.field1",
+        "custom.foo": "root.dict1.field1",
+        "custom.bar": "root.dict2.nested1.field1",
         "material.composition": "root.compost"
     }
     correct_record = {
         "material": {
             "composition": "CN25"
         },
-        "test_dataset": {
+        "custom": {
             "foo": "value1",
             "bar": 'true'
         }
@@ -304,7 +299,6 @@ def test_xml(tmpdir):
 
     # Test with proper mappings
     assert parsers.parse_xml(group, params={
-                                        "dataset": DATASET_PARAM,
                                         "parsers": {
                                             "xml": {
                                                 "mapping": mapping1
@@ -312,7 +306,6 @@ def test_xml(tmpdir):
                                         }
                                      }) == [correct_record]
     assert parsers.parse_xml(group, params={
-                                        "dataset": DATASET_PARAM,
                                         "parsers": {
                                             "xml": {
                                                 "mapping": mapping2
@@ -322,7 +315,6 @@ def test_xml(tmpdir):
     # Test failure modes
     assert parsers.parse_xml(group, {}) == {}
     assert parsers.parse_xml([], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "xml": {
                                             "mapping": mapping2
@@ -330,7 +322,6 @@ def test_xml(tmpdir):
                                     }
                                   }) == []
     assert parsers.parse_xml([NO_DATA_FILE], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "xml": {
                                             "mapping": mapping2
@@ -338,7 +329,6 @@ def test_xml(tmpdir):
                                     }
                                   }) == {}
     assert parsers.parse_xml([NA_PATH], params={
-                                    "dataset": DATASET_PARAM,
                                     "parsers": {
                                         "xml": {
                                             "mapping": mapping2
@@ -365,12 +355,12 @@ def test_electron_microscopy():
 def test_filename():
     mapping = {
         "material.composition": "^.{2}",  # First two chars are always composition
-        "__custom.foo": "foo:.{3}",  # 3 chars after foo is foo
-        "__custom.ext": "\\..{3,4}$"  # 3 or 4 char extension
+        "custom.foo": "foo:.{3}",  # 3 chars after foo is foo
+        "custom.ext": "\\..{3,4}$"  # 3 or 4 char extension
     }
     group = ["He_abcdeffoo:FOO.txt", "Al123Smith_et_al.and_co.data", "O2foo:bar"]
     correct = [{
-        'test_dataset': {
+        'custom': {
             'ext': '.txt',
             'foo': 'foo:FOO'
         },
@@ -378,14 +368,14 @@ def test_filename():
             'composition': 'He'
         }
     }, {
-        'test_dataset': {
+        'custom': {
             'ext': '.data'
         },
         'material': {
             'composition': 'Al'
         }
     }, {
-        'test_dataset': {
+        'custom': {
             'foo': 'foo:bar'
         },
         'material': {
@@ -393,7 +383,6 @@ def test_filename():
         }
     }]
     assert parsers.parse_filename(group, params={
-                                            "dataset": DATASET_PARAM,
                                             "parsers": {
                                                 "filename": {
                                                     "mapping": mapping
@@ -403,7 +392,6 @@ def test_filename():
     # Failures
     assert parsers.parse_filename(group, params={}) == {}
     assert parsers.parse_filename([], params={
-                                            "dataset": DATASET_PARAM,
                                             "parsers": {
                                                 "filename": {
                                                     "mapping": mapping

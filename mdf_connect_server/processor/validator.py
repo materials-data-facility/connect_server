@@ -54,9 +54,9 @@ class Validator:
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
             schema = json.load(schema_file)
-        # Replace __custom
-        schema["properties"][ds_md.get("mdf", {}).get("source_name", "__custom")] \
-            = schema["properties"].pop("__custom")
+        # Replace __source_name
+        schema["properties"][ds_md.get("mdf", {}).get("source_name", "unknown")] \
+            = schema["properties"].pop("__source_name")
         resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
                                           referrer=schema)
 
@@ -165,9 +165,6 @@ class Validator:
         # Load schema
         with open(os.path.join(self.__schema_dir, "record.json")) as schema_file:
             schema = json.load(schema_file)
-        # Replace __custom
-        schema["properties"][self.__dataset["mdf"]["source_name"]] \
-            = schema["properties"].pop("__custom")
         resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
                                           referrer=schema)
 
