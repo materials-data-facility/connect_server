@@ -66,7 +66,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Process fetched group
             single_record = {}
             multi_records = []
-            for parser_name in group_info["parsers"] or ALL_PARSERS.values():
+            for parser_name in (group_info["parsers"] or ALL_PARSERS.keys()):
                 try:
                     specific_params = mdf_toolbox.dict_merge(parse_params or {},
                                                              group_info["params"])
