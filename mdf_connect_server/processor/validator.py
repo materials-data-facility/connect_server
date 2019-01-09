@@ -106,6 +106,14 @@ class Validator:
         # Data
         ds_md["data"] = ds_md.get("data", {})
 
+        # BLOCK: custom
+        # Make all values into strings
+        if ds_md.get("custom"):
+            new_custom = {}
+            for key, val in ds_md["custom"].items():
+                new_custom[key] = str(val)
+            ds_md["custom"] = new_custom
+
         # Require strict JSON
         try:
             json.dumps(ds_md, allow_nan=False)
@@ -245,6 +253,14 @@ class Validator:
 #                    record["elements"] = list_of_elem
 
             rc_md["material"]["elements"] = list_of_elem
+
+        # BLOCK: custom
+        # Make all values into strings
+        if rc_md.get("custom"):
+            new_custom = {}
+            for key, val in rc_md["custom"].items():
+                new_custom[key] = str(val)
+            rc_md["custom"] = new_custom
 
         # Require strict JSON
         try:
