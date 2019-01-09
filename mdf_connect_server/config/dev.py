@@ -7,13 +7,13 @@ DEV = {
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
 
-    "DEFAULT_TEST_FLAG": True,
+    "DEFAULT_TEST_FLAG": False,
 
     "TRANSFER_DEADLINE": 3 * 60 * 60,  # 3 hours, in seconds
 
     "INGEST_URL": "https://dev-api.materialsdatafacility.org/ingest",
-    "INGEST_INDEX": "mdf-test",
-    "INGEST_TEST_INDEX": "mdf-test",
+    "INGEST_INDEX": "mdf-dev",
+    "INGEST_TEST_INDEX": "mdf-dev",
 
     "LOCAL_EP": "ca7550ad-55a9-4762-b558-8f2b15049039",
 
@@ -36,5 +36,5 @@ DEV = {
     "SQS_QUEUE": "mdfc_dev1.fifo",
     "SQS_GROUP_ID": "mdf_connect_dev",
 
-    "DYNAMO_TABLE": "dev-status-alpha-1"
+    "DYNAMO_TABLE": "dev-status-alpha-2"
 }

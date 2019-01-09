@@ -557,11 +557,11 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         # Handle errors
         if len(search_res["errors"]) > 0:
             utils.update_status(source_id, "ingest_search", "F",
-                                text=("{} batches of records failed to ingest ({} records total)"
-                                      ".").format(len(search_res["errors"]),
-                                                  (len(search_res["errors"])
-                                                   * CONFIG["SEARCH_BATCH_SIZE"]),
-                                                  search_res["errors"]),
+                                text=("{} batches of records failed to ingest (up to {} records"
+                                      "total)").format(len(search_res["errors"]),
+                                                       (len(search_res["errors"])
+                                                        * CONFIG["SEARCH_BATCH_SIZE"]),
+                                                       search_res["errors"]),
                                 except_on_fail=True)
             utils.complete_submission(source_id)
             return
