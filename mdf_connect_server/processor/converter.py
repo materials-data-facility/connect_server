@@ -147,7 +147,7 @@ def group_tree(root, config):
                 for f in g:
                     files.remove(f)
                 group_info = {
-                    "files": [os.path.join(path, f) for f in g],
+                    "files": g,
                     "parsers": format_rules["parsers"],
                     "params": format_rules["params"]
                 }
