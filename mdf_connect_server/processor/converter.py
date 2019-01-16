@@ -7,7 +7,6 @@ from queue import Empty
 
 import mdf_toolbox
 
-from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import transform
 
 
@@ -23,6 +22,9 @@ def convert(root_path, convert_params):
         dataset (dict): The dataset associated with the files.
         parsers (dict): Parser-specific parameters, keyed by parser (ex. "json": {...}).
         service_data (str): The path to a directory to store integration data.
+        group_config (dict): Grouping configuration.
+        repo_config (dict): Repository expansion information.
+        num_transformers (int): The number of transformer processes to use. Default 1.
 
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
@@ -38,14 +40,14 @@ def convert(root_path, convert_params):
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue,
                                                   input_complete, convert_params))
-                    for i in range(CONFIG["NUM_TRANSFORMERS"])]
+                    for i in range(convert_params.get("num_transformers", 1))]
     [t.start() for t in transformers]
     logger.debug("{}: Transformers started".format(source_id))
 
     # Populate input queue
     num_groups = 0
     extensions = set()
-    for group_info in group_tree(root_path, CONFIG["GROUPING_RULES"]):
+    for group_info in group_tree(root_path, convert_params["group_config"]):
         input_queue.put(group_info)
         num_groups += 1
         for f in group_info["files"]:
@@ -78,7 +80,8 @@ def convert(root_path, convert_params):
 
     if full_dataset.get("mdf", {}).get("repositories"):
         full_dataset["mdf"]["repositories"] = list(expand_repository_tags(
-                                                    full_dataset["mdf"]["repositories"]))
+                                                    full_dataset["mdf"]["repositories"],
+                                                    convert_params["repo_config"]))
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -106,6 +109,7 @@ def group_tree(root, config):
             with open(node_path) as f:
                 try:
                     new_config = json.load(f)
+                    logger.debug("Config updating: \n{}".format(new_config))
                 except Exception as e:
                     logger.warning("Error reading config file '{}': {}".format(node_path, str(e)))
                 else:
@@ -164,7 +168,7 @@ def group_tree(root, config):
     return groups
 
 
-def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
+def expand_repository_tags(input_tags, repo_rules):
     # Remove duplicates
     input_tags = set(input_tags)
     # Tags in final form
@@ -190,6 +194,6 @@ def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
     # Process tags requiring expansion
     # Recursion ends when no parents are left
     if parent_tags:
-        final_tags.update(expand_repository_tags(parent_tags))
+        final_tags.update(expand_repository_tags(parent_tags, repo_rules))
 
     return final_tags

@@ -248,7 +248,10 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     convert_params = {
         "dataset": metadata,
         "parsers": parse_params,
-        "service_data": service_data
+        "service_data": service_data,
+        "group_config": CONFIG["GROUPING_RULES"],
+        "repo_config": CONFIG["REPOSITORY_RULES"],
+        "num_transformers": CONFIG["NUM_TRANSFORMERS"]
     }
 
     # NOTE: Cancellation point
