@@ -232,6 +232,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     # Pull out special fields in metadata (the rest is the dataset)
     services = metadata.pop("services", {})
     parse_params = metadata.pop("index", {})
+    convert_config = metadata.pop("conversion_config", {})
     # metadata should have data location
     metadata["data"] = {
         "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
@@ -249,7 +250,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         "dataset": metadata,
         "parsers": parse_params,
         "service_data": service_data,
-        "group_config": CONFIG["GROUPING_RULES"],
+        "group_config": mdf_toolbox.dict_merge(convert_config, CONFIG["GROUPING_RULES"]),
         "repo_config": CONFIG["REPOSITORY_RULES"],
         "num_transformers": CONFIG["NUM_TRANSFORMERS"]
     }
