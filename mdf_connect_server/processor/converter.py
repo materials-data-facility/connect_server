@@ -117,7 +117,6 @@ def group_tree(root, config):
         else:
             logger.debug("Ignoring non-file, non-dir node '{}'".format(node_path))
 
-#    grouping = group_files(files, config)
     # Group the files
     # list "groups" is list of dict, each dict contains actual file list + parser info/config
     groups = []
@@ -163,54 +162,6 @@ def group_tree(root, config):
     [groups.extend(group_tree(d, config)) for d in dirs]
 
     return groups
-
-
-######OLD
-'''
-def group_tree(root):
-    """Group files based on format-specific rules."""
-    for path, dirs, files in os.walk(os.path.abspath(root)):
-        groups = []
-        # TODO: Expand grouping formats
-        # File-matching groups
-        # Each format specified in the rules
-        for format_type, format_rules in CONFIG["GROUPING_RULES"].items():
-            format_name_list = format_rules["files"]
-            format_groups = {}
-            # Check each file for rule matching
-            # Match to appropriate group (with same pre/post pattern)
-            #   eg a_[match]_b groups with a_[other match]_b but not c_[other match]_d
-            for f in files:
-                fname = f.lower().strip()
-                for format_name in format_name_list:
-                    if format_name in fname:
-                        pre_post_pattern = fname.replace(format_name, "")
-                        if not format_groups.get(pre_post_pattern):
-                            format_groups[pre_post_pattern] = []
-                        format_groups[pre_post_pattern].append(f)
-                        break
-            # Remove grouped files from the file list and add groups to the group list
-            for g in format_groups.values():
-                for f in g:
-                    files.remove(f)
-                group_info = {
-                    "files": [os.path.join(path, f) for f in g],
-                    "parsers": format_rules["parsers"],
-                    "params": format_rules["params"]
-                }
-                groups.append(group_info)
-
-        # NOTE: Keep this grouping last!
-        # Default grouping: Each file is a group
-        groups.extend([{"files": [os.path.join(path, f)],
-                        "parsers": [],
-                        "params": {}}
-                       for f in files])
-
-        # Yield each group
-        for g in groups:
-            yield g
-'''
 
 
 def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
