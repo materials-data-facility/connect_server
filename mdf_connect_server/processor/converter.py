@@ -128,7 +128,7 @@ def group_tree(root, config):
     if config.get("group_by_dir"):
         groups.append({"files": files,
                        "parsers": [],
-                       "params": config})
+                       "params": {}})
     else:
         for format_rules in config.get("known_formats", {}).values():
             format_name_list = format_rules["files"]

@@ -96,7 +96,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                                              "type '{t}'!").format(p=parser_name,
                                                                    t=type(parser_res)))
                         logger.debug("{}: {} parsed {}".format(source_id,
-                                                               parser_name, group_info))
+                                                               parser_name, group_info["files"]))
                     elif SUPER_DEBUG:
                         logger.debug("{}: {} could not parse {}".format(source_id,
                                                                         parser_name, group_info))
