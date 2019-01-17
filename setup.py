@@ -20,7 +20,7 @@ setup(
         "hyperspy>=1.3.1",
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.3.5",
-        "numpy>=1.14.5"
+        "numpy==1.15.0"
         "pandas>=0.23.0",
         "pif-ingestor>=1.1.0",
         "Pillow>=5.1.0",
