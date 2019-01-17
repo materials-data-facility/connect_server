@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='mdf_connect_server',
-    version='0.6.0',
+    version='0.6.1',
     packages=find_packages(),
     description='Materials Data Facility Connect Server infrastructure',
     install_requires=[
@@ -20,7 +20,7 @@ setup(
         "hyperspy>=1.3.1",
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.3.5",
-        "numpy==1.15.0"
+        "numpy==1.15.0",
         "pandas>=0.23.0",
         "pif-ingestor>=1.1.0",
         "Pillow>=5.1.0",
