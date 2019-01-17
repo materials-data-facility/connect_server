@@ -11,7 +11,9 @@ os.environ["MPLBACKEND"] = "agg"
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
 from bson import ObjectId  # noqa: E402
-import hyperspy.api as hs  # noqa: E402
+# import hyperspy.api as hs  # noqa: E402
+# TODO: Re-enable hyperspy after numpy import error fixed
+hs = None
 import magic  # noqa: E402
 import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
