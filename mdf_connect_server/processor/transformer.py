@@ -7,6 +7,7 @@ import re
 
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
+import pycalphad  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
@@ -16,7 +17,6 @@ import magic  # noqa: E402
 import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
 from PIL import Image  # noqa: E402
-import pycalphad  # noqa: E402
 import pymatgen  # noqa: E402
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
 from pif_ingestor.manager import IngesterManager  # noqa: E402

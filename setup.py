@@ -33,7 +33,6 @@ setup(
         "pyyaml>=3.12",
         "requests>=2.18.4",
         "scikit-image>=0.14.2",  # For hyperspy
-        "sympy>=1.3",  # For pycalphad
         "xmltodict>=0.11.0"
     ]
 )
