@@ -32,6 +32,7 @@ setup(
         "python-magic>=0.4.15",
         "pyyaml>=3.12",
         "requests>=2.18.4",
+        "scikit-image>=0.14.2",  # For hyperspy
         "xmltodict>=0.11.0"
     ]
 )
