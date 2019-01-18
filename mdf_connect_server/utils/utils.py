@@ -958,7 +958,7 @@ def cancel_submission(source_id, wait=True):
     # Change status code to reflect cancellation
     old_status_code = read_status(source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
-                                     .replace("T", "X").replace("P", "W")
+                                     .replace("T", "X").replace("P", "X")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
     if not update_res["success"]:
         return {
@@ -1352,7 +1352,7 @@ def create_status(status):
             "error": "ID {} already exists in database".format(status["source_id"])
             }
     try:
-        table.put_item(Item=status)
+        table.put_item(Item=status, ConditionExpression=Attr("source_id").not_exists())
     except Exception as e:
         return {
             "success": False,

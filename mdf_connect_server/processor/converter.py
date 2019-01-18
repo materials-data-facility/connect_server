@@ -5,7 +5,8 @@ import multiprocessing
 import os
 from queue import Empty
 
-from mdf_connect_server import CONFIG
+import mdf_toolbox
+
 from mdf_connect_server.processor import transform
 
 
@@ -21,6 +22,9 @@ def convert(root_path, convert_params):
         dataset (dict): The dataset associated with the files.
         parsers (dict): Parser-specific parameters, keyed by parser (ex. "json": {...}).
         service_data (str): The path to a directory to store integration data.
+        group_config (dict): Grouping configuration.
+        repo_config (dict): Repository expansion information.
+        num_transformers (int): The number of transformer processes to use. Default 1.
 
     Returns:
     list of dict: The full feedstock for this dataset, including dataset entry.
@@ -36,17 +40,17 @@ def convert(root_path, convert_params):
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue,
                                                   input_complete, convert_params))
-                    for i in range(CONFIG["NUM_TRANSFORMERS"])]
+                    for i in range(convert_params.get("num_transformers", 1))]
     [t.start() for t in transformers]
     logger.debug("{}: Transformers started".format(source_id))
 
     # Populate input queue
     num_groups = 0
     extensions = set()
-    for group in group_tree(root_path):
-        input_queue.put(group)
+    for group_info in group_tree(root_path, convert_params["group_config"]):
+        input_queue.put(group_info)
         num_groups += 1
-        for f in group:
+        for f in group_info["files"]:
             filename, ext = os.path.splitext(f)
             extensions.add(ext or filename)
     # Mark that input is finished
@@ -55,28 +59,29 @@ def convert(root_path, convert_params):
 
     # Process dataset entry
     full_dataset = convert_params["dataset"]
-    # Fetch custom block descriptors
+    # Fetch custom block descriptors, cast values to str
     new_custom = {}
-    # __custom block descriptors
+    # custom block descriptors
     # Turn _description => _desc
-    for key, val in full_dataset.pop("__custom", {}).items():
+    for key, val in full_dataset.pop("custom", {}).items():
         if key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = val
+            new_custom[key[:-len("ription")]] = str(val)
         else:
-            new_custom[key] = val
-    for key, val in full_dataset.pop("__custom_desc", {}).items():
+            new_custom[key] = str(val)
+    for key, val in full_dataset.pop("custom_desc", {}).items():
         if key.endswith("_desc"):
-            new_custom[key] = val
+            new_custom[key] = str(val)
         elif key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = val
+            new_custom[key[:-len("ription")]] = str(val)
         else:
-            new_custom[key+"_desc"] = val
+            new_custom[key+"_desc"] = str(val)
     if new_custom:
-        full_dataset[full_dataset.get("mdf", {}).get("source_name", "unknown")] = new_custom
+        full_dataset["custom"] = new_custom
 
     if full_dataset.get("mdf", {}).get("repositories"):
         full_dataset["mdf"]["repositories"] = list(expand_repository_tags(
-                                                    full_dataset["mdf"]["repositories"]))
+                                                    full_dataset["mdf"]["repositories"],
+                                                    convert_params["repo_config"]))
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -94,20 +99,45 @@ def convert(root_path, convert_params):
     return (feedstock, num_groups, list(extensions))
 
 
-def group_tree(root):
-    """Group files based on format-specific rules."""
-    for path, dirs, files in os.walk(os.path.abspath(root)):
-        groups = []
-        # TODO: Expand grouping formats
-        # File-matching groups
-        # Each format specified in the rules
-        for format_type, format_name_list in CONFIG["GROUPING_RULES"].items():
+def group_tree(root, config):
+    """Run group_files on files in tree appropriately."""
+    files = []
+    dirs = []
+    for node in os.listdir(root):
+        node_path = os.path.join(root, node)
+        if node == "mdf.json":
+            with open(node_path) as f:
+                try:
+                    new_config = json.load(f)
+                    logger.debug("Config updating: \n{}".format(new_config))
+                except Exception as e:
+                    logger.warning("Error reading config file '{}': {}".format(node_path, str(e)))
+                else:
+                    config = mdf_toolbox.dict_merge(new_config, config)
+        elif os.path.isfile(node_path):
+            files.append(node_path)
+        elif os.path.isdir(node_path):
+            dirs.append(node_path)
+        else:
+            logger.debug("Ignoring non-file, non-dir node '{}'".format(node_path))
+
+    # Group the files
+    # list "groups" is list of dict, each dict contains actual file list + parser info/config
+    groups = []
+    # Group by dir overrides other grouping
+    if config.get("group_by_dir"):
+        groups.append({"files": files,
+                       "parsers": [],
+                       "params": {}})
+    else:
+        for format_rules in config.get("known_formats", {}).values():
+            format_name_list = format_rules["files"]
             format_groups = {}
             # Check each file for rule matching
             # Match to appropriate group (with same pre/post pattern)
             #   eg a_[match]_b groups with a_[other match]_b but not c_[other match]_d
             for f in files:
-                fname = f.lower().strip()
+                fname = os.path.basename(f).lower().strip()
                 for format_name in format_name_list:
                     if format_name in fname:
                         pre_post_pattern = fname.replace(format_name, "")
@@ -119,18 +149,26 @@ def group_tree(root):
             for g in format_groups.values():
                 for f in g:
                     files.remove(f)
-                groups.append(g)
+                group_info = {
+                    "files": g,
+                    "parsers": format_rules["parsers"],
+                    "params": format_rules["params"]
+                }
+                groups.append(group_info)
 
         # NOTE: Keep this grouping last!
         # Default grouping: Each file is a group
-        groups.extend([[f] for f in files])
+        groups.extend([{"files": [f],
+                        "parsers": [],
+                        "params": {}}
+                       for f in files])
 
-        # Add path to filenames and yield each group
-        for g in groups:
-            yield [os.path.join(path, f) for f in g]
+    [groups.extend(group_tree(d, config)) for d in dirs]
+
+    return groups
 
 
-def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
+def expand_repository_tags(input_tags, repo_rules):
     # Remove duplicates
     input_tags = set(input_tags)
     # Tags in final form
@@ -156,6 +194,6 @@ def expand_repository_tags(input_tags, repo_rules=CONFIG["REPOSITORY_RULES"]):
     # Process tags requiring expansion
     # Recursion ends when no parents are left
     if parent_tags:
-        final_tags.update(expand_repository_tags(parent_tags))
+        final_tags.update(expand_repository_tags(parent_tags, repo_rules))
 
     return final_tags

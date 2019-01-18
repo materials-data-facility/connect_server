@@ -489,6 +489,7 @@ def accept_ingest():
 @app.route("/status/<source_id>", methods=["GET"])
 def get_status(source_id):
     """Fetch and return status information"""
+    # User auth
     try:
         auth_res = utils.authenticate_token(request.headers.get("Authorization"),
                                             auth_level="convert")
@@ -501,11 +502,7 @@ def get_status(source_id):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-
-    uid_set = auth_res["identities_set"]
-    raw_status = utils.read_status(source_id)
-    # Failure message if status not fetched or user not allowed to view
-    # Only the submitter, ACL users, and admins can view
+    # Admin auth (allowed to fail)
     try:
         admin_res = utils.authenticate_token(request.headers.get("Authorization"),
                                              auth_level="admin")
@@ -515,14 +512,19 @@ def get_status(source_id):
             "success": False,
             "error": "Authentication failed"
             }), 500)
+
+    raw_status = utils.read_status(source_id)
+    # Failure message if status not fetched or user not allowed to view
+    # Only the submitter, ACL users, and admins can view
+
     # If actually not found
     if (not raw_status["success"]
         # or dataset not public
         or (raw_status["status"]["acl"] != ["public"]
             # and user was not submitter
-            and raw_status["status"]["user_id"] not in uid_set
+            and raw_status["status"]["user_id"] not in auth_res["identities_set"]
             # and user is not in ACL
-            and not any([uid in raw_status["status"]["acl"] for uid in uid_set])
+            and not any([uid in raw_status["status"]["acl"] for uid in auth_res["identities_set"]])
             # and user is not admin
             and not admin_res["success"])):
         # Summary:
@@ -533,4 +535,68 @@ def get_status(source_id):
             "error": "Submission {} not found, or not available".format(source_id)
             }), 404)
     else:
-        return (jsonify(utils.translate_status(raw_status["status"])), 200)
+        return (jsonify({
+            "success": True,
+            "status": utils.translate_status(raw_status["status"])
+            }), 200)
+
+
+@app.route("/submissions", methods=["GET"])
+@app.route("/submissions/<user_id>", methods=["GET"])
+def get_user_submissions(user_id=None):
+    """Get all submission statuses by a user."""
+    # User auth
+    try:
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                            auth_level="convert")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+    if not auth_res["success"]:
+        error_code = auth_res.pop("error_code")
+        return (jsonify(auth_res), error_code)
+    # Admin auth (allowed to fail)
+    try:
+        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                             auth_level="admin")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+
+    # Users can request only their own submissions (by user_id or by default)
+    # Admins can request any user's submissions
+    if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
+        return (jsonify({
+            "success": False,
+            "error": "You are not authenticated as that user"
+            }), 403)
+
+    # Create scan filter
+    # Admins can request a special function instead of a user ID
+    if admin_res["success"] and user_id == "all":
+        filters = None
+    elif admin_res["success"] and user_id == "active":
+        filters = [("active", "==", True)]
+    elif user_id is None:
+        filters = [("user_id", "in", auth_res["identities_set"])]
+    else:
+        filters = [("user_id", "==", user_id)]
+    scan_res = utils.scan_status(filters=filters)
+
+    # Error message if no submissions
+    if len(scan_res["results"]) == 0:
+        return (jsonify({
+            "success": False,
+            "error": "No submissions available"
+            }), 404)
+
+    return (jsonify({
+        "success": True,
+        "submissions": [utils.translate_status(sub) for sub in scan_res["results"]]
+        }), 200)

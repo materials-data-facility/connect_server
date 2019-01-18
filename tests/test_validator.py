@@ -25,7 +25,7 @@ def test_validator():
             "source_id": "foo_bar_dataset_v1",
             "acl": ["public"]
         },
-        "foo_bar_dataset": {
+        "custom": {
             "foo": "bar"
         }
     }
@@ -56,7 +56,7 @@ def test_validator():
         "mrr": {
             "dataOrigin": ["experimental"]
         },
-        "foo_bar_dataset": {
+        "custom": {
             "foo": "bar"
         }
     }
@@ -128,8 +128,8 @@ def test_validator():
             "height": 101,
             "megapixels": 0.00001
         },
-        "foo_bar_dataset": {
-            "is_okay": True
+        "custom": {
+            "is_okay": "True"
         }
     }
     bad_record = {
@@ -163,7 +163,7 @@ def test_validator():
             'resource_type': 'dataset',
             'version': 1
         },
-        'foo_bar_dataset': {
+        'custom': {
             'foo': 'bar'
         },
         'services': {},
@@ -212,7 +212,7 @@ def test_validator():
         'mrr': {
             'dataOrigin': ['experimental']
         },
-        'foo_bar_dataset': {
+        'custom': {
             'foo': 'bar'
         },
         'services': {},
@@ -282,8 +282,8 @@ def test_validator():
             'height': 101,
             'megapixels': 0.00001
         },
-        'foo_bar_dataset': {
-            'is_okay': True
+        'custom': {
+            'is_okay': "True"
         }
     }]
 

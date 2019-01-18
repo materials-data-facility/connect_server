@@ -54,9 +54,9 @@ class Validator:
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
             schema = json.load(schema_file)
-        # Replace __custom
-        schema["properties"][ds_md.get("mdf", {}).get("source_name", "__custom")] \
-            = schema["properties"].pop("__custom")
+        # Replace __source_name
+        schema["properties"][ds_md.get("mdf", {}).get("source_name", "unknown")] \
+            = schema["properties"].pop("__source_name")
         resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
                                           referrer=schema)
 
@@ -105,6 +105,14 @@ class Validator:
 
         # Data
         ds_md["data"] = ds_md.get("data", {})
+
+        # BLOCK: custom
+        # Make all values into strings
+        if ds_md.get("custom"):
+            new_custom = {}
+            for key, val in ds_md["custom"].items():
+                new_custom[key] = str(val)
+            ds_md["custom"] = new_custom
 
         # Require strict JSON
         try:
@@ -165,9 +173,6 @@ class Validator:
         # Load schema
         with open(os.path.join(self.__schema_dir, "record.json")) as schema_file:
             schema = json.load(schema_file)
-        # Replace __custom
-        schema["properties"][self.__dataset["mdf"]["source_name"]] \
-            = schema["properties"].pop("__custom")
         resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
                                           referrer=schema)
 
@@ -248,6 +253,17 @@ class Validator:
 #                    record["elements"] = list_of_elem
 
             rc_md["material"]["elements"] = list_of_elem
+        elif rc_md["material"].get("elemental_proportions"):
+            rc_md["material"]["elements"] = [rc_md["material"]["elemental_proportions"].keys()]
+            rc_md["material"]["elements"].sort()
+
+        # BLOCK: custom
+        # Make all values into strings
+        if rc_md.get("custom"):
+            new_custom = {}
+            for key, val in rc_md["custom"].items():
+                new_custom[key] = str(val)
+            rc_md["custom"] = new_custom
 
         # Require strict JSON
         try:

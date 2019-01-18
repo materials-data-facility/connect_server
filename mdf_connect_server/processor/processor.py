@@ -2,6 +2,7 @@ import json
 import logging
 from multiprocessing import Process
 import os
+import signal
 from time import sleep
 import urllib
 
@@ -27,13 +28,38 @@ logfile_handler.setFormatter(logfile_formatter)
 
 logger.addHandler(logfile_handler)
 
-logger.info("\n\n==========Connect Process started==========\n")
+
+# Class to catch signals for graceful shutdown
+class SignalHandler:
+    caught_signal = None
+
+    def __init__(self, signal_catch_list=None):
+        if signal_catch_list is None:
+            signal_catch_list = [
+                signal.SIGINT,
+                signal.SIGTERM
+            ]
+        elif not isinstance(signal_catch_list, list):
+            signal_catch_list = [signal_catch_list]
+        for s in signal_catch_list:
+            signal.signal(s, self.catch_signal)
+
+    def catch_signal(self, signum, frame):
+        if self.caught_signal is None:
+            self.caught_signal = set([signum])
+        else:
+            self.caught_signal.add(signum)
 
 
 def processor():
+    logger.info("\n\n==========Connect Process started==========\n")
+    # Write out Processor PID
+    with open("pid.log", 'w') as pf:
+        pf.write(str(os.getpid()))
     utils.clean_start()
     active_processes = []
-    while True:
+    sig_handle = SignalHandler()
+    while sig_handle.caught_signal is None:
         try:
             submissions = utils.retrieve_from_queue(wait_time=CONFIG["PROCESSOR_WAIT_TIME"])
             if not submissions["success"]:
@@ -61,8 +87,9 @@ def processor():
                 # Convert processes should not be cancelled if they finished
                 # 'converted' is sentinel value for convert finished
                 logger.info("Dead: {} ({})"
-                            .format(dead_proc.name,
-                                    utils.read_status(dead_proc.name[1:])["status"]["converted"]))
+                            .format(
+                                dead_proc.name,
+                                utils.read_status(dead_proc.name[1:])["status"]["converted"]))
                 if (dead_proc.name[0] == "C"
                         and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
                     active_processes.remove(dead_proc)
@@ -71,14 +98,28 @@ def processor():
                     cancel_res = utils.cancel_submission(dead_proc.name[1:])
                     if cancel_res["stopped"]:
                         active_processes.remove(dead_proc)
-                        logger.debug("{}: Dead and cancelled/cleaned up".format(dead_proc.name))
+                        logger.debug("{}: Dead and cancelled/cleaned up"
+                                     .format(dead_proc.name))
                     else:
                         logger.info(("Unable to cancel process for {}: "
-                                     "{}").format(dead_proc.name,
-                                                  cancel_res.get("error", "No error provided")))
+                                     "{}").format(
+                                            dead_proc.name,
+                                            cancel_res.get("error", "No error provided")))
         except Exception as e:
             logger.error("Error life-checking processes: {}".format(e))
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
+
+    # After processing finished, shut down gracefully
+    logger.info("Shutting down Connect")
+    for proc in active_processes:
+        cancel_res = utils.cancel_submission(proc.name[1:])
+        if cancel_res["stopped"]:
+            logger.debug("{}: Shutdown".format(proc.name))
+        else:
+            logger.info("Unable to shut down process for {}: {}"
+                        .format(proc.name, cancel_res.get("error", "No error provided")))
+    logger.info("Connect gracefully shut down")
+    return
 
 
 def convert_driver(submission_type, metadata, source_id, test, access_token, user_id):
@@ -121,7 +162,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     source_info = utils.split_source_id(source_id)
     scan_res = utils.scan_status(fields="source_id",
                                  filters=[("source_id", "^", source_info["source_name"]),
-                                          ("source_id", "!=", source_id)])
+                                          ("source_id", "<", source_id)])
     if not scan_res["success"]:
         utils.update_status(source_id, "convert_start", "F", text=scan_res["error"],
                             except_on_fail=True)
@@ -191,6 +232,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     # Pull out special fields in metadata (the rest is the dataset)
     services = metadata.pop("services", {})
     parse_params = metadata.pop("index", {})
+    convert_config = metadata.pop("conversion_config", {})
     # metadata should have data location
     metadata["data"] = {
         "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
@@ -207,7 +249,10 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
     convert_params = {
         "dataset": metadata,
         "parsers": parse_params,
-        "service_data": service_data
+        "service_data": service_data,
+        "group_config": mdf_toolbox.dict_merge(convert_config, CONFIG["GROUPING_RULES"]),
+        "repo_config": CONFIG["REPOSITORY_RULES"],
+        "num_transformers": CONFIG["NUM_TRANSFORMERS"]
     }
 
     # NOTE: Cancellation point
@@ -516,11 +561,11 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         # Handle errors
         if len(search_res["errors"]) > 0:
             utils.update_status(source_id, "ingest_search", "F",
-                                text=("{} batches of records failed to ingest ({} records total)"
-                                      ".").format(len(search_res["errors"]),
-                                                  (len(search_res["errors"])
-                                                   * CONFIG["SEARCH_BATCH_SIZE"]),
-                                                  search_res["errors"]),
+                                text=("{} batches of records failed to ingest (up to {} records"
+                                      "total)").format(len(search_res["errors"]),
+                                                       (len(search_res["errors"])
+                                                        * CONFIG["SEARCH_BATCH_SIZE"]),
+                                                       search_res["errors"]),
                                 except_on_fail=True)
             utils.complete_submission(source_id)
             return

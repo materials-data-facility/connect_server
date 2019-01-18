@@ -7,16 +7,16 @@ import re
 
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
+import pycalphad  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
 from bson import ObjectId  # noqa: E402
 import hyperspy.api as hs  # noqa: E402
 import magic  # noqa: E402
-from mdf_toolbox import toolbox  # noqa: E402
+import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
 from PIL import Image  # noqa: E402
-import pycalphad  # noqa: E402
 import pymatgen  # noqa: E402
 from pymatgen.io.ase import AseAtomsAdaptor as ase_to_pmg  # noqa: E402
 from pif_ingestor.manager import IngesterManager  # noqa: E402
@@ -40,14 +40,7 @@ SUPER_DEBUG = False
 
 
 def transform(input_queue, output_queue, queue_done, parse_params):
-    """Parse data files however possible.
-
-    Arguments:
-    group (list of str): One group of files to parse.
-    parse_params (dict): Run parsers with these parameters.
-        dataset (dict): The dataset entry.
-        parsers (dict): The parser-specific information.
-        service_data (str): The path to the integration-specific data store.
+    """Parse data files.
 
     Returns:
     list of dict: The metadata parsed from the file.
@@ -60,7 +53,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
         while True:
             # Fetch group from queue
             try:
-                group = input_queue.get(timeout=5)
+                group_info = input_queue.get(timeout=5)
             # No group fetched
             except Empty:
                 # Queue is permanently depleted, stop processing
@@ -73,12 +66,15 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Process fetched group
             single_record = {}
             multi_records = []
-            for parser in ALL_PARSERS:
+            for parser_name in (group_info["parsers"] or ALL_PARSERS.keys()):
                 try:
-                    parser_res = parser(group=group, params=parse_params)
+                    specific_params = mdf_toolbox.dict_merge(parse_params or {},
+                                                             group_info["params"])
+                    parser_res = ALL_PARSERS[parser_name](group=group_info["files"],
+                                                          params=specific_params)
                 except Exception as e:
                     logger.warn(("{} Parser {} failed with "
-                                 "exception {}").format(source_id, parser.__name__, repr(e)))
+                                 "exception {}").format(source_id, parser_name, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
@@ -89,7 +85,7 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                     if parser_res:
                         # If a single record was returned, merge with others
                         if isinstance(parser_res, dict):
-                            single_record = toolbox.dict_merge(single_record, parser_res)
+                            single_record = mdf_toolbox.dict_merge(single_record, parser_res)
                         # If multiple records were returned, add to list
                         elif isinstance(parser_res, list):
                             # Only add records with data
@@ -97,16 +93,16 @@ def transform(input_queue, output_queue, queue_done, parse_params):
                         # Else, panic
                         else:
                             raise TypeError(("Parser '{p}' returned "
-                                             "type '{t}'!").format(p=parser.__name__,
+                                             "type '{t}'!").format(p=parser_name,
                                                                    t=type(parser_res)))
                         logger.debug("{}: {} parsed {}".format(source_id,
-                                                               parser.__name__, group))
+                                                               parser_name, group_info["files"]))
                     elif SUPER_DEBUG:
                         logger.debug("{}: {} could not parse {}".format(source_id,
-                                                                        parser.__name__, group))
+                                                                        parser_name, group_info))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
-                records = [toolbox.dict_merge(r, single_record) for r in multi_records if r]
+                records = [mdf_toolbox.dict_merge(r, single_record) for r in multi_records if r]
             # Else, if single_record exists, make it a list
             elif single_record:
                 records = [single_record]
@@ -120,12 +116,12 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Push records to output queue
             # Get the file info
             try:
-                file_info = _parse_file_info(group=group, params=parse_params)
+                file_info = _parse_file_info(group=group_info["files"], params=parse_params)
             except Exception as e:
                 logger.warning("{}: File info parser failed: {}".format(source_id, repr(e)))
             for record in records:
                 # TODO: Should files be handled differently?
-                record = toolbox.dict_merge(record, file_info)
+                record = mdf_toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
         logger.error("{}: Transformer error: {}".format(source_id, str(e)))
@@ -179,7 +175,7 @@ def parse_crystal_structure(group, params=None):
         crystal_structure["stoichiometry"] = pmg_s.composition.anonymized_formula
 
         # Add to record
-        record = toolbox.dict_merge(record, {
+        record = mdf_toolbox.dict_merge(record, {
                                                 "material": material,
                                                 "crystal_structure": crystal_structure
                                             })
@@ -211,9 +207,9 @@ def parse_tdb(group, params=None):
 
             # Add to record
             if material:
-                record = toolbox.dict_merge(record, {"material": material})
+                record = mdf_toolbox.dict_merge(record, {"material": material})
             if calphad:
-                record = toolbox.dict_merge(record, {"calphad": calphad})
+                record = mdf_toolbox.dict_merge(record, {"calphad": calphad})
 
             return record
         except Exception:
@@ -233,7 +229,8 @@ def parse_pif(group, params=None):
     mdf_records = []
 
     try:
-        raw_pifs = cit_manager.run_extensions(group, include=None, exclude=[])
+        raw_pifs = cit_manager.run_extensions(group, include=params.get("include", None),
+                                              exclude=[])
     except Exception as e:
         logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
         raise
@@ -291,7 +288,6 @@ def parse_json(group, params=None):
     """
     try:
         mapping = params["parsers"]["json"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["json"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -303,7 +299,7 @@ def parse_json(group, params=None):
                 file_json = json.load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -326,7 +322,6 @@ def parse_csv(group, params=None):
     try:
         csv_params = params["parsers"]["csv"]
         mapping = csv_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -337,7 +332,7 @@ def parse_csv(group, params=None):
                              na_values=csv_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
-        records.extend(_parse_pandas(df, mapping, source_name))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -357,7 +352,6 @@ def parse_yaml(group, params=None):
     """
     try:
         mapping = params["parsers"]["yaml"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["yaml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -369,7 +363,7 @@ def parse_yaml(group, params=None):
                 file_json = yaml.safe_load(f)
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -389,7 +383,6 @@ def parse_xml(group, params=None):
     """
     try:
         mapping = params["parsers"]["xml"]["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
         na_values = params["parsers"]["xml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
@@ -401,7 +394,7 @@ def parse_xml(group, params=None):
                 file_json = xmltodict.parse(f.read())
         except Exception:
             return {}
-        records.extend(_parse_json(file_json, mapping, source_name, na_values=na_values))
+        records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -423,7 +416,6 @@ def parse_excel(group, params=None):
     try:
         excel_params = params["parsers"]["excel"]
         mapping = excel_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -433,7 +425,7 @@ def parse_excel(group, params=None):
             df = pd.read_excel(file_path, na_values=excel_params.get("na_values", NA_VALUES))
         except Exception:
             return {}
-        records.extend(_parse_pandas(df, mapping, source_name))
+        records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -512,7 +504,6 @@ def parse_filename(group, params=None):
     try:
         filename_params = params["parsers"]["filename"]
         mapping = filename_params["mapping"]
-        source_name = params["dataset"]["mdf"]["source_name"]
     except (KeyError, AttributeError):
         return {}
 
@@ -521,7 +512,6 @@ def parse_filename(group, params=None):
         record = {}
         filename = os.path.basename(file_path)
         for mdf_path, pattern in _flatten_struct(mapping):
-            mdf_path = mdf_path.replace("__custom", source_name)
             match = re.search(pattern, filename)
             if match:
                 fields = mdf_path.split(".")
@@ -539,20 +529,19 @@ def parse_filename(group, params=None):
     return records
 
 
-# List of all non-internal parsers
-ALL_PARSERS = [
-    parse_crystal_structure,
-    parse_tdb,
-    parse_pif,
-    parse_json,
-    parse_csv,
-    parse_yaml,
-    parse_xml,
-    parse_excel,
-    parse_image,
-    parse_electron_microscopy,
-    parse_filename
-]
+ALL_PARSERS = {
+    "crystal_structure": parse_crystal_structure,
+    "tdb": parse_tdb,
+    "pif": parse_pif,
+    "json": parse_json,
+    "csv": parse_csv,
+    "yaml": parse_yaml,
+    "xml": parse_xml,
+    "excel": parse_excel,
+    "image": parse_image,
+    "electron_microscopy": parse_electron_microscopy,
+    "filename": parse_filename
+}
 
 
 def _parse_file_info(group, params=None):
@@ -609,7 +598,7 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping, source_name):
+def _parse_pandas(df, mapping):
     """Parse a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
@@ -619,11 +608,11 @@ def _parse_pandas(df, mapping, source_name):
         new_map = {}
         for path, value in _flatten_struct(mapping):
             new_map[path] = value + "." + str(index)
-        records.extend(_parse_json(df_json, new_map, source_name))
+        records.extend(_parse_json(df_json, new_map))
     return records
 
 
-def _parse_json(file_json, mapping, source_name, na_values=None):
+def _parse_json(file_json, mapping, na_values=None):
     """Parse a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
@@ -639,8 +628,6 @@ def _parse_json(file_json, mapping, source_name, na_values=None):
         # Get (path, value) pairs from the key structure
         # Loop over each
         for mdf_path, json_path in _flatten_struct(mapping):
-            mdf_path = mdf_path.replace("__custom", source_name)
-            json_path = json_path.replace("__custom", source_name)
             try:
                 value = _follow_path(data, json_path)
             except KeyError:

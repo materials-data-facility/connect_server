@@ -1,20 +1,71 @@
 CONVERSION = {
     "GROUPING_RULES": {
-        "vasp": [
-            "outcar",
-            "incar",
-            "chgcar",
-            "wavecar",
-            "wavcar",
-            "ozicar",
-            "ibzcar",
-            "kpoints",
-            "doscar",
-            "poscar",
-            "contcar",
-            "vasp_run.xml",
-            "xdatcar"
-        ]
+        "known_formats": {
+            "cif": {
+                "files": [
+                    ".cif",
+                ],
+                "parsers": [
+                    "crystal_structure",
+                    "pif"
+                ],
+                "params": {
+                    "include": [
+                        "cif",
+                        "dft"
+                    ]
+                }
+            },
+            "vasp": {
+                "files": [
+                    "outcar",
+                    "incar",
+                    "chgcar",
+                    "wavecar",
+                    "wavcar",
+                    "ozicar",
+                    "ibzcar",
+                    "kpoints",
+                    "doscar",
+                    "poscar",
+                    "contcar",
+                    "vasp_run.xml",
+                    "xdatcar"
+                ],
+                "parsers": [
+                    "pif",
+                    "crystal_structure"
+                ],
+                "params": {
+                    "include": [
+                        "dft"
+                    ]
+                }
+            },
+            "json": {
+                "files": [
+                    ".json"
+                ],
+                "parsers": [
+                    "json"
+                ],
+                "params": {}
+            },
+            "csv": {
+                "files": [
+                    ".csv"
+                ],
+                "parsers": [
+                    "csv",
+                    "pif"
+                ],
+                "params": {
+                    "include": [
+                        "template_csv"
+                    ]
+                }
+            }
+        }
     },
     "REPOSITORY_RULES": {
         "APS Sector 1": {
@@ -89,9 +140,24 @@ CONVERSION = {
                 "U.S. Department of Energy"
             ]
         },
+        "NanoMFG": {
+            "aliases": [
+            ],
+            "parent_tags": [
+                "National Science Foundation"
+            ]
+        },
+        "National Science Foundation": {
+            "aliases": [
+                "NSF"
+            ],
+            "parent_tags": [
+            ]
+        },
         "NIST Materials Data Repository": {
             "aliases": [
-                "NIST MDR", "MDR"
+                "NIST MDR",
+                "MDR"
             ],
             "parent_tags": [
                 "National Institute of Standards and Technology"
@@ -107,7 +173,7 @@ CONVERSION = {
         },
         "U.S. Department of Commerce": {
             "aliases": [
-                "DOC"
+                "DoC"
             ],
             "parent_tags": []
         }

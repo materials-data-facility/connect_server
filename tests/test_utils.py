@@ -96,6 +96,7 @@ def test_split_source_id():
 
 def test_scan_status():
     # Regular usage
+    # Requires multiple statuses in DB
     # TODO: Set/find known static source_id in StatusDB
     res = utils.scan_status()
     assert res["success"]
