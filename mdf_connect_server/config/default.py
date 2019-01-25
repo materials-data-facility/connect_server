@@ -11,7 +11,7 @@ DEFAULT = {
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
-    "NUM_TRANSFORMERS": 5,
+    "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
     "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
 
@@ -26,7 +26,7 @@ DEFAULT = {
 
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
-    "SEARCH_PING_TIME": 1,  # Seconds
+    "SEARCH_PING_TIME": 2,  # Seconds
 
     "PUBLISH_COLLECTIONS": {
         "21": {
