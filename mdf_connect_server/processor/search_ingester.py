@@ -4,6 +4,7 @@ import logging
 import multiprocessing
 import os
 from queue import Empty
+from time import sleep
 
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
@@ -185,21 +186,31 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
             i = 0
             while True:
                 try:
-                    res = ingest_client.ingest(index, ingestable)
+                    ingest_res = ingest_client.ingest(index, ingestable)
+                    if not ingest_res["acknowledged"]:
+                        raise ValueError("Ingest not acknowledged by Search")
+                    task_id = ingest_res["task_id"]
+                    task_status = "PENDING"  # Assume task starts as pending
+                    # While task is not complete, check status
+                    while task_status != "SUCCESS" and task_status != "FAILURE":
+                        sleep(CONFIG["SEARCH_PING_TIME"])
+                        task_res = ingest_client.get_task(task_id)
+                        task_status = task_res["state"]
                     break
-                except GlobusAPIError as e:
+                except (GlobusAPIError, ValueError) as e:
                     if i < CONFIG["SEARCH_RETRIES"]:
                         logger.warning("{}: Retrying Search ingest error: {}"
                                        .format(source_id, repr(e)))
                         i += 1
                     else:
                         raise
-            if not res["success"]:
-                raise ValueError("Ingest failed: " + str(res))
-            elif res["num_documents_ingested"] <= 0:
-                raise ValueError("No documents ingested: " + str(res))
+            if task_status == "FAILURE":
+                raise ValueError("Ingest failed: " + str(task_res))
+            elif task_status == "SUCCESS":
+                logger.debug("{}: Search batch ingested: {}"
+                             .format(source_id, task_res["message"]))
             else:
-                logger.debug("{}: Search batch ingested".format(source_id))
+                raise ValueError("Invalid state '{}' from {}".format(task_status, task_res))
         except GlobusAPIError as e:
             logger.error("{}: Search ingest error: {}".format(source_id, e.raw_json))
             # logger.debug('Stack trace:', exc_info=True)
