@@ -208,11 +208,14 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             raise ValueError(dl_res["error"])
 
         # Backup to MDF
-        if not test:
+        if CONFIG["BACKUP_EP"] and not test:
             backup_res = utils.backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
                                            CONFIG["BACKUP_EP"], backup_path)
             if not backup_res["success"]:
                 raise ValueError(backup_res["error"])
+        else:
+            logger.debug("Skipping data backup - is test ({}) or no backup EP ({})"
+                         .format(test, bool(CONFIG["BACKUP_EP"])))
 
     except Exception as e:
         utils.update_status(source_id, "convert_download", "F", text=repr(e), except_on_fail=True)
@@ -577,18 +580,21 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         backup_feed_path = os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
                                         source_id + "_final.json")
         try:
-            transfer = mdf_toolbox.custom_transfer(
-                            mdf_transfer_client, CONFIG["LOCAL_EP"], CONFIG["BACKUP_EP"],
-                            [(final_feed_path, backup_feed_path)],
-                            interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                            inactivity_time=CONFIG["TRANSFER_DEADLINE"],
-                            notify=False)
-            for event in transfer:
+            if CONFIG["BACKUP_EP"]:
+                transfer = mdf_toolbox.custom_transfer(
+                                mdf_transfer_client, CONFIG["LOCAL_EP"], CONFIG["BACKUP_EP"],
+                                [(final_feed_path, backup_feed_path)],
+                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                inactivity_time=CONFIG["TRANSFER_DEADLINE"],
+                                notify=False)
+                for event in transfer:
+                    if not event["success"]:
+                        logger.debug(event)
                 if not event["success"]:
-                    logger.debug(event)
-            if not event["success"]:
-                raise ValueError(event.get("code", "No code")
-                                 + ": " + event.get("description", "No description"))
+                    raise ValueError(event.get("code", "No code")
+                                     + ": " + event.get("description", "No description"))
+            else:
+                logger.info("Skipping feedstock backup - no backup EP set")
         except Exception as e:
             utils.update_status(source_id, "ingest_search", "R",
                                 text="Feedstock backup failed: {}".format(str(e)),
