@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='mdf_connect_server',
-    version='0.6.1',
+    version='0.6.2',
     packages=find_packages(),
     description='Materials Data Facility Connect Server infrastructure',
     install_requires=[
@@ -15,7 +15,7 @@ setup(
         "Cython>=0.28.5",
         "dfttopif>=1.0.0",
         "flask>=1.0.2",
-        "globus-sdk>=1.8.0",
+        "globus-sdk>=1.7.0",
         "gunicorn>=19.9.0",
         "hyperspy>=1.4.1",
         "jsonschema>=2.6.0",
