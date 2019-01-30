@@ -139,7 +139,7 @@ def test_scan_status():
                                      ("code", "<", sample1["code"])])
     assert res["success"]
     count3 = len(res["results"])
-    assert count3 < count2
+    assert count3 < count2 or count2 == 1
 
     # Errors
     res = utils.scan_status(fields=True)
