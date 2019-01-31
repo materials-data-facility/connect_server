@@ -11,13 +11,13 @@ DEFAULT = {
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
-    "NUM_TRANSFORMERS": 5,
+    "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
     "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
 
-    "CANCEL_WAIT_TIME": 60,  # 1 minute, in seconds
+    "CANCEL_WAIT_TIME": 60,  # Seconds
 
-    "TRANSFER_PING_INTERVAL": 1 * 60,  # 1 minute, in seconds
+    "TRANSFER_PING_INTERVAL": 60,  # Seconds
     "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}",
 
     "TRANSFER_CANCEL_MSG": ("Your recent MDF Connect submission was cancelled due to a service"
@@ -26,6 +26,7 @@ DEFAULT = {
 
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
+    "SEARCH_PING_TIME": 2,  # Seconds
 
     "PUBLISH_COLLECTIONS": {
         "21": {

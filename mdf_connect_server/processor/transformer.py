@@ -563,19 +563,19 @@ def _parse_file_info(group, params=None):
     """
     try:
         file_params = params["parsers"]["file"]
-    except (KeyError, AttributeError):
+    except Exception:
         raise ValueError("File info parser params missing")
     try:
         globus_endpoint = file_params["globus_endpoint"]
-    except (KeyError, AttributeError):
+    except Exception:
         raise ValueError("File info globus_endpoint missing")
     try:
         http_host = file_params["http_host"]
-    except (KeyError, AttributeError):
+    except Exception:
         raise ValueError("File info http_host missing")
     try:
         local_path = file_params["local_path"]
-    except (KeyError, AttributeError):
+    except Exception:
         raise ValueError("File info local_path missing")
     host_path = file_params.get("host_path", local_path)
 
@@ -584,7 +584,7 @@ def _parse_file_info(group, params=None):
         host_file = file_path.replace(local_path, host_path)
         with open(file_path, "rb") as f:
             md = {
-                "globus": "globus://" + globus_endpoint + host_file,
+                "globus": "globus://" + str(globus_endpoint) + str(host_file),
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
                 "url": http_host + host_file,
