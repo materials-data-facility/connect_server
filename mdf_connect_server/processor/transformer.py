@@ -205,15 +205,16 @@ def parse_tdb(group, params=None):
             if phases:
                 calphad['phases'] = phases
 
+        except Exception:
+            pass
+        else:
             # Add to record
             if material:
                 record = mdf_toolbox.dict_merge(record, {"material": material})
             if calphad:
                 record = mdf_toolbox.dict_merge(record, {"calphad": calphad})
 
-            return record
-        except Exception:
-            return {}
+    return record
 
 
 def parse_pif(group, params=None):
@@ -232,8 +233,8 @@ def parse_pif(group, params=None):
         raw_pifs = cit_manager.run_extensions(group, include=params.get("include", None),
                                               exclude=[])
     except Exception as e:
-        logger.warn("Citrine pif-ingestor raised exception: " + repr(e))
-        raise
+        logger.debug("Citrine pif-ingestor raised exception: " + repr(e))
+        return {}
     if not raw_pifs:
         return {}
     elif isinstance(raw_pifs, System):
@@ -298,8 +299,9 @@ def parse_json(group, params=None):
             with open(file_path) as f:
                 file_json = json.load(f)
         except Exception:
-            return {}
-        records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            pass
+        else:
+            records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -331,8 +333,9 @@ def parse_csv(group, params=None):
             df = pd.read_csv(file_path, delimiter=csv_params.get("delimiter", ","),
                              na_values=csv_params.get("na_values", NA_VALUES))
         except Exception:
-            return {}
-        records.extend(_parse_pandas(df, mapping))
+            pass
+        else:
+            records.extend(_parse_pandas(df, mapping))
     return records
 
 
@@ -362,8 +365,9 @@ def parse_yaml(group, params=None):
             with open(file_path) as f:
                 file_json = yaml.safe_load(f)
         except Exception:
-            return {}
-        records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            pass
+        else:
+            records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -393,8 +397,9 @@ def parse_xml(group, params=None):
             with open(file_path) as f:
                 file_json = xmltodict.parse(f.read())
         except Exception:
-            return {}
-        records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            pass
+        else:
+            records.extend(_parse_json(file_json, mapping, na_values=na_values))
     return records
 
 
@@ -424,8 +429,9 @@ def parse_excel(group, params=None):
         try:
             df = pd.read_excel(file_path, na_values=excel_params.get("na_values", NA_VALUES))
         except Exception:
-            return {}
-        records.extend(_parse_pandas(df, mapping))
+            pass
+        else:
+            records.extend(_parse_pandas(df, mapping))
     return records
 
 
