@@ -245,14 +245,14 @@ def test_json(tmpdir):
                                             "mapping": mapping2
                                         }
                                     }
-                                  }) == {}
+                                  }) == []
     assert parsers.parse_json([NA_PATH], params={
                                     "parsers": {
                                         "json": {
                                             "mapping": mapping2
                                         }
                                     }
-                                  }) == {}
+                                  }) == []
 
 
 def test_csv():
@@ -327,14 +327,14 @@ def test_xml(tmpdir):
                                             "mapping": mapping2
                                         }
                                     }
-                                  }) == {}
+                                  }) == []
     assert parsers.parse_xml([NA_PATH], params={
                                     "parsers": {
                                         "xml": {
                                             "mapping": mapping2
                                         }
                                     }
-                                  }) == {}
+                                  }) == []
 
 
 def test_excel():
