@@ -1,0 +1,76 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "organization",
+    "description": "Schema for an organizational ruleset in MDF.",
+    "type": "object",
+    "properties": {
+        "canonical_name": {
+            "type": "string",
+            "description": "The canonical name of the organization, to be displayed in the 'organization' field."
+        },
+        "alias_names": {
+            "type": "array",
+            "description": "Non-canonical names for the organization that should be accepted.",
+            "items": {
+                "type": "string",
+                "description": "One organization alias or abbreviation."
+            }
+        },
+        "permission_groups": {
+            "type": "array",
+            "description": "UUIDs of Globus Groups. Members, managers, and admins of the group(s) will be given permissions within this organization in MDF.",
+            "items": {
+                "type": "string",
+                "description": "One Globus Group UUID."
+            }
+        },
+        "data_storage": {
+            "type": "array",
+            "description": "Globus links to mandatory data backup locations.",
+            "items": {
+                "type": "string",
+                "description": "One Globus link."
+            }
+        },
+        "curation": {
+            "type": "boolean",
+            "description": "Whether or not curation should be forced for all datasets in this organization."
+        },
+        "project_block": {
+            "type": "array",
+            "description": "The special project blocks associated with this organization's metadata.",
+            "items": {
+                "type": "string",
+                "description": "One project block name."
+            }
+        },
+        "required_fields": {
+            "type": "array",
+            "description": "Fields or blocks that are required for an organizational dataset to be valid, using dot syntax.",
+            "items": {
+                "type": "string",
+                "description": "One required field or block."
+            }
+        },
+        "parent_organizations": {
+            "type": "array",
+            "descriptions": "The organization(s) that are direct parents to this one.",
+            "items": {
+                "type": "string",
+                "description": "The name of one parent organization."
+            }
+        },
+        "integrations": {
+            "type": "array",
+            "description": "The services and other integrations all organizational datasets should be submitted to.",
+            "items": {
+                "type": "string",
+                "description": "One service integration"
+            }
+        }
+    },
+    "additionalProperties": false,
+    "required": [
+        "canonical_name"
+    ]
+}
