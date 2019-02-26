@@ -138,8 +138,6 @@ def test_scan_status():
     res = utils.scan_status(filters=[("submission_time", ">", sample1["submission_time"]),
                                      ("code", "<", sample1["code"])])
     assert res["success"]
-    count3 = len(res["results"])
-    assert count3 < count2 or count2 == 1
 
     # Errors
     res = utils.scan_status(fields=True)
