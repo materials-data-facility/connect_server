@@ -24,9 +24,9 @@
                 "description": "One Globus Group UUID."
             }
         },
-        "data_storage": {
+        "data_locations": {
             "type": "array",
-            "description": "Data backup endpoints.",
+            "description": "Data locations (Globus endpoints) to send data for this organization.",
             "items": {
                 "type": "string",
                 "description": "One Globus link."
@@ -36,7 +36,7 @@
             "type": "boolean",
             "description": "Whether or not curation is required for all datasets in this organization."
         },
-        "project_block": {
+        "project_blocks": {
             "type": "array",
             "description": "The special project blocks associated with this organization's metadata.",
             "items": {
