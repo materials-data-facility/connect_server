@@ -4,13 +4,13 @@
     "description": "Schema for an organizational ruleset in MDF.",
     "type": "object",
     "properties": {
-        "canonical_name": {
+        "name": {
             "type": "string",
-            "description": "The canonical name of the organization, to be displayed in the 'organization' field."
+            "description": "The name of the organization to be displayed in the 'organization' field."
         },
-        "alias_names": {
+        "aliases": {
             "type": "array",
-            "description": "Non-canonical names for the organization that should be accepted.",
+            "description": "Other names or abbreviations that refer to the same organization.",
             "items": {
                 "type": "string",
                 "description": "One organization alias or abbreviation."
@@ -26,7 +26,7 @@
         },
         "data_storage": {
             "type": "array",
-            "description": "Globus links to mandatory data backup locations.",
+            "description": "Data backup endpoints.",
             "items": {
                 "type": "string",
                 "description": "One Globus link."
@@ -34,7 +34,7 @@
         },
         "curation": {
             "type": "boolean",
-            "description": "Whether or not curation should be forced for all datasets in this organization."
+            "description": "Whether or not curation is required for all datasets in this organization."
         },
         "project_block": {
             "type": "array",
@@ -62,7 +62,7 @@
         },
         "integrations": {
             "type": "array",
-            "description": "The services and other integrations all organizational datasets should be submitted to.",
+            "description": "The default services and other integrations for the organization.",
             "items": {
                 "type": "string",
                 "description": "One service integration"
@@ -71,6 +71,6 @@
     },
     "additionalProperties": false,
     "required": [
-        "canonical_name"
+        "name"
     ]
 }
