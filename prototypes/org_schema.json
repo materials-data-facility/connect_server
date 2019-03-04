@@ -4,7 +4,7 @@
     "description": "Schema for an organizational ruleset in MDF.",
     "type": "object",
     "properties": {
-        "name": {
+        "canonical_name": {
             "type": "string",
             "description": "The name of the organization to be displayed in the 'organization' field."
         },
@@ -62,7 +62,7 @@
         },
         "integrations": {
             "type": "array",
-            "description": "The default services and other integrations for the organization.",
+            "description": "The required services and other integrations for the organization.",
             "items": {
                 "type": "string",
                 "description": "One service integration"
@@ -71,6 +71,6 @@
     },
     "additionalProperties": false,
     "required": [
-        "name"
+        "canonical_name"
     ]
 }
