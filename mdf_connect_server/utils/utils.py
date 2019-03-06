@@ -1132,17 +1132,21 @@ def validate_status(status, code_mode=None):
 
     code = status["code"]
     try:
-        assert len(code) == len(STATUS_STEPS) or len(code) == len(STATUS_STEPS) - INGEST_MARK
-        if code_mode == "start":
+        assert len(code) == len(STATUS_STEPS)
+        if code_mode == "convert_start":
             # Nothing started or finished
-            assert code == "z" * len(STATUS_STEPS)
+            assert code == "z" * len(code)
+        elif code_mode == "ingest_start":
+            # Convert steps skipped, other steps not started
+            assert code[:INGEST_MARK] == "N" * len(code[:INGEST_MARK])
+            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
         elif code_mode == "handoff":
             # convert finished until handoff
             assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
             # convert handoff to ingest in progress
             assert code[INGEST_MARK-1] == "P"
             # ingest not started
-            assert code[INGEST_MARK:] == "z" * (len(STATUS_STEPS) - INGEST_MARK)
+            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
     except AssertionError:
         return {
             "success": False,
@@ -1346,7 +1350,8 @@ def create_status(status):
     if status.get("submission_code") == "C":
         status["code"] = "z" * len(STATUS_STEPS)
     elif status.get("submission_code") == "I":
-        status["code"] = "z" * (len(STATUS_STEPS) - INGEST_MARK)
+        status["code"] = (("N" * len(STATUS_STEPS[:INGEST_MARK]))
+                          + ("z" * len(STATUS_STEPS[INGEST_MARK:])))
 
     status_valid = validate_status(status, "start")
     if not status_valid["success"]:
@@ -1540,12 +1545,10 @@ def translate_status(status):
     full_code = list(status["code"])
     messages = status["messages"]
     sub_type = status["submission_code"]
-    # Submission type determines steps
+    steps = [st[1] for st in STATUS_STEPS]
     if sub_type == 'C':
-        steps = [st[1] for st in STATUS_STEPS]
         subm = "convert"
     elif sub_type == 'I':
-        steps = [st[1] for st in STATUS_STEPS[INGEST_MARK:]]
         subm = "ingest"
     else:
         steps = []
