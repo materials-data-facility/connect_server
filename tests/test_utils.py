@@ -61,12 +61,14 @@ def test_split_source_id():
     assert utils.split_source_id("_test_foo_bar_study_v1-1") == {
         "success": True,
         "source_name": "_test_foo_bar_study",
+        "source_id": "_test_foo_bar_study_v1-1",
         "search_version": 1,
         "submission_version": 1
     }
     assert utils.split_source_id("study_v8_engines_v2-8") == {
         "success": True,
         "source_name": "study_v8_engines",
+        "source_id": "study_v8_engines_v2-8",
         "search_version": 2,
         "submission_version": 8
     }
@@ -74,6 +76,7 @@ def test_split_source_id():
     assert utils.split_source_id("just_this") == {
         "success": False,
         "source_name": "just_this",
+        "source_id": "just_this",
         "search_version": 0,
         "submission_version": 0
     }
@@ -83,12 +86,14 @@ def test_split_source_id():
     assert utils.split_source_id("_test_old_oqmd_v13") == {
         "success": True,
         "source_name": "_test_old_oqmd",
+        "source_id": "_test_old_oqmd_v13-13",
         "search_version": 13,
         "submission_version": 13
     }
     assert utils.split_source_id("ser_v1_ng_stuff_v2") == {
         "success": True,
         "source_name": "ser_v1_ng_stuff",
+        "source_id": "ser_v1_ng_stuff_v2-2",
         "search_version": 2,
         "submission_version": 2
     }

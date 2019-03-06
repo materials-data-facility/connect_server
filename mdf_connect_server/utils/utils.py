@@ -387,13 +387,14 @@ def split_source_id(source_id):
 
     Arguments:
     source_id (str): The source_id to split. If this is not a valid-form source_id,
-                     the entire string will be assumed to be the source_name
+                     the entire string will be assumed to be the source_name and source_id
                      and the versions will be 0.
 
     Returns:
     dict:
         success (bool): True if the versions were extracted, False otherwise.
         source_name (str): The base source_name.
+        source_id (str): The assembled source_id.
         search_version (int): The Search version from the source_id.
         submission_version (int): The Connect version from the source_id.
     """
@@ -403,6 +404,7 @@ def split_source_id(source_id):
         return {
             "success": False,
             "source_name": source_id,
+            "source_id": source_id,
             "search_version": 0,
             "submission_version": 0
         }
@@ -419,6 +421,7 @@ def split_source_id(source_id):
     return {
         "success": True,
         "source_name": source_name,
+        "source_id": "{}_v{}-{}".format(source_name, search_version, submission_version),
         "search_version": int(search_version),
         "submission_version": int(submission_version)
     }
@@ -1102,9 +1105,9 @@ def validate_status(status, code_mode=None):
     Arguments:
     status (dict): The status to validate.
     code_mode (str): The mode to check the status code, or None to skip code check.
-                        "convert": No steps have started or finished.
-                        "ingest": All convert steps have finished (except the ingest handoff)
-                                  and no ingest steps have started or finished.
+                        "start": No steps have started or finished.
+                        "handoff": All convert steps have finished (except the ingest handoff)
+                                   and no ingest steps have started or finished.
 
     Returns:
     dict:
@@ -1129,11 +1132,11 @@ def validate_status(status, code_mode=None):
 
     code = status["code"]
     try:
-        assert len(code) == len(STATUS_STEPS)
-        if code_mode == "convert":
+        assert len(code) == len(STATUS_STEPS) or len(code) == len(STATUS_STEPS) - INGEST_MARK
+        if code_mode == "start":
             # Nothing started or finished
             assert code == "z" * len(STATUS_STEPS)
-        elif code_mode == "ingest":
+        elif code_mode == "handoff":
             # convert finished until handoff
             assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
             # convert handoff to ingest in progress
@@ -1334,14 +1337,18 @@ def create_status(status):
 
     # Add defaults
     status["messages"] = ["No message available"] * len(STATUS_STEPS)
-    status["code"] = "z" * len(STATUS_STEPS)
     status["active"] = True
     status["cancelled"] = False
     status["pid"] = os.getpid()
     status["extensions"] = []
     status["converted"] = False
 
-    status_valid = validate_status(status, "convert")
+    if status.get("submission_code") == "C":
+        status["code"] = "z" * len(STATUS_STEPS)
+    elif status.get("submission_code") == "I":
+        status["code"] = "z" * (len(STATUS_STEPS) - INGEST_MARK)
+
+    status_valid = validate_status(status, "start")
     if not status_valid["success"]:
         return status_valid
 

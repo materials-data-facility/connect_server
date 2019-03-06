@@ -22,6 +22,7 @@ class Validator:
     """
     def __init__(self, schema_path=None):
         self.__dataset = None  # Serves as initialized flag
+        self.__source_info = None
         self.__tempfile = None
         self.__scroll_id = None
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
@@ -32,7 +33,7 @@ class Validator:
         else:
             self.__schema_dir = CONFIG["SCHEMA_PATH"]
 
-    def start_dataset(self, ds_md):
+    def start_dataset(self, ds_md, source_info=None):
         """Validate a dataset against the MDF schema.
 
         Arguments:
@@ -50,6 +51,7 @@ class Validator:
                 "error": "Dataset validation already in progress."
                 }
         self.__finished = False
+        self.__source_info = source_info or {}
 
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
@@ -88,6 +90,14 @@ class Validator:
 
         # resource_type
         ds_md["mdf"]["resource_type"] = "dataset"
+
+        # source_name
+        if not ds_md["mdf"].get("source_name"):
+            ds_md["mdf"]["source_name"] = self.__source_info.get("source_name")
+
+        # source_id
+        if not ds_md["mdf"].get("source_id"):
+            ds_md["mdf"]["source_id"] = self.__source_info.get("source_id")
 
         # acl
         if not ds_md["mdf"].get("acl"):
