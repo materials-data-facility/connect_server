@@ -553,7 +553,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     search_config = services.get("mdf_search", {})
     try:
         search_res = search_ingest(
-                        base_feed_path, index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+                        feedstock=base_feed_path, source_id=source_id,
+                        index=search_config.get("index", CONFIG["INGEST_INDEX"]),
                         batch_size=CONFIG["SEARCH_BATCH_SIZE"], feedstock_save=final_feed_path)
     except Exception as e:
         utils.update_status(source_id, "ingest_search", "F", text=repr(e),

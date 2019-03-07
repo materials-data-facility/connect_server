@@ -16,7 +16,7 @@ from mdf_connect_server.processor import Validator
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(feedstock, index, batch_size,
+def search_ingest(feedstock, source_id, index, batch_size,
                   num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
     """Ingests feedstock from file.
 
@@ -35,18 +35,17 @@ def search_ingest(feedstock, index, batch_size,
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                                {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
+    source_info = utils.split_source_id(source_id)
 
     # Validate feedstock
     with open(feedstock, 'r') as stock:
         val = Validator()
         dataset_entry = json.loads(next(stock))
-        ds_res = val.start_dataset(dataset_entry)
+        ds_res = val.start_dataset(dataset_entry, source_info)
         if not ds_res.get("success"):
             raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(ds_res)))
 
         # Delete previous version of this dataset in Search
-        source_id = dataset_entry["mdf"]["source_id"]
-        source_info = utils.split_source_id(source_id)
         del_q = {
             "q": "mdf.source_name:{}".format(source_info["source_name"]),
             "advanced": True

@@ -347,7 +347,7 @@ def accept_ingest():
         # Check if past submission is active
         if old_status["active"]:
             # Check old status validity
-            status_valid = utils.validate_status(old_status, code_mode="ingest")
+            status_valid = utils.validate_status(old_status, code_mode="handoff")
             if not status_valid["success"]:
                 logger.error("Prior status from database invalid: {}".format(
                                                                         status_valid["error"]))
@@ -364,7 +364,7 @@ def accept_ingest():
         elif new_status_info["success"]:
             new_status = new_status_info["status"]
             # Check new status validity
-            status_valid = utils.validate_status(new_status, code_mode="ingest")
+            status_valid = utils.validate_status(new_status, code_mode="handoff")
             if not status_valid["success"]:
                 logger.error("New status invalid: {}".format(status_valid["error"]))
                 return (jsonify(status_valid), 500)
