@@ -588,9 +588,13 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
 
         # Globus Transfer
         if loc_info.scheme == "globus":
+            if filename:
+                transfer_path = os.path.join(local_path, filename)
+            else:
+                transfer_path = local_path
             # Check that data not already in place
             if (loc_info.netloc != local_ep
-                    and loc_info.path != (local_path + (filename if filename else ""))):
+                    and loc_info.path != transfer_path):
                 try:
                     if admin_client is not None:
                         # Edit ACL to allow pull
@@ -617,7 +621,7 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
                     # Transfer locally
                     transfer = mdf_toolbox.custom_transfer(
                                     tc, loc_info.netloc, local_ep,
-                                    [(loc_info.path, local_path)],
+                                    [(loc_info.path, transfer_path)],
                                     interval=CONFIG["TRANSFER_PING_INTERVAL"],
                                     inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
                     for event in transfer:
