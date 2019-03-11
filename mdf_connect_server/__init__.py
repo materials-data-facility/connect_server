@@ -17,7 +17,7 @@ elif server == "development":
 else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
                            " or 'development', even for processing only.")
-CONFIG["GROUPING_RULES"] = GROUPING
+CONFIG["GROUPING_RULES"] = GROUPINGS
 CONFIG["ORGANIZATIONS"] = ORGANIZATIONS
 # Add credentials
 CONFIG["GLOBUS_CREDS"] = {
