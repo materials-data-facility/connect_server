@@ -2,7 +2,7 @@ import os
 
 from mdf_toolbox import dict_merge
 
-from mdf_connect_server.config import CONVERSION, DEFAULT, DEV, KEYS, PROD
+from mdf_connect_server.config import CONVERSION, DEFAULT, DEV, KEYS, ORGANIZATIONS, PROD
 
 
 CONFIG = {}
@@ -18,6 +18,7 @@ else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
                            " or 'development', even for processing only.")
 CONFIG = dict_merge(CONVERSION, CONFIG)
+CONFIG["ORGANIZATIONS"] = ORGANIZATIONS
 # Add credentials
 CONFIG["GLOBUS_CREDS"] = {
     "app_name": "MDF Open Connect",
