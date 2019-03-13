@@ -120,13 +120,28 @@ def accept_convert():
             "details": str(e)
             }), 400)
 
-    # test = True if set in metadata or config
-    test = metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"]
+    # Pull out configuration fields from metadata into sub_conf, set defaults where appropriate
+    sub_conf = {
+        "data_sources": metadata.pop("data_sources"),
+        "data_destinations": metadata.pop("data_destinations", []),
+        "curation": metadata.pop("curation", False),
+        "test": metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"],
+        "update": metadata.pop("update", False),
+        "acl": metadata.get("mdf", {}).get("acl", ["public"])
+    }
+    if metadata.get("index"):
+        sub_conf["index"] = metadata.pop("index")
+    if metadata.get("conversion_config"):
+        sub_conf["conversion_config"] = metadata.pop("conversion_config")
+    if metadata.get("services"):
+        sub_conf["services"] = metadata.pop("services")
 
+    # Create source_name
     sub_title = metadata["dc"]["titles"][0]["title"]
     try:
         source_id_info = utils.make_source_id(
-                                metadata.get("mdf", {}).get("source_name") or sub_title, test=test)
+                                metadata.get("mdf", {}).get("source_name") or sub_title,
+                                test=sub_conf["test"])
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -139,16 +154,48 @@ def accept_convert():
         return (jsonify({
             "success": False,
             "error": ("Your source_name or title has been submitted previously "
-                      "by another user.")
+                      "by another user. Please change your source_name to "
+                      "correct this error.")
             }), 400)
+    # Verify update flag is correct
+    update_flag = metadata.pop("update", False)
+    # update == False but version > 1
+    if not update_flag and (source_id_info["search_version"] > 1
+                            or source_id_info["submission_version"] > 1):
+        return (jsonify({
+            "success": False,
+            "error": ("This dataset has already been submitted, but this submission is not "
+                      "marked as an update.\nIf you are updating a previously submitted "
+                      "dataset, please resubmit with 'update=True'.\nIf you are submitting "
+                      "a new dataset, please change the source_name.")
+            }), 400)
+    # update == True but version == 1
+    elif update_flag and (source_id_info["search_version"] == 1
+                          and source_id_info["submission_version"] == 1):
+        return (jsonify({
+            "success": False,
+            "error": ("This dataset has not already been submitted, but this submission is "
+                      "marked as an update.\nIf you are updating a previously submitted "
+                      "dataset, please verify that your source_name is correct.\nIf you "
+                      "are submitting a new dataset, please resubmit with 'update=False'.")
+            }), 400)
+
+    # Set appropriate metadata
     if not metadata.get("mdf"):
         metadata["mdf"] = {}
     metadata["mdf"]["source_id"] = source_id
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = source_id_info["search_version"]
-    if not metadata["mdf"].get("acl"):
-        metadata["mdf"]["acl"] = ["public"]
 
+    # Get organization rules to apply
+    if metadata["mdf"].get("organizations"):
+        metadata["mdf"]["organizations"], sub_conf = \
+            utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
+
+    metadata["mdf"]["acl"] = sub_conf["acl"]
+
+    '''
+    ################################
     # If the user has set a non-test Publish collection, verify user is in correct group
     if not test and isinstance(metadata.get("services", {}).get("globus_publish"), dict):
         collection = str(metadata["services"]["globus_publish"].get("collection_id")
@@ -184,6 +231,8 @@ def accept_convert():
         if not auth_res["success"]:
             error_code = auth_res.pop("error_code")
             return (jsonify(auth_res), error_code)
+    #####################################
+    '''
 
     status_info = {
         "source_id": source_id,
@@ -194,7 +243,7 @@ def accept_convert():
         "user_id": user_id,
         "user_email": email,
         "acl": metadata["mdf"]["acl"],
-        "test": test,
+        "test": sub_conf["test"],
         "original_submission": json.dumps(md_copy)
         }
     try:
@@ -214,7 +263,7 @@ def accept_convert():
             "submission_type": "convert",
             "metadata": metadata,
             "source_id": source_id,
-            "test": test,
+            "test": sub_conf["test"],
             "access_token": access_token,
             "user_id": user_id
         }

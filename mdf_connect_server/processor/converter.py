@@ -23,7 +23,6 @@ def convert(root_path, convert_params):
         parsers (dict): Parser-specific parameters, keyed by parser (ex. "json": {...}).
         service_data (str): The path to a directory to store integration data.
         group_config (dict): Grouping configuration.
-        repo_config (dict): Repository expansion information.
         num_transformers (int): The number of transformer processes to use. Default 1.
 
     Returns:
@@ -77,11 +76,6 @@ def convert(root_path, convert_params):
             new_custom[key+"_desc"] = str(val)
     if new_custom:
         full_dataset["custom"] = new_custom
-
-    if full_dataset.get("mdf", {}).get("repositories"):
-        full_dataset["mdf"]["repositories"] = list(expand_repository_tags(
-                                                    full_dataset["mdf"]["repositories"],
-                                                    convert_params["repo_config"]))
 
     # Create complete feedstock
     feedstock = [full_dataset]
@@ -166,34 +160,3 @@ def group_tree(root, config):
     [groups.extend(group_tree(d, config)) for d in dirs]
 
     return groups
-
-
-def expand_repository_tags(input_tags, repo_rules):
-    # Remove duplicates
-    input_tags = set(input_tags)
-    # Tags in final form
-    final_tags = set()
-    # Tags requiring expansion
-    parent_tags = set()
-
-    for tag in input_tags:
-        # If tag in in canonical form
-        if tag in repo_rules.keys():
-            # Add canonical tag and aliases to final_tags
-            final_tags.add(tag)
-            final_tags.update(repo_rules[tag].get("aliases", []))
-            # Add parents' canonical forms to processing list
-            parent_tags.update(repo_rules[tag].get("parent_tags", []))
-        # tag is not in canonical form
-        else:
-            # Find canonical form of tag, add to processing list, remove tag from input list
-            for name, info in repo_rules.items():
-                if tag in info["aliases"]:
-                    parent_tags.add(name)
-
-    # Process tags requiring expansion
-    # Recursion ends when no parents are left
-    if parent_tags:
-        final_tags.update(expand_repository_tags(parent_tags, repo_rules))
-
-    return final_tags

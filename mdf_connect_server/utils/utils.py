@@ -482,6 +482,88 @@ def clean_start():
     return
 
 
+def fetch_org_rules(org_names, user_rules=None):
+    """Fetch organization rules and metadata.
+
+    Arguments:
+        org_names (str or list of str): Org name or alias to fetch rules for.
+        user_rules (dict): User-supplied rules to add, if desired. Default None.
+
+    Returns:
+        tuple: (list: All org canonical_names, dict: All appropriate rules)
+    """
+    # Normalize name: Remove special characters (including whitespace) and capitalization
+    # Function for convenience
+    def normalize_name(name): "".join([c for c in name.lower() if c.isalnum()])
+
+    # Cache list of all organization aliases to match against
+    # Transform into tuple (normalized_aliases, org_rules) for convenience
+    all_clean_orgs = []
+    for org in CONFIG["ORGANIZATIONS"]:
+        aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
+                                                       + [org["canonical_name"]])]
+        all_clean_orgs.append((aliases, deepcopy(org)))
+
+    if isinstance(org_names, list):
+        orgs_to_fetch = org_names
+    else:
+        orgs_to_fetch = [org_names]
+    rules = {}
+    all_names = []
+    # Fetch org rules and parent rules
+    while len(orgs_to_fetch) > 0:
+        # Process sub 0 always, so orgs processed in order
+        # New org matches on canonical_name or any alias
+        new_org_data = [org for aliases, org in all_clean_orgs
+                        if normalize_name(orgs_to_fetch[0]) in aliases]
+        if len(new_org_data) < 1:
+            raise ValueError("Organization '{}' not registered in MDF Connect (from '{}')"
+                             .format(orgs_to_fetch[0], org_names))
+        elif len(new_org_data) > 1:
+            raise ValueError("Multiple organizations found with name '{}' (from '{}')"
+                             .format(orgs_to_fetch[0], org_names))
+        orgs_to_fetch.pop(0)
+        new_org_data = new_org_data[0]
+
+        # Check that org rules not already fetched
+        if new_org_data["canonical_name"] in all_names:
+            continue
+        else:
+            all_names.append(new_org_data["canonical_name"])
+
+        # Add all (unprocessed) parents to fetch list
+        orgs_to_fetch.extend([parent for parent in new_org_data.get("parent_organizations", [])
+                              if parent not in all_names])
+
+        # Merge new rules with old
+        # Strip out unneeded info
+        new_org_data.pop("canonical_name", None)
+        new_org_data.pop("aliases", None)
+        new_org_data.pop("description", None)
+        new_org_data.pop("homepage", None)
+        new_org_data.pop("parent_organizations", None)
+        # Save correct curation state
+        if rules.get("curation", False) or new_org_data.get("curation", False):
+            curation = True
+        else:
+            curation = False
+        # Merge new rules into old rules
+        rules = mdf_toolbox.dict_merge(rules, new_org_data, append_lists=True)
+        # Ensure curation set if needed
+        if curation:
+            rules["curation"] = curation
+
+    # Merge in user-set rules (with lower priority than any org-set rules)
+    if user_rules:
+        rules = mdf_toolbox.dict_merge(rules, user_rules)
+        # If user set curation, set curation
+        # Otherwise user preference is overridden by org preference
+        if user_rules.get("curation", False):
+            rules["curation"] = True
+
+    return (all_names, rules)
+
+
 def download_data(transfer_client, data_loc, local_ep, local_path,
                   admin_client=None, user_id=None):
     """Download data from a remote host to the configured machine.

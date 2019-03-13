@@ -254,7 +254,6 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         "parsers": parse_params,
         "service_data": service_data,
         "group_config": mdf_toolbox.dict_merge(convert_config, CONFIG["GROUPING_RULES"]),
-        "repo_config": CONFIG["REPOSITORY_RULES"],
         "num_transformers": CONFIG["NUM_TRANSFORMERS"]
     }
 
