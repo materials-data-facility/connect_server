@@ -112,12 +112,19 @@ ADMIN_GROUP = {
 }
 
 
-def authenticate_token(token, auth_level):
-    """Auth a token
-    Levels:
-        convert
-        ingest
-        admin
+def authenticate_token(token, auth_level, member_level=None):
+    """Authenticate a token.
+    Arguments:
+        token (str): The token to authenticate with.
+        auth_level (str): Connect privilege level or other group required.
+                Values: admin, convert, ingest, [Group ID]
+        member_level (str): For non-Connect groups, membership level required.
+                No effect on auth_levels admin, convert, ingest.
+                Values: admin, manager, member
+                Default: member
+
+    Returns:
+        dict: Token and user info
     """
     if not token:
         return {
@@ -160,21 +167,21 @@ def authenticate_token(token, auth_level):
         }
     # Finally, verify user is in appropriate group
     try:
-        whitelist = fetch_whitelist(auth_level)
+        whitelist = fetch_whitelist(auth_level, member_level)
         if len(whitelist) == 0:
             raise ValueError("Whitelist empty")
     except Exception as e:
-        logger.warning("Whitelist generation failed:", e)
+        logger.warning("Whitelist generation failed: {}".format(e))
         return {
             "success": False,
             "error": "Unable to fetch Group memberships.",
             "error_code": 500
         }
     if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        logger.info("User not in whitelist:", auth_res["username"])
+        logger.info("User '{}' not in whitelist '{}'.".format(auth_res["username"], auth_level))
         return {
             "success": False,
-            "error": "You cannot access this service or collection",
+            "error": "You cannot access this service or organization",
             "error_code": 403
         }
 
@@ -189,9 +196,29 @@ def authenticate_token(token, auth_level):
     }
 
 
-def fetch_whitelist(auth_level):
-    # auth_level values:
-    # admin, convert, ingest, [Group ID]
+def fetch_whitelist(auth_level, member_level=None):
+    """Fetch the whitelist of appropriate group members.
+
+    Arguments:
+        auth_level (str): Connect privilege level or other group required.
+                Values: admin, convert, ingest, [Group ID]
+        member_level (str): For non-Connect groups, membership level required.
+                No effect on auth_levels admin, convert, ingest.
+                Values: admin, manager, member
+                Default: member
+
+    Returns:
+        list of str: Whitelist of appropriate user IDs.
+    """
+    # Add member levels higher than selected to allowed_roles
+    if member_level is None or member_level == "member":
+        allowed_roles = ["admin", "manager", "member"]
+    elif member_level == "manager":
+        allowed_roles = ["admin", "manager"]
+    elif member_level == "admin":
+        allowed_roles = ["admin"]
+    else:
+        raise ValueError("Invalid member_level '{}'".format(member_level))
     whitelist = []
     groups_auth = {
         "app_name": "MDF Open Connect",
@@ -262,7 +289,8 @@ def fetch_whitelist(auth_level):
         else:
             whitelist.extend([member["identity_id"]
                               for member in member_list
-                              if member["status"] == "active"])
+                              if (member["status"] == "active"
+                                  and member["role"] in allowed_roles)])
     return whitelist
 
 

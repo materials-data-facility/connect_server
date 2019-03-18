@@ -13,7 +13,7 @@ ORGANIZATIONS = [{
     "acl": [
         "5fc63928-3752-11e8-9c6f-0e00fd09bf20"
     ],
-    "data_locations": [
+    "data_destinations": [
         ("globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/"
          "deleteme_contents/")
     ],
@@ -23,7 +23,7 @@ ORGANIZATIONS = [{
         "dc.descriptions.description"
     ],
     "parent_organizations": [],
-    "integrations": []
+    "services": []
 }, {
     # Advanced Photon Source
     "canonical_name": "Advanced Photon Source",

@@ -122,15 +122,15 @@ def processor():
     return
 
 
-def convert_driver(submission_type, metadata, source_id, test, access_token, user_id):
+def convert_driver(submission_type, metadata, sub_conf, source_id, access_token, user_id):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
     Arguments:
     submission_type (str): "convert" (used for error-checking).
     metadata (dict): The JSON passed to /convert.
+    sub_conf (dict): Submission configuration information.
     source_id (str): The source name of this submission.
-    test (bool): If the submission is a test submission.
     access_token (str): The Globus Auth access token for the submitting user.
     user_id (str): The Globus ID of the submitting user.
     """
@@ -208,14 +208,14 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             raise ValueError(dl_res["error"])
 
         # Backup to MDF
-        if CONFIG["BACKUP_EP"] and not test:
+        if CONFIG["BACKUP_EP"] and not sub_conf["test"]:
             backup_res = utils.backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
                                            CONFIG["BACKUP_EP"], backup_path)
             if not backup_res["success"]:
                 raise ValueError(backup_res["error"])
         else:
             logger.debug("Skipping data backup - is test ({}) or no backup EP ({})"
-                         .format(test, bool(CONFIG["BACKUP_EP"])))
+                         .format(sub_conf["test"], bool(CONFIG["BACKUP_EP"])))
 
     except Exception as e:
         utils.update_status(source_id, "convert_download", "F", text=repr(e), except_on_fail=True)
@@ -298,6 +298,13 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         utils.complete_submission(source_id)
         return
 
+    # Trigger curation if required
+    if sub_conf.get("curation"):
+        # TODO: Real curation flow
+        logger.info("CURATION TRIGGERED FOR {}".format(source_id))
+
+    #################################################################################
+
     # Pass dataset to /ingest
     utils.update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
@@ -313,7 +320,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
             "data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)],
             "services": services,
             "service_data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], service_data)],
-            "test": test
+            "test": sub_conf["test"]
         }
         headers = {}
         tokens = mdf_conf_client.oauth2_client_credentials_tokens(
@@ -551,10 +558,18 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     utils.update_status(source_id, "ingest_search", "P", except_on_fail=True)
     search_config = services.get("mdf_search", {})
     try:
-        search_res = search_ingest(
-                        feedstock=base_feed_path, source_id=source_id,
-                        index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                        batch_size=CONFIG["SEARCH_BATCH_SIZE"], feedstock_save=final_feed_path)
+        search_args = {
+            "feedstock": base_feed_path,
+            "source_id": source_id,
+            "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
+            "batch_size": CONFIG["SEARCH_BATCH_SIZE"],
+            "feedstock_save": final_feed_path,
+            "validator_info": {
+                "projects_blocks": sub_conf["project_blocks"],
+                "required_fields": sub_conf["required_fields"]
+            }
+        }
+        search_res = search_ingest(**search_args)
     except Exception as e:
         utils.update_status(source_id, "ingest_search", "F", text=repr(e),
                             except_on_fail=True)

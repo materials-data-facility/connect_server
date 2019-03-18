@@ -51,7 +51,7 @@ def test_validator():
             "source_id": "foo_bar_dataset_v1",
             "acl": ["public"],
             "version": 1,
-            "repositories": ["MDF"]
+            "organizations": ["MDF"]
         },
         "mrr": {
             "dataOrigin": ["experimental"]
@@ -205,7 +205,7 @@ def test_validator():
             'source_id': 'foo_bar_dataset_v1',
             'acl': ['public'],
             'version': 1,
-            'repositories': ['MDF'],
+            'organizations': ['MDF'],
             'scroll_id': 0,
             'resource_type': 'dataset'
         },
@@ -225,7 +225,7 @@ def test_validator():
             'scroll_id': 1,
             'resource_type': 'record',
             'version': 1,
-            'repositories': ['MDF']
+            'organizations': ['MDF']
         },
         'files': [{
             'data_type': 'example',
@@ -240,7 +240,7 @@ def test_validator():
             'scroll_id': 3,
             'resource_type': 'record',
             'version': 1,
-            'repositories': ['MDF']
+            'organizations': ['MDF']
         },
         'files': [{
             'data_type': 'example',

@@ -16,12 +16,13 @@ from mdf_connect_server.processor import Validator
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(feedstock, source_id, index, batch_size,
+def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
                   num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
     """Ingests feedstock from file.
 
     Arguments:
     feedstock (str): The path to feedstock to ingest.
+    source_id (str): The source_id of the feedstock.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
     num_submitters (int): The number of submission processes to create. Default NUM_SUBMITTERS.
@@ -39,11 +40,19 @@ def search_ingest(feedstock, source_id, index, batch_size,
 
     # Validate feedstock
     with open(feedstock, 'r') as stock:
+        # Dataset entry, start Validator
         val = Validator()
         dataset_entry = json.loads(next(stock))
-        ds_res = val.start_dataset(dataset_entry, source_info)
+        ds_res = val.start_dataset(dataset_entry, source_info, validator_info)
         if not ds_res.get("success"):
             raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(ds_res)))
+
+        # Record entries
+        for rc in stock:
+            record = json.loads(rc)
+            rc_res = val.add_record(record)
+            if not rc_res.get("success"):
+                raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(rc_res)))
 
         # Delete previous version of this dataset in Search
         del_q = {
@@ -68,12 +77,6 @@ def search_ingest(feedstock, source_id, index, batch_size,
             logger.info(("{}: {} Search entries cleared from "
                          "{}").format(source_id, del_res["num_subjects_deleted"],
                                       source_info["source_name"]))
-
-        for rc in stock:
-            record = json.loads(rc)
-            rc_res = val.add_record(record)
-            if not rc_res.get("success"):
-                raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(rc_res)))
 
     # Set up multiprocessing
     ingest_queue = multiprocessing.Queue()

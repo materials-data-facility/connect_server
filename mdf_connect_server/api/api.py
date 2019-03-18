@@ -191,48 +191,38 @@ def accept_convert():
     if metadata["mdf"].get("organizations"):
         metadata["mdf"]["organizations"], sub_conf = \
             utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
-
-    metadata["mdf"]["acl"] = sub_conf["acl"]
-
-    '''
-    ################################
-    # If the user has set a non-test Publish collection, verify user is in correct group
-    if not test and isinstance(metadata.get("services", {}).get("globus_publish"), dict):
-        collection = str(metadata["services"]["globus_publish"].get("collection_id")
-                         or metadata["services"]["globus_publish"].get("collection_name", ""))
-        # Make sure collection is in PUBLISH_COLLECTIONS, and grab the info
-        if collection not in CONFIG["PUBLISH_COLLECTIONS"].keys():
-            collection = [col_val for col_val in CONFIG["PUBLISH_COLLECTIONS"].values()
-                          if col_val["name"].strip().lower() == collection.strip().lower()]
-            if len(collection) == 0:
+    # Check that user is in appropriate org group(s), if applicable
+    # Also collect managers' UUID for ACL
+    if sub_conf.get("permission_groups"):
+        managers = set()
+        for group_uuid in sub_conf["permission_groups"]:
+            try:
+                auth_res = utils.authenticate_token(access_token, auth_level=group_uuid)
+            except Exception as e:
+                logger.error("Authentication failure: {}".format(e))
                 return (jsonify({
                     "success": False,
-                    "error": ("Submission to Globus Publish collection '{}' "
-                              "is not supported.").format(collection)
-                    }), 400)
-            elif len(collection) > 1:
-                return (jsonify({
-                    "success": False,
-                    "error": "Globus Publish collection {} is not unique.".format(collection)
-                    }), 400)
-            else:
-                collection = collection[0]
-        else:
-            collection = CONFIG["PUBLISH_COLLECTIONS"][collection]
-        try:
-            auth_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                                auth_level=collection["group"])
-        except Exception as e:
-            logger.error("Group authentication failure: {}".format(e))
-            return (jsonify({
-                "success": False,
-                "error": "Group authentication failed"
+                    "error": "Authentication failed"
                 }), 500)
-        if not auth_res["success"]:
-            error_code = auth_res.pop("error_code")
-            return (jsonify(auth_res), error_code)
-    #####################################
-    '''
+            if not auth_res["success"]:
+                error_code = auth_res.pop("error_code")
+                return (jsonify(auth_res), error_code)
+            try:
+                manager_list = utils.fetch_whitelist(group_uuid, "manager")
+                managers.update(manager_list)
+            except Exception as e:
+                logger.error("Whitelist fetch failure: {}".format(e))
+                return (jsonify({
+                    "success": False,
+                    "error": "Group authentication failed"
+                }), 500)
+        sub_conf["acl"].extend(managers)
+
+    # If ACL includes "public", no other entries needed
+    if "public" in sub_conf["acl"]:
+        sub_conf["acl"] = ["public"]
+    # Set correct ACL in metadata
+    metadata["mdf"]["acl"] = sub_conf["acl"]
 
     status_info = {
         "source_id": source_id,
@@ -242,7 +232,7 @@ def accept_convert():
         "title": sub_title,
         "user_id": user_id,
         "user_email": email,
-        "acl": metadata["mdf"]["acl"],
+        "acl": sub_conf["acl"],
         "test": sub_conf["test"],
         "original_submission": json.dumps(md_copy)
         }
@@ -262,8 +252,8 @@ def accept_convert():
         submission_args = {
             "submission_type": "convert",
             "metadata": metadata,
+            "sub_conf": sub_conf,
             "source_id": source_id,
-            "test": sub_conf["test"],
             "access_token": access_token,
             "user_id": user_id
         }

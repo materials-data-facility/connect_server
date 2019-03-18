@@ -27,17 +27,21 @@ class Validator:
         self.__scroll_id = None
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
         self.__indexed_files = []
+        self.__project_blocks = None
+        self.__extra_requirements = None
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
         if schema_path:
             self.__schema_dir = schema_path
         else:
             self.__schema_dir = CONFIG["SCHEMA_PATH"]
 
-    def start_dataset(self, ds_md, source_info=None):
+    def start_dataset(self, ds_md, source_info=None, validation_info=None):
         """Validate a dataset against the MDF schema.
 
         Arguments:
         ds_md (dict): The dataset metadata to validate.
+        source_info (dict): source_id information.
+        validation_info (dict): Additional validation configuration.
 
         Returns:
         dict: success (bool): True on success, False on failure
@@ -53,12 +57,13 @@ class Validator:
         self.__finished = False
         self.__source_info = source_info or {}
 
+        if validation_info:
+            self.__project_blocks = validation_info.get("project_blocks", None)
+            self.__extra_requirements = validation_info.get("required_fields", None)
+
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
             schema = json.load(schema_file)
-        # Replace __source_name
-        schema["properties"][ds_md.get("mdf", {}).get("source_name", "unknown")] \
-            = schema["properties"].pop("__source_name")
         resolver = jsonschema.RefResolver(base_uri="file://{}/".format(self.__schema_dir),
                                           referrer=schema)
 
@@ -144,6 +149,8 @@ class Validator:
                 "details": str(e)
                 }
 
+        # TODO: Validate required fields
+
         # Create temporary file for records
         self.__tempfile = TemporaryFile(mode="w+")
 
@@ -227,9 +234,9 @@ class Validator:
         if not rc_md["mdf"].get("acl"):
             rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
 
-        # repositories
-        if self.__dataset["mdf"].get("repositories"):
-            rc_md["mdf"]["repositories"] = self.__dataset["mdf"]["repositories"]
+        # organizations
+        if self.__dataset["mdf"].get("organizations"):
+            rc_md["mdf"]["organizations"] = self.__dataset["mdf"]["organizations"]
 
         # BLOCK: files
         # Add file data to dataset
