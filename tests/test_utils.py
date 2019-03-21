@@ -8,13 +8,10 @@ def test_fetch_whitelist():
     blaiszik = "c8745ef4-d274-11e5-bee8-3b6845397ac9"
     admin = utils.fetch_whitelist("admin")
     assert jgaff in admin and blaiszik in admin
-    # Each lower level should be a superset of the previous
-    ingest = utils.fetch_whitelist("ingest")
-    assert len(ingest) > len(admin)
-    assert all([x in ingest for x in admin])
+
     convert = utils.fetch_whitelist("convert")
-    assert len(convert) > len(ingest)
-    assert all([x in convert for x in ingest])
+    assert len(convert) > len(admin)
+    assert all([x in convert for x in admin])
 
 
 def test_make_source_id():

@@ -67,15 +67,7 @@ def processor():
             if len(submissions["entries"]):
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
-                    if sub["submission_type"] == "convert":
-                        driver = Process(target=convert_driver, kwargs=sub,
-                                         name="C"+sub["source_id"])
-                    elif sub["submission_type"] == "ingest":
-                        driver = Process(target=ingest_driver, kwargs=sub,
-                                         name="I"+sub["source_id"])
-                    else:
-                        raise ValueError(("Submission type '{}' "
-                                          "invalid").format(sub["submission_type"]))
+                    driver = Process(target=submission_driver, kwargs=sub, name=sub["source_id"])
                     driver.start()
                     active_processes.append(driver)
                 utils.delete_from_queue(submissions["delete_info"])
@@ -84,16 +76,15 @@ def processor():
             logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                # Convert processes should not be cancelled if they finished
-                # 'converted' is sentinel value for convert finished
+                # In-curation processes should not be cancelled
+                # 'curating' is sentinel value for curation in progress
                 logger.info("Dead: {} ({})"
                             .format(
                                 dead_proc.name,
-                                utils.read_status(dead_proc.name[1:])["status"]["converted"]))
-                if (dead_proc.name[0] == "C"
-                        and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
+                                utils.read_status(dead_proc.name[1:])["status"]["curating"]))
+                if utils.read_status(dead_proc.name[1:])["status"]["curating"]:
                     active_processes.remove(dead_proc)
-                    logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
+                    logger.debug("{}: Dead but curating, not cancelled".format(dead_proc.name))
                 else:
                     cancel_res = utils.cancel_submission(dead_proc.name[1:])
                     if cancel_res["stopped"]:
@@ -122,30 +113,30 @@ def processor():
     return
 
 
-def convert_driver(submission_type, metadata, sub_conf, source_id, access_token, user_id):
+def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
     Arguments:
-    submission_type (str): "convert" (used for error-checking).
     metadata (dict): The JSON passed to /convert.
     sub_conf (dict): Submission configuration information.
     source_id (str): The source name of this submission.
     access_token (str): The Globus Auth access token for the submitting user.
     user_id (str): The Globus ID of the submitting user.
     """
-    # TODO: Better check?
-    assert submission_type == "convert"
     # Setup
     utils.update_status(source_id, "convert_start", "P", except_on_fail=True)
     utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
     try:
         # Connect auth
+        # CAAC required for user auth later
         mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
                                                                CONFIG["API_CLIENT_SECRET"])
-        mdf_transfer_authorizer = globus_sdk.ClientCredentialsAuthorizer(
-                                                mdf_conf_client, scopes=CONFIG["TRANSFER_SCOPE"])
-        mdf_transfer_client = globus_sdk.TransferClient(authorizer=mdf_transfer_authorizer)
+        mdf_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                           {"services": ["publish", "transfer"]})
+        mdf_clients = mdf_toolbox.confidential_login(mdf_creds)
+        mdf_transfer_client = mdf_clients["transfer"]
+        globus_publish_client = mdf_clients["publish"]
 
         # User auth
         access_token = access_token.replace("Bearer ", "")
@@ -300,11 +291,21 @@ def convert_driver(submission_type, metadata, sub_conf, source_id, access_token,
 
     # Trigger curation if required
     if sub_conf.get("curation"):
+        utils.update_status(source_id, "curation", "P", except_on_fail=True)
         # TODO: Real curation flow
+        # Likely with state save to file, reload and skip reconverting
         logger.info("CURATION TRIGGERED FOR {}".format(source_id))
+        utils.modify_status_entry(source_id, {"curation": True}, except_on_fail=True)
+        # Pretending curation succeeded, state restored
+        utils.modify_status_entry(source_id, {"curation": "Admin fiat"}, except_on_fail=True)
+        utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat.",
+                            except_on_fail=True)
+    else:
+        utils.update_status(source_id, "curation", "N", except_on_fail=True)
 
     #################################################################################
 
+    '''
     # Pass dataset to /ingest
     utils.update_status(source_id, "convert_ingest", "P", except_on_fail=True)
     try:
@@ -353,9 +354,10 @@ def convert_driver(submission_type, metadata, sub_conf, source_id, access_token,
         "success": True,
         "source_id": source_id
         }
+    '''
 
-
-def ingest_driver(submission_type, feedstock_location, source_id, services, data_loc,
+    '''
+    def ingest_driver(submission_type, feedstock_location, source_id, services, data_loc,
                   service_loc, access_token, user_id):
     """Finalize and ingest feedstock.
 
@@ -544,6 +546,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                 logger.debug("{}: Integration data downloaded".format(source_id))
     else:
         utils.update_status(source_id, "ingest_integration", "N", except_on_fail=True)
+    '''
 
     # Integrations
     service_res = {}
@@ -557,9 +560,10 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     # MDF Search (mandatory)
     utils.update_status(source_id, "ingest_search", "P", except_on_fail=True)
     search_config = services.get("mdf_search", {})
+    final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
     try:
         search_args = {
-            "feedstock": base_feed_path,
+            "feedstock": feedstock,
             "source_id": source_id,
             "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
             "batch_size": CONFIG["SEARCH_BATCH_SIZE"],
@@ -620,6 +624,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         service_res["mdf_search"] = "This dataset was ingested to MDF Search."
 
     # Globus Publish
+    # TODO: MDF Publish migration
     if services.get("globus_publish"):
         utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)
         # collection should be in id or name
@@ -627,9 +632,9 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                       or services["globus_publish"].get("collection_name")
                       or CONFIG["DEFAULT_PUBLISH_COLLECTION"])
         try:
-            fin_res = utils.globus_publish_data(publish_client, mdf_transfer_client,
-                                                dataset, collection,
-                                                data_ep, data_path, data_loc)
+            fin_res = utils.globus_publish_data(globus_publish_client, mdf_transfer_client,
+                                                dataset, collection, CONFIG["LOCAL_EP"],
+                                                os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/")
         except Exception as e:
             utils.update_status(source_id, "ingest_publish", "R", text=repr(e),
                                 except_on_fail=True)

@@ -33,16 +33,18 @@ logger.info("\n\n==========Connect API started==========\n")
 
 # Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
+@app.route('/submit', methods=["GET"])
 @app.route('/convert', methods=["GET"])
 @app.route('/ingest', methods=["GET"])
 def root_call():
     return redirect(CONFIG["FORM_URL"], code=302)
 
 
+@app.route('/submit', methods=["POST"])
 @app.route('/convert', methods=["POST"])
-def accept_convert():
+def accept_submission():
     """Accept the JSON metadata and begin the conversion process."""
-    logger.debug("Started new convert task")
+    logger.debug("Started new submission")
     access_token = request.headers.get("Authorization")
     try:
         auth_res = utils.authenticate_token(access_token, auth_level="convert")
@@ -51,7 +53,7 @@ def accept_convert():
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
-            }), 500)
+        }), 500)
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
@@ -68,7 +70,7 @@ def accept_convert():
         return (jsonify({
             "success": False,
             "error": "POST data empty or not JSON"
-            }), 400)
+        }), 400)
     # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
     try:
         json.dumps(metadata, allow_nan=False)
@@ -76,12 +78,12 @@ def accept_convert():
         return (jsonify({
             "success": False,
             "error": "{}, submission must be valid JSON".format(str(e))
-            }), 400)
+        }), 400)
     except json.JSONDecodeError as e:
         return (jsonify({
             "success": False,
             "error": "{}, submission must be valid JSON".format(repr(e))
-            }), 400)
+        }), 400)
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
@@ -107,7 +109,7 @@ def accept_convert():
                 "subject": tag
             })
 
-    with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_convert.json")) as schema_file:
+    with open(os.path.join(CONFIG["SCHEMA_PATH"], "connect_submission.json")) as schema_file:
         schema = json.load(schema_file)
     resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
                                       referrer=schema)
@@ -127,7 +129,8 @@ def accept_convert():
         "curation": metadata.pop("curation", False),
         "test": metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"],
         "update": metadata.pop("update", False),
-        "acl": metadata.get("mdf", {}).get("acl", ["public"])
+        "acl": metadata.get("mdf", {}).get("acl", ["public"]),
+        "conversion": True  # TODO: Pass-through flag
     }
     if metadata.get("index"):
         sub_conf["index"] = metadata.pop("index")
@@ -226,7 +229,6 @@ def accept_convert():
 
     status_info = {
         "source_id": source_id,
-        "submission_code": "C",
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         "submitter": name,
         "title": sub_title,
@@ -250,7 +252,6 @@ def accept_convert():
 
     try:
         submission_args = {
-            "submission_type": "convert",
             "metadata": metadata,
             "sub_conf": sub_conf,
             "source_id": source_id,
@@ -276,6 +277,15 @@ def accept_convert():
 
 
 @app.route("/ingest", methods=["POST"])
+def reject_ingest():
+    """Deprecate the /ingest route."""
+    return (jsonify({
+        "success": False,
+        "error": "/ingest has been deprecated. Use /submit for all Connect submissions."
+    }), 410)
+
+
+# DEPRECATED
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
     logger.debug("Started new ingest task")
@@ -613,7 +623,7 @@ def get_user_submissions(user_id=None):
     if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
         return (jsonify({
             "success": False,
-            "error": "You are not authenticated as that user"
+            "error": "You are not authorized to view that submission's status"
             }), 403)
 
     # Create scan filter

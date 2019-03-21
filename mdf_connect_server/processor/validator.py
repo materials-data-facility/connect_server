@@ -28,7 +28,7 @@ class Validator:
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
         self.__indexed_files = []
         self.__project_blocks = None
-        self.__extra_requirements = None
+        self.__required_fields = None
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
         if schema_path:
             self.__schema_dir = schema_path
@@ -59,7 +59,7 @@ class Validator:
 
         if validation_info:
             self.__project_blocks = validation_info.get("project_blocks", None)
-            self.__extra_requirements = validation_info.get("required_fields", None)
+            self.__required_fields = validation_info.get("required_fields", None)
 
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
@@ -137,7 +137,7 @@ class Validator:
                 "success": False,
                 "error": "Invalid JSON: {}".format(str(e)),
                 "details": repr(e)
-                }
+            }
 
         # Validate against schema
         try:
@@ -147,9 +147,51 @@ class Validator:
                 "success": False,
                 "error": "Invalid metadata: " + str(e).split("\n")[0],
                 "details": str(e)
+            }
+
+        # Check projects blocks allowed
+        # If no blocks, disallow projects
+        if not self.__project_blocks:
+            if ds_md.get("projects"):
+                return {
+                    "success": False,
+                    "error": "Unauthorized project metadata: No projects allowed",
+                    "details": "'project' block not allowed: '{}'".format(ds_md)
+                }
+        # If some project blocks allowed, check that only allowed ones are present
+        else:
+            unauthorized = []
+            for proj in ds_md.get("projects", {}).keys():
+                if proj not in self.__project_blocks:
+                    unauthorized.append(proj)
+            if unauthorized:
+                return {
+                    "success": False,
+                    "error": ("Unauthorized project metadata: '{}' not allowed"
+                              .format(unauthorized)),
+                    "details": ("Not authorized for project block(s) '{}' in '{}'. "
+                                "The dataset is not in an allowed organization."
+                                .format(unauthorized, ds_md))
                 }
 
-        # TODO: Validate required fields
+        # Validate required fields
+        if self.__required_fields:
+            missing = []
+            for field_path in self.__required_fields:
+                value = ds_md
+                for field_name in field_path.split("."):
+                    try:
+                        value = value[field_name]
+                    except KeyError:
+                        missing.append(field_path)
+                        break
+            if missing:
+                return {
+                    "success": False,
+                    "error": "Missing organization metadata: '{}' are required".format(missing),
+                    "details": ("Required fields are '{}', but '{}' are missing"
+                                .format(self.__required_fields, missing))
+                }
 
         # Create temporary file for records
         self.__tempfile = TemporaryFile(mode="w+")

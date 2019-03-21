@@ -58,13 +58,10 @@ DMO_SCHEMA = {
     }
 }
 STATUS_STEPS = (
-    ("convert_start", "Conversion initialization"),
+    ("convert_start", "Submission initialization"),
     ("convert_download", "Conversion data download"),
     ("converting", "Data conversion"),
-    ("convert_ingest", "Ingestion preparation"),
-    ("ingest_start", "Ingestion initialization"),
-    ("ingest_download", "Ingestion data download"),
-    ("ingest_integration", "Integration data download"),
+    ("curation", "Dataset curation"),
     ("ingest_search", "Globus Search ingestion"),
     ("ingest_publish", "Globus Publish publication"),
     ("ingest_citrine", "Citrine upload"),
@@ -98,12 +95,6 @@ CONVERT_GROUP = {
     #   X days * 24 hours/day * 60 minutes/hour * 60 seconds/minute
     "frequency": 1 * 60 * 60  # 1 hour
 }
-INGEST_GROUP = {
-    "group_id": CONFIG["INGEST_GROUP_ID"],
-    "whitelist": [],
-    "updated": 0,
-    "frequency": 1 * 24 * 60 * 60  # 1 day
-}
 ADMIN_GROUP = {
     "group_id": CONFIG["ADMIN_GROUP_ID"],
     "whitelist": [],
@@ -117,7 +108,7 @@ def authenticate_token(token, auth_level, member_level=None):
     Arguments:
         token (str): The token to authenticate with.
         auth_level (str): Connect privilege level or other group required.
-                Values: admin, convert, ingest, [Group ID]
+                Values: admin, convert, [Group ID]
         member_level (str): For non-Connect groups, membership level required.
                 No effect on auth_levels admin, convert, ingest.
                 Values: admin, manager, member
@@ -201,9 +192,9 @@ def fetch_whitelist(auth_level, member_level=None):
 
     Arguments:
         auth_level (str): Connect privilege level or other group required.
-                Values: admin, convert, ingest, [Group ID]
+                Values: admin, convert, [Group ID]
         member_level (str): For non-Connect groups, membership level required.
-                No effect on auth_levels admin, convert, ingest.
+                No effect on auth_levels admin, convert.
                 Values: admin, manager, member
                 Default: member
 
@@ -258,21 +249,6 @@ def fetch_whitelist(auth_level, member_level=None):
             # Update timestamp
             CONVERT_GROUP["updated"] = int(time.time())
         whitelist.extend(CONVERT_GROUP["whitelist"])
-    elif auth_level == "ingest":
-        global INGEST_GROUP
-        if int(time.time()) - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
-            # If NexusClient has not been created yet, create it
-            if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-            # Get all the members
-            member_list = groups_auth.get_group_memberships(INGEST_GROUP["group_id"])["members"]
-            # Whitelist is all IDs in the group that are active
-            INGEST_GROUP["whitelist"] = [member["identity_id"]
-                                         for member in member_list
-                                         if member["status"] == "active"]
-            # Update timestamp
-            INGEST_GROUP["updated"] = int(time.time())
-        whitelist.extend(INGEST_GROUP["whitelist"])
     elif auth_level == "admin":
         # Already handled admins
         pass
@@ -1213,15 +1189,12 @@ def local_admin_delete(path):
         }
 
 
-def validate_status(status, code_mode=None):
+def validate_status(status, new_status=False):
     """Validate a submission status.
 
     Arguments:
     status (dict): The status to validate.
-    code_mode (str): The mode to check the status code, or None to skip code check.
-                        "start": No steps have started or finished.
-                        "handoff": All convert steps have finished (except the ingest handoff)
-                                   and no ingest steps have started or finished.
+    new_status (bool): Is this status a new status?
 
     Returns:
     dict:
@@ -1247,24 +1220,14 @@ def validate_status(status, code_mode=None):
     code = status["code"]
     try:
         assert len(code) == len(STATUS_STEPS)
-        if code_mode == "convert_start":
+        if new_status:
             # Nothing started or finished
             assert code == "z" * len(code)
-        elif code_mode == "ingest_start":
-            # Convert steps skipped, other steps not started
-            assert code[:INGEST_MARK] == "N" * len(code[:INGEST_MARK])
-            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
-        elif code_mode == "handoff":
-            # convert finished until handoff
-            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
-            # convert handoff to ingest in progress
-            assert code[INGEST_MARK-1] == "P"
-            # ingest not started
-            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
     except AssertionError:
         return {
             "success": False,
-            "error": "Invalid status code '{}' for mode {}".format(code, code_mode)
+            "error": ("Invalid status code '{}' for {} status"
+                      .format(code, "new" if new_status else "old"))
         }
     else:
         return {
@@ -1459,15 +1422,10 @@ def create_status(status):
     status["cancelled"] = False
     status["pid"] = os.getpid()
     status["extensions"] = []
-    status["converted"] = False
+    status["curation"] = None
+    status["code"] = "z" * len(STATUS_STEPS)
 
-    if status.get("submission_code") == "C":
-        status["code"] = "z" * len(STATUS_STEPS)
-    elif status.get("submission_code") == "I":
-        status["code"] = (("N" * len(STATUS_STEPS[:INGEST_MARK]))
-                          + ("z" * len(STATUS_STEPS[INGEST_MARK:])))
-
-    status_valid = validate_status(status, "start")
+    status_valid = validate_status(status, new_status=True)
     if not status_valid["success"]:
         return status_valid
 
@@ -1527,6 +1485,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         step_index = int(step) - 1
     except ValueError:
         step_index = None
+        # TODO: Since deprecating /ingest, is the following still true?
         # Why yes, this would be easier if STATUS_STEPS was a dict
         # But we need slicing for translate_status
         # Or else we're duplicating the info and making maintenance hard
@@ -1648,7 +1607,6 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
 def translate_status(status):
     # {
     # source_id: str,
-    # submission_code: "C" or "I"
     # code: str, based on char position
     # messages: list of str, in order generated
     # errors: list of str, in order of failures
@@ -1658,19 +1616,10 @@ def translate_status(status):
     # }
     full_code = list(status["code"])
     messages = status["messages"]
-    sub_type = status["submission_code"]
     steps = [st[1] for st in STATUS_STEPS]
-    if sub_type == 'C':
-        subm = "convert"
-    elif sub_type == 'I':
-        subm = "ingest"
-    else:
-        steps = []
-        subm = "unknown submission type '{}'".format(sub_type)
 
-    usr_msg = ("Status of {}{} submission {} ({})\n"
+    usr_msg = ("Status of {}submission {} ({})\n"
                "Submitted by {} at {}\n\n").format("TEST " if status["test"] else "",
-                                                   subm,
                                                    status["source_id"],
                                                    status["title"],
                                                    status["submitter"],
