@@ -78,15 +78,18 @@ def processor():
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
                 # In-curation processes should not be cancelled
                 # 'curating' is sentinel value for curation in progress
-                logger.info("Dead: {} ({})"
-                            .format(
-                                dead_proc.name,
-                                utils.read_status(dead_proc.name[1:])["status"]["curating"]))
-                if utils.read_status(dead_proc.name[1:])["status"]["curating"]:
+                dead_status = utils.read_status(dead_proc.name)
+                if not dead_status["success"]:
+                    logger.error("Unable to read status for '{}': {}".format(dead_proc.name,
+                                                                             dead_status))
+                    continue
+                logger.info("Dead: {} ({})".format(dead_proc.name,
+                                                   dead_status["status"]["curation"]))
+                if dead_status["status"]["curation"]:
                     active_processes.remove(dead_proc)
                     logger.debug("{}: Dead but curating, not cancelled".format(dead_proc.name))
                 else:
-                    cancel_res = utils.cancel_submission(dead_proc.name[1:])
+                    cancel_res = utils.cancel_submission(dead_proc.name)
                     if cancel_res["stopped"]:
                         active_processes.remove(dead_proc)
                         logger.debug("{}: Dead and cancelled/cleaned up"
@@ -97,13 +100,13 @@ def processor():
                                             dead_proc.name,
                                             cancel_res.get("error", "No error provided")))
         except Exception as e:
-            logger.error("Error life-checking processes: {}".format(e))
+            logger.error("Error life-checking processes: {}".format(repr(e)))
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
 
     # After processing finished, shut down gracefully
     logger.info("Shutting down Connect")
     for proc in active_processes:
-        cancel_res = utils.cancel_submission(proc.name[1:])
+        cancel_res = utils.cancel_submission(proc.name)
         if cancel_res["stopped"]:
             logger.debug("{}: Shutdown".format(proc.name))
         else:
@@ -188,7 +191,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
     try:
         # Download from user
-        for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
+        for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
                                           CONFIG["LOCAL_EP"], local_path,
                                           admin_client=mdf_transfer_client, user_id=user_id):
             if not dl_res["success"]:
@@ -199,14 +202,15 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             raise ValueError(dl_res["error"])
 
         # Backup to MDF
-        if CONFIG["BACKUP_EP"] and not sub_conf["test"]:
-            backup_res = utils.backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
-                                           CONFIG["BACKUP_EP"], backup_path)
-            if not backup_res["success"]:
-                raise ValueError(backup_res["error"])
-        else:
-            logger.debug("Skipping data backup - is test ({}) or no backup EP ({})"
-                         .format(sub_conf["test"], bool(CONFIG["BACKUP_EP"])))
+        # TODO: Needed vs. in /ingest?
+        # if CONFIG["BACKUP_EP"] and not sub_conf["test"]:
+        #    backup_res = utils.backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
+        #                                   sub_conf["data_destinations"])
+        #    if not backup_res["success"]:
+        #        raise ValueError(backup_res["error"])
+        # else:
+        #    logger.debug("Skipping data backup - is test ({}) or no backup EP ({})"
+        #                 .format(sub_conf["test"], bool(CONFIG["BACKUP_EP"])))
 
     except Exception as e:
         utils.update_status(source_id, "convert_download", "F", text=repr(e), except_on_fail=True)
@@ -569,8 +573,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "batch_size": CONFIG["SEARCH_BATCH_SIZE"],
             "feedstock_save": final_feed_path,
             "validator_info": {
-                "projects_blocks": sub_conf["project_blocks"],
-                "required_fields": sub_conf["required_fields"]
+                "project_blocks": sub_conf.get("project_blocks", []),
+                "required_fields": sub_conf.get("required_fields", [])
             }
         }
         search_res = search_ingest(**search_args)

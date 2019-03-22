@@ -568,14 +568,15 @@ def fetch_org_rules(org_names, user_rules=None):
     return (all_names, rules)
 
 
-def download_data(transfer_client, data_loc, local_ep, local_path,
+def download_data(transfer_client, source_loc, local_ep, local_path,
                   admin_client=None, user_id=None):
     """Download data from a remote host to the configured machine.
+    (Many sources to one destination)
 
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
                                       Technically unnecessary for non-Globus data locations.
-    data_loc (list of str): The location(s) of the data.
+    source_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
     admin_client (TransferClient): An authenticated TransferClient with Access Manager
@@ -601,11 +602,11 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
         local_path = os.path.dirname(local_path) + "/"
 
     os.makedirs(local_path, exist_ok=True)
-    if not isinstance(data_loc, list):
-        data_loc = [data_loc]
+    if not isinstance(source_loc, list):
+        source_loc = [source_loc]
 
     # Download data locally
-    for location in data_loc:
+    for location in source_loc:
         loc_info = urllib.parse.urlparse(location)
 
         # Special case pre-processing
@@ -797,19 +798,19 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, local_ep, local_path, backup_ep, backup_path):
-    """Back up data to a remote endpoint.
+def backup_data(transfer_client, storage_loc, backup_loc):
+    """Back up data to remote endpoints.
+    (One source to many destinations)
 
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
-    local_ep (str): The local machine's endpoint ID.
-    local_path (str): The path to the local storage location.
-    backup_ep (str): The backup machine's endpoint ID.
-    backup_path (str): The path to the backup storage location.
+    storage_loc (str): A globus:// uri to the current data location.
+    backup_loc (str): The backup locations.
 
     Returns:
     dict: success (bool): True on success, False on failure.
     """
+    storage_info = urllib.parse.urlparse(storage_loc)
     filename = None
     # If the local_path is a file and not a directory, use the directory
     if local_path[-1] != "/":
