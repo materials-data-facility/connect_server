@@ -139,7 +139,7 @@ def accept_submission():
     if metadata.get("services"):
         sub_conf["services"] = metadata.pop("services")
     # TODO: Allow not backing up on Petrel
-    sub_conf["data_destinations"].append("{}{}".format(CONFIG["BACKUP_EP"], CONFIG["BACKUP_PATH"])
+    sub_conf["data_destinations"].append("{}{}".format(CONFIG["BACKUP_EP"], CONFIG["BACKUP_PATH"]))
 
     # Create source_name
     sub_title = metadata["dc"]["titles"][0]["title"]
@@ -165,7 +165,7 @@ def accept_submission():
     # Verify update flag is correct
     # update == False but version > 1
     if not sub_conf["update"] and (source_id_info["search_version"] > 1
-                            or source_id_info["submission_version"] > 1):
+                                   or source_id_info["submission_version"] > 1):
         return (jsonify({
             "success": False,
             "error": ("This dataset has already been submitted, but this submission is not "
@@ -175,7 +175,7 @@ def accept_submission():
             }), 400)
     # update == True but version == 1
     elif sub_conf["update"] and (source_id_info["search_version"] == 1
-                          and source_id_info["submission_version"] == 1):
+                                 and source_id_info["submission_version"] == 1):
         return (jsonify({
             "success": False,
             "error": ("This dataset has not already been submitted, but this submission is "
