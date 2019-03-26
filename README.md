@@ -1,5 +1,5 @@
 # MDF Connect
-The Materials Data Facility Connect service is the ETL flow to deeply index datasets into MDF Search
+The Materials Data Facility Connect service is the ETL flow to deeply index datasets into MDF Search. It is not intended to be run by end-users. To submit data to the MDF, visit the [Materials Data Facility](https://materialsdatafacility.org).
 
 
 # Support
