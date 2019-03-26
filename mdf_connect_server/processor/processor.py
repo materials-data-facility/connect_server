@@ -85,7 +85,7 @@ def processor():
                     continue
                 logger.info("Dead: {} ({})".format(dead_proc.name,
                                                    dead_status["status"]["curation"]))
-                if dead_status["status"]["curation"]:
+                if dead_status["status"]["curation"] is True:
                     active_processes.remove(dead_proc)
                     logger.debug("{}: Dead but curating, not cancelled".format(dead_proc.name))
                 else:
@@ -302,7 +302,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.modify_status_entry(source_id, {"curation": True}, except_on_fail=True)
         # Pretending curation succeeded, state restored
         utils.modify_status_entry(source_id, {"curation": "Admin fiat"}, except_on_fail=True)
-        utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat.",
+        utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat",
                             except_on_fail=True)
     else:
         utils.update_status(source_id, "curation", "N", except_on_fail=True)
@@ -600,8 +600,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         with open(final_feed_path) as f:
             dataset = json.loads(f.readline())
         # Back up feedstock
-        backup_feed_path = os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
-                                        source_id + "_final.json")
+        backup_feed_path = os.path.join(CONFIG["BACKUP_FEEDSTOCK"], source_id + "_final.json")
         try:
             if CONFIG["BACKUP_EP"]:
                 transfer = mdf_toolbox.custom_transfer(

@@ -37,33 +37,41 @@ elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     fi
 
 elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
-    echo "Starting Connect Processing for Production";
-    export FLASK_ENV=production;
-    rm exit.log;
-    touch prodp.log;
-    truncate --size 0 prodp.log;
-    nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
-        | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    sleep 5;
-    if [ `cat exit.log` == `cat /dev/null` ]; then
-        echo "Connect Prod Processor started.";
+    if [ -f pid.log ]; then
+        echo "Connect Processing already started!"
     else
-        echo "Error starting Prod Processor:\n\n$(cat exit.log)";
+        echo "Starting Connect Processing for Production";
+        export FLASK_ENV=production;
+        rm exit.log;
+        touch prodp.log;
+        truncate --size 0 prodp.log;
+        nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
+            | tail -n $EXIT_LOG_LINES &>exit.log & disown;
+        sleep 5;
+        if [ `cat exit.log` == `cat /dev/null` ]; then
+            echo "Connect Prod Processor started.";
+        else
+            echo "Error starting Prod Processor:\n\n$(cat exit.log)";
+        fi
     fi
 
 elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
-    echo "Starting Connect Processing for Development";
-    export FLASK_ENV=development;
-    rm exit.log;
-    touch devp.log;
-    truncate --size 0 devp.log;
-    nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
-        | tail -n $EXIT_LOG_LINES &>exit.log & disown;
-    sleep 5;
-    if [ `cat exit.log` == `cat /dev/null` ]; then
-        echo "Connect Dev Processor started.";
+    if [ -f pid.log ]; then
+        echo "Connect Processing already started!"
     else
-        echo "Error starting Dev Processor:\n\n$(cat exit.log)";
+        echo "Starting Connect Processing for Development";
+        export FLASK_ENV=development;
+        rm exit.log;
+        touch devp.log;
+        truncate --size 0 devp.log;
+        nohup python3 -c "from mdf_connect_server.processor import processor; processor()" \
+            | tail -n $EXIT_LOG_LINES &>exit.log & disown;
+        sleep 5;
+        if [ `cat exit.log` == `cat /dev/null` ]; then
+            echo "Connect Dev Processor started.";
+        else
+            echo "Error starting Dev Processor:\n\n$(cat exit.log)";
+        fi
     fi
 
 else

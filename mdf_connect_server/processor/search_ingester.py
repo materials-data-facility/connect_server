@@ -21,7 +21,7 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     """Ingests feedstock from file.
 
     Arguments:
-    feedstock (str): The path to feedstock to ingest.
+    feedstock (list of dict): The feedstock to validate.
     source_id (str): The source_id of the feedstock.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
@@ -32,6 +32,10 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     dict: success (bool): True on success.
           errors (list): The errors encountered.
     """
+    if len(feedstock) < 1:
+        raise ValueError("Feedstock does not contain dataset entry: length {}"
+                         .format(len(feedstock)))
+
     ingest_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                                {"services": ["search_ingest"]}))["search_ingest"]
@@ -39,44 +43,40 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     source_info = utils.split_source_id(source_id)
 
     # Validate feedstock
-    with open(feedstock, 'r') as stock:
-        # Dataset entry, start Validator
-        val = Validator()
-        dataset_entry = json.loads(next(stock))
-        ds_res = val.start_dataset(dataset_entry, source_info, validator_info)
-        if not ds_res.get("success"):
-            raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(ds_res)))
+    # Dataset entry, start Validator
+    val = Validator()
+    ds_res = val.start_dataset(feedstock[0], source_info, validator_info)
+    if not ds_res.get("success"):
+        raise ValueError("Dataset entry '{}' invalid: {}".format(feedstock[0], str(ds_res)))
 
-        # Record entries
-        for rc in stock:
-            record = json.loads(rc)
-            rc_res = val.add_record(record)
-            if not rc_res.get("success"):
-                raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(rc_res)))
+    # Record entries
+    for record in feedstock[1:]:
+        rc_res = val.add_record(record)
+        if not rc_res.get("success"):
+            raise ValueError("Record entry '{}' invalid: {}".format(record, str(rc_res)))
 
-        # Delete previous version of this dataset in Search
-        del_q = {
-            "q": "mdf.source_name:{}".format(source_info["source_name"]),
-            "advanced": True
-        }
-        # Try deleting from Search until success or try limit reached
-        # Necessary because Search will 5xx but possibly succeed on large deletions
-        i = 0
-        while True:
-            try:
-                del_res = ingest_client.delete_by_query(index, del_q)
-                break
-            except GlobusAPIError as e:
-                if i < CONFIG["SEARCH_RETRIES"]:
-                    logger.warning("{}: Retrying Search delete error: {}"
-                                   .format(source_id, repr(e)))
-                    i += 1
-                else:
-                    raise
-        if del_res["num_subjects_deleted"]:
-            logger.info(("{}: {} Search entries cleared from "
-                         "{}").format(source_id, del_res["num_subjects_deleted"],
-                                      source_info["source_name"]))
+    # Delete previous version of this dataset in Search
+    del_q = {
+        "q": "mdf.source_name:{}".format(source_info["source_name"]),
+        "advanced": True
+    }
+    # Try deleting from Search until success or try limit reached
+    # Necessary because Search will 5xx but possibly succeed on large deletions
+    i = 0
+    while True:
+        try:
+            del_res = ingest_client.delete_by_query(index, del_q)
+            break
+        except GlobusAPIError as e:
+            if i < CONFIG["SEARCH_RETRIES"]:
+                logger.warning("{}: Retrying Search delete error: {}".format(source_id, repr(e)))
+                i += 1
+            else:
+                raise
+    if del_res["num_subjects_deleted"]:
+        logger.info(("{}: {} Search entries cleared from "
+                     "{}").format(source_id, del_res["num_subjects_deleted"],
+                                  source_info["source_name"]))
 
     # Set up multiprocessing
     ingest_queue = multiprocessing.Queue()

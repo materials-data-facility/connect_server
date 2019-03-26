@@ -798,41 +798,37 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, storage_loc, backup_loc):
+def backup_data(transfer_client, storage_loc, backup_locs):
     """Back up data to remote endpoints.
     (One source to many destinations)
 
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
     storage_loc (str): A globus:// uri to the current data location.
-    backup_loc (str): The backup locations.
+    backup_locs (list of str): The backup locations.
 
     Returns:
-    dict: success (bool): True on success, False on failure.
+    dict: [backup_loc] (bool or str): True on a successful backup to this backup location,
+            a str error message on failure.
     """
+    results = {}
     storage_info = urllib.parse.urlparse(storage_loc)
-    filename = None
-    # If the local_path is a file and not a directory, use the directory
-    if local_path[-1] != "/":
-        # Save the filename for later
-        filename = os.path.basename(local_path)
-        local_path = os.path.dirname(local_path) + "/"
 
-    transfer = mdf_toolbox.custom_transfer(
-                    transfer_client, local_ep, backup_ep,
-                    [(local_path + (filename if filename else ""), backup_path)],
-                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-    for event in transfer:
-        if not event["success"]:
-            logger.debug(event)
-    if not event["success"]:
-        raise ValueError("{}: {}".format(event.get("code", "No code found"),
-                                         event.get("description", "No description found")))
+    for backup in backup_locs:
+        backup_info = urllib.parse.urlparse(backup)
+        transfer = mdf_toolbox.custom_transfer(
+                        transfer_client, storage_info.netloc, backup_info.netloc,
+                        [(storage_info.path, backup_info.path)],
+                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+        for event in transfer:
+            if not event["success"]:
+                logger.debug(event)
 
-    return {
-        "success": event["success"]
-    }
+        results[backup] = (event["success"]
+                           or "{}: {}".format(event.get("code", "No code found"),
+                                              event.get("description", "No description found")))
+    return results
 
 
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
