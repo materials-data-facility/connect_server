@@ -119,7 +119,7 @@ def test_scan_status():
     assert all([("source_id" in entry.keys() and "test" in entry.keys() and len(entry.keys()) == 2)
                 for entry in res["results"]])
 
-    res = utils.scan_status(filters=("submission_code", "!=", None))  # Exists
+    res = utils.scan_status(filters=("code", "!=", None))  # Exists
     assert res["success"]
     assert len(res["results"]) == count1
 
