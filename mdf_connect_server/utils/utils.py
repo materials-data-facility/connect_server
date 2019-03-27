@@ -593,7 +593,6 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     if ((admin_client is not None or user_id is not None)
             and not (admin_client is not None and user_id is not None)):
         raise ValueError("admin_client and user_id must both be supplied if one is supplied")
-    tc = None  # Correct TransferClient
     filename = None
     # If the local_path is a file and not a directory, use the directory
     if local_path[-1] != "/":
@@ -606,9 +605,11 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
         source_loc = [source_loc]
 
     # Download data locally
-    for location in source_loc:
+    for raw_loc in source_loc:
+        location = normalize_globus_uri(raw_loc)
         loc_info = urllib.parse.urlparse(location)
 
+        '''
         # Special case pre-processing
         # Globus Web App link into globus:// form
         if (location.startswith("https://www.globus.org/app/transfer")
@@ -672,9 +673,15 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
         else:
             # Use default (user's) TransferClient
             tc = transfer_client
+        '''
 
         # Globus Transfer
         if loc_info.scheme == "globus":
+            # Use admin_client for GDrive Transfers
+            # User doesn't need permissions on MDF GDrive, we have those
+            # For all other cases use user's TC
+            tc = admin_client if (loc_info.netloc == CONFIG["GDRIVE_EP"]
+                                  and admin_client is not None) else transfer_client
             if filename:
                 transfer_path = os.path.join(local_path, filename)
             else:
@@ -812,7 +819,17 @@ def backup_data(transfer_client, storage_loc, backup_locs):
             a str error message on failure.
     """
     results = {}
-    storage_info = urllib.parse.urlparse(storage_loc)
+    norm_store = normalize_globus_uri(storage_loc)
+    storage_info = urllib.parse.urlparse(norm_store)
+
+    if not storage_info.scheme == "globus":
+        error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
+                 "directly published from or backed up from.".format(norm_store, storage_loc))
+        # TODO: Raise exception or return error?
+        # I think this will work with error handling code in Driver, but is not flexible
+        return {
+            "all_locations": error
+        }
 
     for backup in backup_locs:
         backup_info = urllib.parse.urlparse(backup)
@@ -829,6 +846,80 @@ def backup_data(transfer_client, storage_loc, backup_locs):
                            or "{}: {}".format(event.get("code", "No code found"),
                                               event.get("description", "No description found")))
     return results
+
+
+def normalize_globus_uri(location):
+    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
+    For Google Drive URIs, the file(s) must be shared with
+    materialsdatafacility@gmail.com.
+    If the URI is not a Globus Web App link or Google Drive URI,
+    it is returned unchanged.
+
+    Arguments:
+        location (str): One URI to normalize.
+
+    Returns:
+        str: The normalized URI, or the original URI if no normalization was possible.
+    """
+    loc_info = urllib.parse.urlparse(location)
+    # Globus Web App link into globus:// form
+    if (location.startswith("https://www.globus.org/app/transfer")
+            or location.startswith("https://app.globus.org/file-manager")):
+        data_info = urllib.parse.unquote(loc_info.query)
+        # EP ID is in origin or dest
+        ep_start = data_info.find("origin_id=")
+        if ep_start < 0:
+            ep_start = data_info.find("destination_id=")
+            if ep_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                ep_start += len("destination_id=")
+        else:
+            ep_start += len("origin_id=")
+        ep_end = data_info.find("&", ep_start)
+        if ep_end < 0:
+            ep_end = len(data_info)
+        ep_id = data_info[ep_start:ep_end]
+
+        # Same for path
+        path_start = data_info.find("origin_path=")
+        if path_start < 0:
+            path_start = data_info.find("destination_path=")
+            if path_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                path_start += len("destination_path=")
+        else:
+            path_start += len("origin_path=")
+        path_end = data_info.find("&", path_start)
+        if path_end < 0:
+            path_end = len(data_info)
+        path = data_info[path_start:path_end]
+
+        # Make new location
+        new_location = "globus://{}{}".format(ep_id, path)
+
+    # Google Drive protocol into globus:// form
+    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+        # Correct form is "google:///path/file.dat"
+        # (three slashes - two for scheme end, one for path start)
+        # But if a user uses two slashes, the netloc will incorrectly be the top dir
+        # (netloc="path", path="/file.dat")
+        # Otherwise netloc is nothing (which is correct)
+        if loc_info.netloc:
+            gpath = "/" + loc_info.netloc + loc_info.path
+        else:
+            gpath = loc_info.path
+        # Don't use os.path.join because gpath starts with /
+        # GDRIVE_ROOT does not end in / to make compatible
+        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
+                                                CONFIG["GDRIVE_ROOT"], gpath)
+
+    # Default - do nothing
+    else:
+        new_location = location
+
+    return new_location
 
 
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
