@@ -59,21 +59,19 @@ DMO_SCHEMA = {
 }
 STATUS_STEPS = (
     ("convert_start", "Submission initialization"),
-    ("convert_download", "Conversion data download"),
+    ("convert_download", "Data download"),
     ("converting", "Data conversion"),
     ("curation", "Dataset curation"),
-    ("ingest_search", "Globus Search ingestion"),
-    ("ingest_publish", "Globus Publish publication"),
+    ("ingest_search", "MDF Search ingestion"),
+    ("ingest_backup", "Data storage and backup"),
+    ("ingest_publish", "MDF Publish publication"),
     ("ingest_citrine", "Citrine upload"),
     ("ingest_mrr", "Materials Resource Registration"),
     ("ingest_cleanup", "Post-processing cleanup")
 )
-# This is the start of ingest steps in STATUS_STEPS
-# In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
-# and the convert steps are STATUS_STEPS[:INGEST_MARK]
-INGEST_MARK = 4
 
-# Status codes indicating some form of not-failure
+# Status codes indicating some form of not-failure,
+# defined as "the step is over, and processing is continuing"
 SUCCESS_CODES = [
     "S",
     "M",
@@ -818,6 +816,8 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     dict: [backup_loc] (bool or str): True on a successful backup to this backup location,
             a str error message on failure.
     """
+    if isinstance(backup_locs, str):
+        backup_locs = [backup_locs]
     results = {}
     norm_store = normalize_globus_uri(storage_loc)
     storage_info = urllib.parse.urlparse(norm_store)
@@ -825,8 +825,6 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     if not storage_info.scheme == "globus":
         error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
                  "directly published from or backed up from.".format(norm_store, storage_loc))
-        # TODO: Raise exception or return error?
-        # I think this will work with error handling code in Driver, but is not flexible
         return {
             "all_locations": error
         }
