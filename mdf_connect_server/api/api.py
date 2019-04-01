@@ -120,7 +120,7 @@ def accept_submission():
             "success": False,
             "error": "Invalid submission: " + str(e).split("\n")[0],
             "details": str(e)
-            }), 400)
+        }), 400)
 
     # Pull out configuration fields from metadata into sub_conf, set defaults where appropriate
     sub_conf = {
@@ -130,16 +130,11 @@ def accept_submission():
         "test": metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"],
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
-        "conversion": True  # TODO: Pass-through flag
+        "index": metadata.pop("index", {}),
+        "services": metadata.pop("services", {}),
+        "conversion_config": metadata.pop("conversion_config", {}),
+        "no_convert": metadata.pop("no_convert", False)  # Pass-through flag
     }
-    if metadata.get("index"):
-        sub_conf["index"] = metadata.pop("index")
-    if metadata.get("conversion_config"):
-        sub_conf["conversion_config"] = metadata.pop("conversion_config")
-    if metadata.get("services"):
-        sub_conf["services"] = metadata.pop("services")
-    # TODO: Allow not backing up on Petrel
-    sub_conf["data_destinations"].append("{}{}".format(CONFIG["BACKUP_EP"], CONFIG["BACKUP_PATH"]))
 
     # Create source_name
     sub_title = metadata["dc"]["titles"][0]["title"]
@@ -227,6 +222,56 @@ def accept_submission():
         sub_conf["acl"] = ["public"]
     # Set correct ACL in metadata
     metadata["mdf"]["acl"] = sub_conf["acl"]
+
+    if sub_conf["test"]:
+        sub_conf["services"]["mdf_search"] = {
+            "index": CONFIG["INGEST_TEST_INDEX"]
+        }
+        if sub_conf["services"].get("citrine"):
+            sub_conf["services"]["citrine"] = {
+                "public": False
+            }
+        if sub_conf["services"].get("mrr"):
+            sub_conf["services"]["mrr"] = {
+                "test": True
+            }
+    else:
+        # Put in defaults
+        if sub_conf["services"].get("mdf_publish") is True:
+            sub_conf["services"]["mdf_publish"] = {
+                "publication_location": ("globus://{}{}/"
+                                         .format(CONFIG["BACKUP_EP"],
+                                                 os.path.join(CONFIG["BACKUP_PATH"], source_id)))
+            }
+        if sub_conf["services"].get("citrine") is True:
+            sub_conf["services"]["citrine"] = {
+                "public": CONFIG["DEFAULT_CITRINATION_PUBLIC"]
+            }
+        if sub_conf["services"].get("mrr") is True:
+            sub_conf["services"]["mrr"] = {
+                "test": CONFIG["DEFAULT_MRR_TEST"]
+            }
+
+    # Must be Publishing if not converting
+    if sub_conf["no_convert"] and not sub_conf["services"].get("mdf_publish"):
+        return (jsonify({
+            "success": False,
+            "error": "You must specify 'services.mdf_publish' if using the 'no_convert' flag",
+            "details": ("Datasets that are marked for 'pass-through' functionality "
+                        "(with the 'no_convert' flag) MUST be published (by using "
+                        "the 'mdf_publish' service in the 'services' block.")
+        }), 400)
+    # If Publishing, canonical data location is Publish location
+    elif sub_conf["services"].get("mdf_publish"):
+        sub_conf["canon_destination"] = sub_conf["services"]["mdf_publish"]["publication_location"]
+    # Otherwise (not Publishing), canon destination is Petrel
+    else:
+        sub_conf["canon_destination"] = ("globus://{}{}/"
+                                         .format(CONFIG["BACKUP_EP"],
+                                                 os.path.join(CONFIG["BACKUP_PATH"], source_id)))
+    # Add canon dest to data_destinations
+    if sub_conf["canon_destination"] not in sub_conf["data_destinations"]:
+        sub_conf["data_destinations"].append(sub_conf["canon_destination"])
 
     status_info = {
         "source_id": source_id,
