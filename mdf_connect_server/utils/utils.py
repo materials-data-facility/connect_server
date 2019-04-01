@@ -58,7 +58,7 @@ DMO_SCHEMA = {
     }
 }
 STATUS_STEPS = (
-    ("convert_start", "Submission initialization"),
+    ("sub_start", "Submission initialization"),
     ("convert_download", "Data download"),
     ("converting", "Data conversion"),
     ("curation", "Dataset curation"),

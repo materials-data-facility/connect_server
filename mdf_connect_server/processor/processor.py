@@ -128,7 +128,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     user_id (str): The Globus ID of the submitting user.
     """
     # Setup
-    utils.update_status(source_id, "convert_start", "P", except_on_fail=True)
+    utils.update_status(source_id, "sub_start", "P", except_on_fail=True)
     utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
     try:
         # Connect auth
@@ -148,7 +148,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                 dependent_grant.data[0]["access_token"])
         user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
-        utils.update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
+        utils.update_status(source_id, "sub_start", "F", text=repr(e), except_on_fail=True)
         utils.complete_submission(source_id)
         return
 
@@ -158,7 +158,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                  filters=[("source_id", "^", source_info["source_name"]),
                                           ("source_id", "<", source_id)])
     if not scan_res["success"]:
-        utils.update_status(source_id, "convert_start", "F", text=scan_res["error"],
+        utils.update_status(source_id, "sub_start", "F", text=scan_res["error"],
                             except_on_fail=True)
         utils.complete_submission(source_id)
         return
@@ -166,7 +166,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
-            utils.update_status(source_id, "convert_start", "F",
+            utils.update_status(source_id, "sub_start", "F",
                                 text=cancel_res.get("error",
                                                     ("Unable to cancel previous "
                                                      "submission '{}'").format(old_source_id)),
@@ -178,56 +178,67 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         else:
             logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
 
-    utils.update_status(source_id, "convert_start", "S", except_on_fail=True)
-
-    # Download data locally, back up on MDF resources
+    utils.update_status(source_id, "sub_start", "S", except_on_fail=True)
     # NOTE: Cancellation point
     if utils.read_status(source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
         utils.complete_submission(source_id)
         return
-    utils.update_status(source_id, "convert_download", "P", except_on_fail=True)
-    local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
-    backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
-    try:
-        # Download from user
-        for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
-                                          CONFIG["LOCAL_EP"], local_path,
-                                          admin_client=mdf_transfer_client, user_id=user_id):
+
+    # NOTE: Skip check - Curation return and no_convert
+    # Curation return - skip step without updating (keep current status)
+    if type(sub_conf["curation"]) is str:
+        pass
+    # no_convert, skip download with status change
+    elif sub_conf["no_convert"]:
+        utils.update_status(source_id, "convert_download", "N", except_on_fail=True)
+    # Otherwise, download data locally
+    else:
+        utils.update_status(source_id, "convert_download", "P", except_on_fail=True)
+        local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
+        backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
+        try:
+            # Download from user
+            for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
+                                              CONFIG["LOCAL_EP"], local_path,
+                                              admin_client=mdf_transfer_client, user_id=user_id):
+                if not dl_res["success"]:
+                    msg = "During data download: " + dl_res["error"]
+                    utils.update_status(source_id, "convert_download", "T", text=msg,
+                                        except_on_fail=True)
             if not dl_res["success"]:
-                msg = "During data download: " + dl_res["error"]
-                utils.update_status(source_id, "convert_download", "T", text=msg,
-                                    except_on_fail=True)
-        if not dl_res["success"]:
-            raise ValueError(dl_res["error"])
+                raise ValueError(dl_res["error"])
 
-    except Exception as e:
-        utils.update_status(source_id, "convert_download", "F", text=repr(e), except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
+        except Exception as e:
+            utils.update_status(source_id, "convert_download", "F", text=repr(e),
+                                except_on_fail=True)
+            utils.complete_submission(source_id)
+            return
 
-    utils.update_status(source_id, "convert_download", "M",
-                        text=("{} files will be processed "
-                              "({} archives extracted)").format(dl_res["total_files"],
-                                                                dl_res["num_extracted"]),
-                        except_on_fail=True)
+        utils.update_status(source_id, "convert_download", "M",
+                            text=("{} files will be processed "
+                                  "({} archives extracted)").format(dl_res["total_files"],
+                                                                    dl_res["num_extracted"]),
+                            except_on_fail=True)
 
     # Handle service integration data directory
     service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
     os.makedirs(service_data)
 
+    '''
     # Pull out special fields in metadata (the rest is the dataset)
-    services = metadata.pop("services", {})
-    parse_params = metadata.pop("index", {})
-    convert_config = metadata.pop("conversion_config", {})
+    #services = metadata.pop("services", {})
+    #parse_params = metadata.pop("index", {})
+    #convert_config = metadata.pop("conversion_config", {})
     # metadata should have data location
     metadata["data"] = {
         "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
         "link": CONFIG["TRANSFER_WEB_APP_LINK"].format(CONFIG["BACKUP_EP"],
                                                        urllib.parse.quote(backup_path))
     }
+    '''
     # Add file info data
-    parse_params["file"] = {
+    sub_conf["index"]["file"] = {
         "globus_endpoint": CONFIG["BACKUP_EP"],
         "http_host": CONFIG["BACKUP_HOST"],
         "local_path": local_path,
@@ -235,9 +246,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     }
     convert_params = {
         "dataset": metadata,
-        "parsers": parse_params,
+        "parsers": sub_conf["index"],
         "service_data": service_data,
-        "group_config": mdf_toolbox.dict_merge(convert_config, CONFIG["GROUPING_RULES"]),
+        "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
+                                               CONFIG["GROUPING_RULES"]),
         "num_transformers": CONFIG["NUM_TRANSFORMERS"]
     }
 
@@ -283,7 +295,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         return
 
     ###################
-    ## Curation step ##
+    #  Curation step  #
     ###################
     # Trigger curation if required
     if sub_conf.get("curation"):
@@ -371,8 +383,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # Move files to data_destinations
     if sub_conf.get("data_destinations"):
         utils.update_status(source_id, "ingest_backup", "P", except_on_fail=True)
-        backup_res = utils.backup_data(mdf_transfer_client, 
-                                       storage_loc="globus://{}{}".format(
+        backup_res = utils.backup_data(mdf_transfer_client,
+                                       storage_loc=
     else:
         utils.update_status(source_id, "ingest_backup", "N", except_on_fail=True)
 

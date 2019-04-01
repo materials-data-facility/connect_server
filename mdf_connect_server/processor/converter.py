@@ -97,6 +97,8 @@ def group_tree(root, config):
     """Run group_files on files in tree appropriately."""
     files = []
     dirs = []
+    if root == "/dev/null":
+        return []
     for node in os.listdir(root):
         node_path = os.path.join(root, node)
         if node == "mdf.json":
