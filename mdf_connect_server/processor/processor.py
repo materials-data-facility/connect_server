@@ -4,7 +4,6 @@ from multiprocessing import Process
 import os
 import signal
 from time import sleep
-import urllib
 
 import globus_sdk
 import mdf_toolbox
@@ -223,12 +222,12 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             utils.update_status(source_id, "data_download", "N", except_on_fail=True)
             os.makedirs(local_path)
             canon_data_sources = sub_conf["data_sources"]
-            
+
         # Move data from canon source(s) to canon dest (if different)
         utils.update_status(source_id, "data_transfer", "P", except_on_fail=True)
         for data_source in canon_data_sources:
             if data_source != sub_conf["canon_destination"]:
-                logger.debug("Data transfer: '{}' to '{}'".format(data_source, 
+                logger.debug("Data transfer: '{}' to '{}'".format(data_source,
                                                                   sub_conf["canon_destination"]))
                 backup_res = utils.backup_data(mdf_transfer_client, data_source,
                                                sub_conf["canon_destination"])
@@ -244,11 +243,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
         os.makedirs(service_data)
 
-        # TODO: Use canon_dest for this
         # Add file info data
         sub_conf["index"]["file"] = {
-            "globus_host": sub_conf["data_destination"],
-            "http_host": CONFIG["BACKUP_HOST"],
+            "globus_host": sub_conf["canon_destination"],
+            "http_host": CONFIG["BACKUP_HOST"],  # TODO: Correct
             "local_path": local_path,
         }
         convert_params = {
@@ -334,7 +332,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # MDF Search (mandatory)
     utils.update_status(source_id, "ingest_search", "P", except_on_fail=True)
-    search_config = services.get("mdf_search", {})
+    search_config = sub_conf["services"].get("mdf_search", {})
     final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
     try:
         search_args = {
@@ -396,17 +394,25 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     if sub_conf.get("data_destinations"):
         utils.update_status(source_id, "ingest_backup", "P", except_on_fail=True)
         backup_res = utils.backup_data(mdf_transfer_client,
-                                       storage_loc=
+                                       storage_loc=sub_conf["canon_destination"],
+                                       backup_locs=sub_conf["data_destinations"])
+        if not all([val is True for val in backup_res.values()]):
+            err_msg = "; ".join(["'{}' failed: {}".format(k, v) for k, v in backup_res.items()
+                                 if v is not True])
+            utils.update_status(source_id, "ingest_backup", "F", text=err_msg, except_on_fail=True)
     else:
         utils.update_status(source_id, "ingest_backup", "N", except_on_fail=True)
 
     # Globus Publish
     # TODO: MDF Publish migration
-    if services.get("globus_publish"):
+    if sub_conf["services"].get("mdf_publish"):
+        utils.update_status(source_id, "ingest_publish", "F",
+                            text="MDF Publish not yet available", except_on_fail=True)
+    if sub_conf["services"].get("globus_publish"):
         utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)
         # collection should be in id or name
-        collection = (services["globus_publish"].get("collection_id")
-                      or services["globus_publish"].get("collection_name")
+        collection = (sub_conf["services"]["globus_publish"].get("collection_id")
+                      or sub_conf["services"]["globus_publish"].get("collection_name")
                       or CONFIG["DEFAULT_PUBLISH_COLLECTION"])
         try:
             fin_res = utils.globus_publish_data(globus_publish_client, mdf_transfer_client,
@@ -425,7 +431,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
 
     # Citrine
-    if services.get("citrine"):
+    if sub_conf["services"].get("citrine"):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Get old Citrine dataset version, if exists
@@ -446,9 +452,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             # Check for PIFs to ingest
             cit_path = os.path.join(service_data, "citrine")
             if len(os.listdir(cit_path)) > 0:
-                cit_res = utils.citrine_upload(cit_path, CONFIG["CITRINATION_API_KEY"], dataset,
-                                               old_citrine_id,
-                                               public=services["citrine"].get("public", True))
+                cit_res = utils.citrine_upload(
+                                cit_path, CONFIG["CITRINATION_API_KEY"], dataset, old_citrine_id,
+                                public=sub_conf["services"]["citrine"].get("public", True))
             else:
                 cit_res = {
                     "success": False,
@@ -488,10 +494,11 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.update_status(source_id, "ingest_citrine", "N", except_on_fail=True)
 
     # MRR
-    if services.get("mrr"):
+    if sub_conf["services"].get("mrr"):
         utils.update_status(source_id, "ingest_mrr", "P", except_on_fail=True)
         try:
-            if isinstance(services["mrr"], dict) and services["mrr"].get("test"):
+            if (isinstance(sub_conf["services"]["mrr"], dict)
+                    and sub_conf["services"]["mrr"].get("test")):
                 mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
             else:
                 mrr_title = dataset["dc"]["titles"][0]["title"]
