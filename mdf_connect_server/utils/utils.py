@@ -59,11 +59,12 @@ DMO_SCHEMA = {
 }
 STATUS_STEPS = (
     ("sub_start", "Submission initialization"),
-    ("convert_download", "Data download"),
+    ("data_download", "Connect data download"),
+    ("data_transfer", "Primary data transfer"),
     ("converting", "Data conversion"),
     ("curation", "Dataset curation"),
     ("ingest_search", "MDF Search ingestion"),
-    ("ingest_backup", "Data storage and backup"),
+    ("ingest_backup", "Data transfer to secondary destinations"),
     ("ingest_publish", "MDF Publish publication"),
     ("ingest_citrine", "Citrine upload"),
     ("ingest_mrr", "Materials Resource Registration"),
@@ -606,73 +607,6 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     for raw_loc in source_loc:
         location = normalize_globus_uri(raw_loc)
         loc_info = urllib.parse.urlparse(location)
-
-        '''
-        # Special case pre-processing
-        # Globus Web App link into globus:// form
-        if (location.startswith("https://www.globus.org/app/transfer")
-                or location.startswith("https://app.globus.org/file-manager")):
-            data_info = urllib.parse.unquote(loc_info.query)
-            # EP ID is in origin or dest
-            ep_start = data_info.find("origin_id=")
-            if ep_start < 0:
-                ep_start = data_info.find("destination_id=")
-                if ep_start < 0:
-                    raise ValueError("Invalid Globus Transfer UI link")
-                else:
-                    ep_start += len("destination_id=")
-            else:
-                ep_start += len("origin_id=")
-            ep_end = data_info.find("&", ep_start)
-            if ep_end < 0:
-                ep_end = len(data_info)
-            ep_id = data_info[ep_start:ep_end]
-
-            # Same for path
-            path_start = data_info.find("origin_path=")
-            if path_start < 0:
-                path_start = data_info.find("destination_path=")
-                if path_start < 0:
-                    raise ValueError("Invalid Globus Transfer UI link")
-                else:
-                    path_start += len("destination_path=")
-            else:
-                path_start += len("origin_path=")
-            path_end = data_info.find("&", path_start)
-            if path_end < 0:
-                path_end = len(data_info)
-            path = data_info[path_start:path_end]
-
-            # Make new location
-            location = "globus://{}{}".format(ep_id, path)
-            loc_info = urllib.parse.urlparse(location)
-            # Use user's TransferClient
-            tc = transfer_client
-
-        # Google Drive protocol into globus:// form
-        elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
-            # Correct form is "google:///path/file.dat"
-            # (three slashes - two for scheme end, one for path start)
-            # But if a user uses two slashes, the netloc will incorrectly be the top dir
-            # (netloc="path", path="/file.dat")
-            # Otherwise netloc is nothing
-            if loc_info.netloc:
-                gpath = "/" + loc_info.netloc + loc_info.path
-            else:
-                gpath = loc_info.path
-            # Don't use os.path.join because gpath starts with /
-            # GDRIVE_ROOT does not end in / to make compatible
-            location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
-                                                CONFIG["GDRIVE_ROOT"], gpath)
-            loc_info = urllib.parse.urlparse(location)
-            # Use admin's TransferClient if present
-            tc = admin_client or transfer_client
-
-        else:
-            # Use default (user's) TransferClient
-            tc = transfer_client
-        '''
-
         # Globus Transfer
         if loc_info.scheme == "globus":
             # Use admin_client for GDrive Transfers
@@ -813,7 +747,7 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     backup_locs (list of str): The backup locations.
 
     Returns:
-    dict: [backup_loc] (bool or str): True on a successful backup to this backup location,
+    dict: [backup_loc] (True or str): True on a successful backup to this backup location,
             a str error message on failure.
     """
     if isinstance(backup_locs, str):
@@ -910,14 +844,20 @@ def normalize_globus_uri(location):
             gpath = loc_info.path
         # Don't use os.path.join because gpath starts with /
         # GDRIVE_ROOT does not end in / to make compatible
-        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
-                                                CONFIG["GDRIVE_ROOT"], gpath)
+        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"], CONFIG["GDRIVE_ROOT"], gpath)
 
     # Default - do nothing
     else:
         new_location = location
 
     return new_location
+
+
+def make_globus_app_link(globus_uri):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri))
+    globus_link = CONFIG["TRANSFER_WEB_APP_LINK"] \
+        .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
+    return globus_link
 
 
 def globus_publish_data(publish_client, transfer_client, metadata, collection,

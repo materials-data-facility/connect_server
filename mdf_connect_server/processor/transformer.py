@@ -568,13 +568,11 @@ def _parse_file_info(group, params=None):
     list of dict: The record(s) parsed.
     """
     try:
-        file_params = params["parsers"]["file"]
+        globus_host_info = urllib.parse.urlparse(params["parsers"]["file"]["globus_host"])
+        host_endpoint = globus_host_info.netloc
+        host_path = globus_host_info.path
     except Exception:
-        raise ValueError("File info parser params missing")
-    try:
-        globus_endpoint = file_params["globus_endpoint"]
-    except Exception:
-        raise ValueError("File info globus_endpoint missing")
+        raise ValueError("File info host_endpoint missing or corrupted: {}".format(str(e)))
     try:
         http_host = file_params["http_host"]
     except Exception:
@@ -583,14 +581,13 @@ def _parse_file_info(group, params=None):
         local_path = file_params["local_path"]
     except Exception:
         raise ValueError("File info local_path missing")
-    host_path = file_params.get("host_path", local_path)
 
     files = []
     for file_path in group:
         host_file = file_path.replace(local_path, host_path)
         with open(file_path, "rb") as f:
             md = {
-                "globus": "globus://" + str(globus_endpoint) + str(host_file),
+                "globus": "globus://{}{}".format(globus_endpoint, host_file),
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
                 "url": http_host + host_file,

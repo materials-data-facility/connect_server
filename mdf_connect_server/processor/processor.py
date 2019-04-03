@@ -185,131 +185,143 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.complete_submission(source_id)
         return
 
-    # NOTE: Skip check - Curation return and no_convert
-    # Curation return - skip step without updating (keep current status)
-    if type(sub_conf["curation"]) is str:
-        pass
-    # no_convert, skip download with status change
-    elif sub_conf["no_convert"]:
-        utils.update_status(source_id, "convert_download", "N", except_on_fail=True)
-    # Otherwise, download data locally
-    else:
-        utils.update_status(source_id, "convert_download", "P", except_on_fail=True)
+    # Curation skip point
+    if type(sub_conf["curation"]) is not str:
         local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
-        backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
-        try:
-            # Download from user
-            for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
-                                              CONFIG["LOCAL_EP"], local_path,
-                                              admin_client=mdf_transfer_client, user_id=user_id):
+        # If we're converting, download data locally, then set canon source to local
+        # This allows non-Globus sources (because to download to Connect's EP)
+        if not sub_conf["no_convert"]:
+            utils.update_status(source_id, "data_download", "P", except_on_fail=True)
+            try:
+                # Download from user
+                for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
+                                                  CONFIG["LOCAL_EP"], local_path,
+                                                  admin_client=mdf_transfer_client,
+                                                  user_id=user_id):
+                    if not dl_res["success"]:
+                        msg = "During data download: " + dl_res["error"]
+                        utils.update_status(source_id, "data_download", "T", text=msg,
+                                            except_on_fail=True)
                 if not dl_res["success"]:
-                    msg = "During data download: " + dl_res["error"]
-                    utils.update_status(source_id, "convert_download", "T", text=msg,
-                                        except_on_fail=True)
-            if not dl_res["success"]:
-                raise ValueError(dl_res["error"])
+                    raise ValueError(dl_res["error"])
 
-        except Exception as e:
-            utils.update_status(source_id, "convert_download", "F", text=repr(e),
+            except Exception as e:
+                utils.update_status(source_id, "data_download", "F", text=repr(e),
+                                    except_on_fail=True)
+                utils.complete_submission(source_id)
+                return
+
+            utils.update_status(source_id, "data_download", "M",
+                                text=("{} files will be converted ({} archives extracted)"
+                                      .format(dl_res["total_files"], dl_res["num_extracted"])),
                                 except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
+            canon_data_sources = ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)]
 
-        utils.update_status(source_id, "convert_download", "M",
-                            text=("{} files will be processed "
-                                  "({} archives extracted)").format(dl_res["total_files"],
-                                                                    dl_res["num_extracted"]),
-                            except_on_fail=True)
-
-    # Handle service integration data directory
-    service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
-    os.makedirs(service_data)
-
-    '''
-    # Pull out special fields in metadata (the rest is the dataset)
-    #services = metadata.pop("services", {})
-    #parse_params = metadata.pop("index", {})
-    #convert_config = metadata.pop("conversion_config", {})
-    # metadata should have data location
-    metadata["data"] = {
-        "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
-        "link": CONFIG["TRANSFER_WEB_APP_LINK"].format(CONFIG["BACKUP_EP"],
-                                                       urllib.parse.quote(backup_path))
-    }
-    '''
-    # Add file info data
-    sub_conf["index"]["file"] = {
-        "globus_endpoint": CONFIG["BACKUP_EP"],
-        "http_host": CONFIG["BACKUP_HOST"],
-        "local_path": local_path,
-        "host_path": backup_path
-    }
-    convert_params = {
-        "dataset": metadata,
-        "parsers": sub_conf["index"],
-        "service_data": service_data,
-        "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
-                                               CONFIG["GROUPING_RULES"]),
-        "num_transformers": CONFIG["NUM_TRANSFORMERS"]
-    }
-
-    # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
-        logger.debug("{}: Cancel signal acknowledged".format(source_id))
-        utils.complete_submission(source_id)
-        return
-
-    # Convert data
-    utils.update_status(source_id, "converting", "P", except_on_fail=True)
-    try:
-        feedstock, num_groups, extensions = convert(local_path, convert_params)
-    except Exception as e:
-        utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    else:
-        utils.modify_status_entry(source_id, {"extensions": extensions})
-        # feedstock minus dataset entry is records
-        num_parsed = len(feedstock) - 1
-        # If nothing in feedstock, panic
-        if num_parsed < 0:
-            utils.update_status(source_id, "converting", "F",
-                                text="Could not parse dataset entry", except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        # If no records, warn user
-        elif num_parsed == 0:
-            utils.update_status(source_id, "converting", "U",
-                                text=("No records were parsed out of {} groups"
-                                      .format(num_groups)), except_on_fail=True)
+        # If we're not converting, set canon source to only source
+        # Also create local dir with no data to "convert" for dataset entry
         else:
-            utils.update_status(source_id, "converting", "M",
-                                text=("{} records parsed out of {} groups"
-                                      .format(num_parsed, num_groups)), except_on_fail=True)
-        logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
+            utils.update_status(source_id, "data_download", "N", except_on_fail=True)
+            os.makedirs(local_path)
+            canon_data_sources = sub_conf["data_sources"]
+            
+        # Move data from canon source(s) to canon dest (if different)
+        utils.update_status(source_id, "data_transfer", "P", except_on_fail=True)
+        for data_source in canon_data_sources:
+            if data_source != sub_conf["canon_destination"]:
+                logger.debug("Data transfer: '{}' to '{}'".format(data_source, 
+                                                                  sub_conf["canon_destination"]))
+                backup_res = utils.backup_data(mdf_transfer_client, data_source,
+                                               sub_conf["canon_destination"])
+                if not backup_res[sub_conf["canon_destination"]]:
+                    err_text = ("Transfer from '{}' failed: {}"
+                                .format(data_source, backup_res[sub_conf["canon_destination"]]))
+                    utils.update_status(source_id, "data_transfer", "F", text=err_text,
+                                        except_on_fail=True)
+                    return
+        utils.update_status(source_id, "data_transfer", "S", except_on_fail=True)
 
-    # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
-        logger.debug("{}: Cancel signal acknowledged".format(source_id))
-        utils.complete_submission(source_id)
-        return
+        # Handle service integration data directory
+        service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
+        os.makedirs(service_data)
 
-    ###################
-    #  Curation step  #
-    ###################
-    # Trigger curation if required
-    if sub_conf.get("curation"):
-        utils.update_status(source_id, "curation", "P", except_on_fail=True)
-        # TODO: Real curation flow
-        # Likely with state save to file, reload and skip reconverting
-        logger.info("CURATION TRIGGERED FOR {}".format(source_id))
-        utils.modify_status_entry(source_id, {"curation": True}, except_on_fail=True)
-        # Pretending curation succeeded, state restored
-        utils.modify_status_entry(source_id, {"curation": "Admin fiat"}, except_on_fail=True)
-        utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat",
-                            except_on_fail=True)
+        # TODO: Use canon_dest for this
+        # Add file info data
+        sub_conf["index"]["file"] = {
+            "globus_host": sub_conf["data_destination"],
+            "http_host": CONFIG["BACKUP_HOST"],
+            "local_path": local_path,
+        }
+        convert_params = {
+            "dataset": metadata,
+            "parsers": sub_conf["index"],
+            "service_data": service_data,
+            "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
+                                                   CONFIG["GROUPING_RULES"]),
+            "num_transformers": CONFIG["NUM_TRANSFORMERS"]
+        }
+
+        # NOTE: Cancellation point
+        if utils.read_status(source_id).get("status", {}).get("cancelled"):
+            logger.debug("{}: Cancel signal acknowledged".format(source_id))
+            utils.complete_submission(source_id)
+            return
+
+        # Convert data
+        utils.update_status(source_id, "converting", "P", except_on_fail=True)
+        try:
+            feedstock, num_groups, extensions = convert(local_path, convert_params)
+        except Exception as e:
+            utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+            utils.complete_submission(source_id)
+            return
+        else:
+            utils.modify_status_entry(source_id, {"extensions": extensions})
+            # feedstock minus dataset entry is records
+            num_parsed = len(feedstock) - 1
+            # If nothing in feedstock, panic
+            if num_parsed < 0:
+                utils.update_status(source_id, "converting", "F",
+                                    text="Could not parse dataset entry", except_on_fail=True)
+                utils.complete_submission(source_id)
+                return
+            # If no records, warn user
+            elif num_parsed == 0:
+                utils.update_status(source_id, "converting", "U",
+                                    text=("No records were parsed out of {} groups"
+                                          .format(num_groups)), except_on_fail=True)
+            else:
+                utils.update_status(source_id, "converting", "M",
+                                    text=("{} records parsed out of {} groups"
+                                          .format(num_parsed, num_groups)), except_on_fail=True)
+            logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
+
+        # NOTE: Cancellation point
+        if utils.read_status(source_id).get("status", {}).get("cancelled"):
+            logger.debug("{}: Cancel signal acknowledged".format(source_id))
+            utils.complete_submission(source_id)
+            return
+
+        ###################
+        #  Curation step  #
+        ###################
+        # Trigger curation if required
+        if sub_conf.get("curation"):
+            utils.update_status(source_id, "curation", "P", except_on_fail=True)
+            # TODO: Real curation flow
+            # Likely with state save to file, reload and skip reconverting
+            logger.info("CURATION TRIGGERED FOR {}".format(source_id))
+            utils.modify_status_entry(source_id, {"curation": True}, except_on_fail=True)
+
+            # Pretending curation succeeded, state restored
+            utils.modify_status_entry(source_id, {"curation": "Admin fiat"}, except_on_fail=True)
+            utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat",
+                                except_on_fail=True)
+        else:
+            utils.update_status(source_id, "curation", "N", except_on_fail=True)
+    # Returning from successful curation
     else:
-        utils.update_status(source_id, "curation", "N", except_on_fail=True)
+        # TODO
+        print("Successful curation is not implemented")
 
     # Integrations
     service_res = {}
