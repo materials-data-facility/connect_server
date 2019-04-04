@@ -395,6 +395,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             err_msg = "; ".join(["'{}' failed: {}".format(k, v) for k, v in backup_res.items()
                                  if v is not True])
             utils.update_status(source_id, "ingest_backup", "F", text=err_msg, except_on_fail=True)
+        else:
+            utils.update_status(source_id, "ingest_backup", "S", except_on_fail=True)
     else:
         utils.update_status(source_id, "ingest_backup", "N", except_on_fail=True)
 
