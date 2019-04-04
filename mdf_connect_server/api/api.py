@@ -269,9 +269,15 @@ def accept_submission():
         sub_conf["canon_destination"] = ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_PATH"], source_id)))
-    # Add canon dest to data_destinations
-    if sub_conf["canon_destination"] not in sub_conf["data_destinations"]:
-        sub_conf["data_destinations"].append(sub_conf["canon_destination"])
+    # Remove canon dest from data_destinations (canon dest transferred to separately)
+    if sub_conf["canon_destination"] in sub_conf["data_destinations"]:
+        sub_conf["data_destinations"].remove(sub_conf["canon_destination"])
+
+    # Add canon dest to metadata
+    metadata["data"] = {
+        "endpoint_path": sub_conf["canon_destination"],
+        "link": utils.make_globus_app_link(sub_conf["canon_destination"])
+    }
 
     status_info = {
         "source_id": source_id,
