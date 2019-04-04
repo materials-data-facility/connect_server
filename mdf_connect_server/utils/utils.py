@@ -741,6 +741,11 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     """Back up data to remote endpoints.
     (One source to many destinations)
 
+    Note:
+        An endpoint of "False" will disable the backup for that location, or all
+        backups if the storage endpoint is "False". When disabled in this way,
+        the results will return a success and the event will be logged.
+
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
     storage_loc (str): A globus:// uri to the current data location.
@@ -756,15 +761,28 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     norm_store = normalize_globus_uri(storage_loc)
     storage_info = urllib.parse.urlparse(norm_store)
 
+    # Storage must be Globus endpoint
     if not storage_info.scheme == "globus":
         error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
                  "directly published from or backed up from.".format(norm_store, storage_loc))
         return {
             "all_locations": error
         }
+    # No backups if storage EP is False
+    elif storage_info.netloc == "False":
+        logger.warning("All backups skipped from storage: '{}'".format(norm_store))
+        for backup in backup_locs:
+            results[backup] = True
+        return results
 
     for backup in backup_locs:
-        backup_info = urllib.parse.urlparse(backup)
+        norm_backup = normalize_globus_uri(backup)
+        backup_info = urllib.parse.urlparse(norm_backup)
+        # No backup if location EP is False
+        if backup_info.netloc == "False":
+            logger.warning("Backup location skipped: '{}'".format(norm_backup))
+            results[backup] = True
+            continue
         transfer = mdf_toolbox.custom_transfer(
                         transfer_client, storage_info.netloc, backup_info.netloc,
                         [(storage_info.path, backup_info.path)],

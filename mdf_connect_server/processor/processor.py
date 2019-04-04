@@ -368,24 +368,19 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Other services use the dataset information
         with open(final_feed_path) as f:
             dataset = json.loads(f.readline())
-        # Back up feedstock (if not Dev)
-        if CONFIG["BACKUP_EP"]:
-            source_feed_loc = "globus://{}{}".format(CONFIG["LOCAL_EP"], final_feed_path)
-            backup_feed_loc = "globus://{}{}".format(CONFIG["BACKUP_EP"],
-                                                     os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
-                                                                  source_id + "_final.json"))
-            feed_backup_res = utils.backup_data(mdf_transfer_client, source_feed_loc,
-                                                backup_feed_loc)
-            if feed_backup_res[backup_feed_loc] is not True:
-                utils.update_status(source_id, "ingest_search", "R",
-                                    text=("Feedstock backup failed: {}"
-                                          .format(feed_backup_res[backup_feed_loc])),
-                                    except_on_fail=True)
-            else:
-                utils.update_status(source_id, "ingest_search", "S", except_on_fail=True)
-                os.remove(final_feed_path)
+        # Back up feedstock
+        source_feed_loc = "globus://{}{}".format(CONFIG["LOCAL_EP"], final_feed_path)
+        backup_feed_loc = "globus://{}{}".format(CONFIG["BACKUP_EP"],
+                                                 os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
+                                                              source_id + "_final.json"))
+        feed_backup_res = utils.backup_data(mdf_transfer_client, source_feed_loc,
+                                            backup_feed_loc)
+        if feed_backup_res[backup_feed_loc] is not True:
+            utils.update_status(source_id, "ingest_search", "R",
+                                text=("Feedstock backup failed: {}"
+                                      .format(feed_backup_res[backup_feed_loc])),
+                                except_on_fail=True)
         else:
-            logger.info("{}: Skipping feedstock backup - no backup EP set".format(source_id))
             utils.update_status(source_id, "ingest_search", "S", except_on_fail=True)
             os.remove(final_feed_path)
         service_res["mdf_search"] = "This dataset was ingested to MDF Search."
