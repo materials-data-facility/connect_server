@@ -19,7 +19,7 @@ setup(
         "gunicorn>=19.9.0",
         "hyperspy>=1.4.1",
         "jsonschema>=2.6.0",
-        "mdf-toolbox>=0.3.6",
+        "mdf-toolbox>=0.4.2",
         "numpy>=1.16.0",
         "pandas>=0.23.0",
         "pif-ingestor>=1.1.1",

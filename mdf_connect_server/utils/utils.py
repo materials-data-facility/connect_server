@@ -496,8 +496,8 @@ def fetch_org_rules(org_names, user_rules=None):
         tuple: (list: All org canonical_names, dict: All appropriate rules)
     """
     # Normalize name: Remove special characters (including whitespace) and capitalization
-    # Function for convenience
-    def normalize_name(name): "".join([c for c in name.lower() if c.isalnum()])
+    # Function for convenience, but not generalizable/useful for other cases
+    def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
 
     # Cache list of all organization aliases to match against
     # Transform into tuple (normalized_aliases, org_rules) for convenience
