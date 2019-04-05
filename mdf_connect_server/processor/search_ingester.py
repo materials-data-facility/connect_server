@@ -31,6 +31,7 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     Returns:
     dict: success (bool): True on success.
           errors (list): The errors encountered.
+          details (str): If success is False, details about the major error, if available.
     """
     if len(feedstock) < 1:
         raise ValueError("Feedstock does not contain dataset entry: length {}"
@@ -47,13 +48,21 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     val = Validator()
     ds_res = val.start_dataset(feedstock[0], source_info, validator_info)
     if not ds_res.get("success"):
-        raise ValueError("Dataset entry '{}' invalid: {}".format(feedstock[0], str(ds_res)))
+        return {
+            "success": False,
+            "errors": ["Dataset entry invalid: {}".format(ds_res["error"])],
+            "details": ds_res.get("details", "No details available") + str(feedstock[0])
+        }
 
     # Record entries
     for record in feedstock[1:]:
         rc_res = val.add_record(record)
         if not rc_res.get("success"):
-            raise ValueError("Record entry '{}' invalid: {}".format(record, str(rc_res)))
+            return {
+                "success": False,
+                "errors": ["Record entry invalid: {}".format(rc_res["error"])],
+                "details": rc_res.get("details", "No details available") + str(record)
+            }
 
     # Delete previous version of this dataset in Search
     del_q = {

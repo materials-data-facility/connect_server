@@ -347,6 +347,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             }
         }
         search_res = search_ingest(**search_args)
+        if not search_res["success"]:
+            utils.update_status(source_id, "ingest_search", "F",
+                                text="; ".join(search_res["errors"]), except_on_fail=True)
+            return
     except Exception as e:
         utils.update_status(source_id, "ingest_search", "F", text=repr(e),
                             except_on_fail=True)
@@ -356,7 +360,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Handle errors
         if len(search_res["errors"]) > 0:
             utils.update_status(source_id, "ingest_search", "F",
-                                text=("{} batches of records failed to ingest (up to {} records"
+                                text=("{} batches of records failed to ingest (up to {} records "
                                       "total)").format(len(search_res["errors"]),
                                                        (len(search_res["errors"])
                                                         * CONFIG["SEARCH_BATCH_SIZE"]),
