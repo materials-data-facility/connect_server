@@ -23,7 +23,7 @@ ORGANIZATIONS = [{
         "dc.descriptions.description"
     ],
     "parent_organizations": [],
-    "services": []
+    "services": {}
 }, {
     # Advanced Photon Source
     "canonical_name": "Advanced Photon Source",
