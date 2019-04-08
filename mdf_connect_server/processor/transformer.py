@@ -8,8 +8,8 @@ import urllib
 
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
-import pycalphad  # noqa: E402
 import hyperspy.api as hs  # noqa: E402
+import pycalphad  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
