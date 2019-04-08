@@ -38,7 +38,7 @@ elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
 
 elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
     if [ -f pid.log ]; then
-        echo "Connect Processing already started!"
+        echo "Connect Processing already started!";
     else
         echo "Starting Connect Processing for Production";
         export FLASK_ENV=production;
@@ -57,7 +57,7 @@ elif [ "$CONDA_DEFAULT_ENV" == "prodp" ]; then
 
 elif [ "$CONDA_DEFAULT_ENV" == "devp" ]; then
     if [ -f pid.log ]; then
-        echo "Connect Processing already started!"
+        echo "Connect Processing already started!";
     else
         echo "Starting Connect Processing for Development";
         export FLASK_ENV=development;

@@ -135,7 +135,7 @@ class Validator:
         except (ValueError, json.JSONDecodeError) as e:
             return {
                 "success": False,
-                "error": "Invalid JSON: {}".format(str(e)),
+                "error": "Invalid dataset JSON: {}".format(str(e)),
                 "details": repr(e)
             }
 
@@ -145,7 +145,7 @@ class Validator:
         except jsonschema.ValidationError as e:
             return {
                 "success": False,
-                "error": "Invalid metadata: " + str(e).split("\n")[0],
+                "error": "Invalid dataset metadata: " + str(e).split("\n")[0],
                 "details": str(e)
             }
 
@@ -330,7 +330,7 @@ class Validator:
         except (ValueError, json.JSONDecodeError) as e:
             return {
                 "success": False,
-                "error": "Invalid JSON: {}".format(str(e)),
+                "error": "Invalid record JSON: {}".format(str(e)),
                 "details": repr(e)
                 }
 
@@ -340,7 +340,7 @@ class Validator:
         except jsonschema.ValidationError as e:
             return {
                 "success": False,
-                "error": "Invalid metadata: " + str(e).split("\n")[0],
+                "error": "Invalid record metadata: " + str(e).split("\n")[0],
                 "details": str(e)
                 }
 
@@ -360,15 +360,10 @@ class Validator:
         elif self.__finished:
             raise ValueError("Dataset already finished")
 
-        # Add data into dataset entry
-        # TODO: Make bags, mint minid
-
         self.__indexed_files = []
-
         self.__finished = True
 
         self.__tempfile.seek(0)
-
         yield self.__dataset
         for line in self.__tempfile:
             yield json.loads(line)

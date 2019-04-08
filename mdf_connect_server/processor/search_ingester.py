@@ -2,7 +2,6 @@ from ctypes import c_bool
 import json
 import logging
 import multiprocessing
-import os
 from queue import Empty
 from time import sleep
 
@@ -10,39 +9,34 @@ from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
 from mdf_connect_server import CONFIG, utils
-from mdf_connect_server.processor import Validator
 
 
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
-                  num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
+def search_ingest(feedstock_file, source_id, index, batch_size,
+                  num_submitters=CONFIG["NUM_SUBMITTERS"]):
     """Ingests feedstock from file.
 
     Arguments:
-    feedstock (list of dict): The feedstock to validate.
+    feedstock_file (str): The feedstock file to ingest.
     source_id (str): The source_id of the feedstock.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
     num_submitters (int): The number of submission processes to create. Default NUM_SUBMITTERS.
-    feedstock_save (str): Path to file for saving final feedstock. Default None, to save nothing.
 
     Returns:
     dict: success (bool): True on success.
           errors (list): The errors encountered.
           details (str): If success is False, details about the major error, if available.
     """
-    if len(feedstock) < 1:
-        raise ValueError("Feedstock does not contain dataset entry: length {}"
-                         .format(len(feedstock)))
-
     ingest_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                                {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
     source_info = utils.split_source_id(source_id)
 
+    '''
     # Validate feedstock
     # Dataset entry, start Validator
     val = Validator()
@@ -63,6 +57,7 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
                 "errors": ["Record entry invalid: {}".format(rc_res["error"])],
                 "details": rc_res.get("details", "No details available") + str(record)
             }
+    '''
 
     # Delete previous version of this dataset in Search
     del_q = {
@@ -99,8 +94,7 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
                   for i in range(num_submitters)]
     # Create queue populator
     populator = multiprocessing.Process(target=populate_queue,
-                                        args=(ingest_queue, val, batch_size,
-                                              (feedstock_save or os.devnull), source_id))
+                                        args=(ingest_queue, feedstock_file, batch_size, source_id))
     logger.debug("{}: Search ingestion starting".format(source_id))
     # Start processes
     populator.start()
@@ -142,15 +136,12 @@ def search_ingest(feedstock, source_id, index, batch_size, validator_info=None,
     }
 
 
-def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_id):
-    # Populate ingest queue and save results if requested
-    os.makedirs(os.path.dirname(feedstock_save), exist_ok=True)
-    with open(feedstock_save, 'w') as save_loc:
-        batch = []
-        for entry in validator.get_finished_dataset():
-            # Save entry
-            json.dump(entry, save_loc)
-            save_loc.write("\n")
+def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
+    # Populate ingest queue
+    batch = []
+    with open(feedstock_file) as feed_in:
+        for str_entry in feed_in:
+            entry = json.loads(str_entry)
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
             iden = (CONFIG["SEARCH_SUBJECT_PATTERN"]

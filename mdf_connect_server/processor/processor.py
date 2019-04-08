@@ -120,7 +120,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     Modifies the status database as steps are completed.
 
     Arguments:
-    metadata (dict): The JSON passed to /convert.
+    metadata (dict): The JSON passed to /submit.
     sub_conf (dict): Submission configuration information.
     source_id (str): The source name of this submission.
     access_token (str): The Globus Auth access token for the submitting user.
@@ -187,6 +187,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
         local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
+        feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
         # If we're converting, download data locally, then set canon source to local
         # This allows non-Globus sources (because to download to Connect's EP)
         if not sub_conf["no_convert"]:
@@ -253,9 +254,14 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "dataset": metadata,
             "parsers": sub_conf["index"],
             "service_data": service_data,
+            "feedstock_file": feedstock_file,
             "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
                                                    CONFIG["GROUPING_RULES"]),
-            "num_transformers": CONFIG["NUM_TRANSFORMERS"]
+            "num_transformers": CONFIG["NUM_TRANSFORMERS"],
+            "validation_info": {
+                "project_blocks": sub_conf.get("project_blocks", []),
+                "required_fields": sub_conf.get("required_fields", [])
+            }
         }
 
         # NOTE: Cancellation point
@@ -267,31 +273,37 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Convert data
         utils.update_status(source_id, "converting", "P", except_on_fail=True)
         try:
-            feedstock, num_groups, extensions = convert(local_path, convert_params)
+            convert_res = convert(local_path, convert_params)
+            if not convert_res["success"]:
+                utils.update_status(source_id, "converting", "F", text=convert_res["error"],
+                                    except_on_fail=True)
+                return
+            dataset = convert_res["dataset"]
+            num_records = convert_res["num_records"]
+            num_groups = convert_res["num_groups"]
+            extensions = convert_res["extensions"]
         except Exception as e:
             utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
             utils.complete_submission(source_id)
             return
         else:
             utils.modify_status_entry(source_id, {"extensions": extensions})
-            # feedstock minus dataset entry is records
-            num_parsed = len(feedstock) - 1
-            # If nothing in feedstock, panic
-            if num_parsed < 0:
+            # If nothing in dataset, panic
+            if not dataset:
                 utils.update_status(source_id, "converting", "F",
                                     text="Could not parse dataset entry", except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
             # If no records, warn user
-            elif num_parsed == 0:
+            elif num_records < 1:
                 utils.update_status(source_id, "converting", "U",
                                     text=("No records were parsed out of {} groups"
                                           .format(num_groups)), except_on_fail=True)
             else:
                 utils.update_status(source_id, "converting", "M",
                                     text=("{} records parsed out of {} groups"
-                                          .format(num_parsed, num_groups)), except_on_fail=True)
-            logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
+                                          .format(num_records, num_groups)), except_on_fail=True)
+            logger.debug("{}: {} entries parsed".format(source_id, num_records+1))
 
         # NOTE: Cancellation point
         if utils.read_status(source_id).get("status", {}).get("cancelled"):
@@ -333,18 +345,12 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # MDF Search (mandatory)
     utils.update_status(source_id, "ingest_search", "P", except_on_fail=True)
     search_config = sub_conf["services"].get("mdf_search", {})
-    final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
     try:
         search_args = {
-            "feedstock": feedstock,
+            "feedstock_file": feedstock_file,
             "source_id": source_id,
             "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
-            "batch_size": CONFIG["SEARCH_BATCH_SIZE"],
-            "feedstock_save": final_feed_path,
-            "validator_info": {
-                "project_blocks": sub_conf.get("project_blocks", []),
-                "required_fields": sub_conf.get("required_fields", [])
-            }
+            "batch_size": CONFIG["SEARCH_BATCH_SIZE"]
         }
         search_res = search_ingest(**search_args)
         if not search_res["success"]:
@@ -369,11 +375,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             utils.complete_submission(source_id)
             return
 
-        # Other services use the dataset information
-        with open(final_feed_path) as f:
-            dataset = json.loads(f.readline())
         # Back up feedstock
-        source_feed_loc = "globus://{}{}".format(CONFIG["LOCAL_EP"], final_feed_path)
+        source_feed_loc = "globus://{}{}".format(CONFIG["LOCAL_EP"], feedstock_file)
         backup_feed_loc = "globus://{}{}".format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
                                                               source_id + "_final.json"))
@@ -386,7 +389,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                 except_on_fail=True)
         else:
             utils.update_status(source_id, "ingest_search", "S", except_on_fail=True)
-            os.remove(final_feed_path)
+            os.remove(feedstock_file)
         service_res["mdf_search"] = "This dataset was ingested to MDF Search."
 
     # Move files to data_destinations
