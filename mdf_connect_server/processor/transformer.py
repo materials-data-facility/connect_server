@@ -9,11 +9,11 @@ import urllib
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
 import pycalphad  # noqa: E402
+import hyperspy.api as hs  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
 from bson import ObjectId  # noqa: E402
-import hyperspy.api as hs  # noqa: E402
 import magic  # noqa: E402
 import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
