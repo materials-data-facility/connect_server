@@ -323,7 +323,7 @@ def test_validator():
 
     bad_res = val.add_record(bad_record)
     assert bad_res["success"] is False
-    assert "Invalid metadata" in bad_res["error"]
+    assert "Invalid record metadata" in bad_res["error"]
 
     gr2_add_res = val.add_record(good_record2)
     assert gr2_add_res["success"], gr2_add_res["error"]
@@ -346,4 +346,4 @@ def test_validator():
 
     bad_res = val.start_dataset(bad_dataset)
     assert bad_res["success"] is False
-    assert "Invalid metadata" in bad_res["error"]
+    assert "Invalid dataset metadata" in bad_res["error"]
