@@ -10,13 +10,13 @@ import urllib
 os.environ["MPLBACKEND"] = "agg"
 # pycalphad and hyperspy run into dlopen static TLS errors, so retry imports when failing
 try:
-    import pycalphad # noqa: E402
+    import pycalphad  # noqa: E402
 except ImportError:
     import pycalphad
 try:
-    import hyperspy.api as hs # noqa: E402
+    import hyperspy.api as hs  # noqa: E402
 except ImportError:
-    import hyperspy.api as hs # noqa: E402
+    import hyperspy.api as hs  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
