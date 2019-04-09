@@ -1,11 +1,4 @@
-from hashlib import sha512
-import json
-import logging
 import os
-from queue import Empty
-import re
-import urllib
-
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
 # pycalphad and hyperspy run into dlopen static TLS errors, so retry imports when failing
@@ -17,6 +10,14 @@ try:
     import hyperspy.api as hs  # noqa: E402
 except ImportError:
     import hyperspy.api as hs  # noqa: E402
+
+from hashlib import sha512  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+# import os  # noqa: E402
+from queue import Empty  # noqa: E402
+import re  # noqa: E402
+import urllib  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
