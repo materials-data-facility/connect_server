@@ -8,10 +8,10 @@ ORGANIZATIONS = [{
     "description": "A sample organization for testing, and not for Production use.",
     "homepage": "https://materialsdatafacility.org",
     "permission_groups": [
-        "5fc63928-3752-11e8-9c6f-0e00fd09bf20"  # MDF Connect Admins
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"  # MDF Connect Admins
     ],
     "acl": [
-        "5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
     ],
     "data_destinations": [
         ("globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/"

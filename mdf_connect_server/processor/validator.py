@@ -175,6 +175,12 @@ class Validator:
                 }
 
         # Validate required fields
+        # TODO: How should this validation be done?
+        # The metadata conforms to the schema, there are just extra
+        # `requires` values. Perhaps add these to the schema instead?
+        # Lists, specifically, are an issue. Must all dicts in the list
+        # conform? This behavior is difficult.
+        # As a semi-temporary measure, only check the first element of lists.
         if self.__required_fields:
             missing = []
             for field_path in self.__required_fields:
@@ -182,6 +188,8 @@ class Validator:
                 for field_name in field_path.split("."):
                     try:
                         value = value[field_name]
+                        if isinstance(value, list) and len(value) > 0:
+                            value = value[0]
                     except KeyError:
                         missing.append(field_path)
                         break

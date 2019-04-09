@@ -63,8 +63,8 @@ def convert(root_path, convert_params):
         full_dataset["custom"] = new_custom
 
     # Validate dataset
-    ds_res = val.start_dataset(full_dataset, source_info,
-                               convert_params.get("validation_info", None))
+    ds_res = vald.start_dataset(full_dataset, source_info,
+                                convert_params.get("validation_info", None))
     if not ds_res["success"]:
         return ds_res
 

@@ -18,7 +18,7 @@ logger = logging.getLogger("mdf_connect_server")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
-logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
+logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
                                       style='{',
                                       datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
