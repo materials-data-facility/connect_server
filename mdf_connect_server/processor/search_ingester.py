@@ -36,29 +36,6 @@ def search_ingest(feedstock_file, source_id, index, batch_size,
     index = mdf_toolbox.translate_index(index)
     source_info = utils.split_source_id(source_id)
 
-    '''
-    # Validate feedstock
-    # Dataset entry, start Validator
-    val = Validator()
-    ds_res = val.start_dataset(feedstock[0], source_info, validator_info)
-    if not ds_res.get("success"):
-        return {
-            "success": False,
-            "errors": ["Dataset entry invalid: {}".format(ds_res["error"])],
-            "details": ds_res.get("details", "No details available") + str(feedstock[0])
-        }
-
-    # Record entries
-    for record in feedstock[1:]:
-        rc_res = val.add_record(record)
-        if not rc_res.get("success"):
-            return {
-                "success": False,
-                "errors": ["Record entry invalid: {}".format(rc_res["error"])],
-                "details": rc_res.get("details", "No details available") + str(record)
-            }
-    '''
-
     # Delete previous version of this dataset in Search
     del_q = {
         "q": "mdf.source_name:{}".format(source_info["source_name"]),
