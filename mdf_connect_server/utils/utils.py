@@ -345,65 +345,11 @@ def make_source_id(title, author, test=False, index=None):
     # Strip trailing underscores from missing words
     source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
 
-    '''
-    ############################
-    # Prepend author name (without spaces) to title (space in between)
-    if author:
-        title = author.replace(" ", "") + " " + title
-    title = title.strip().lower()
-    # Remove unimportant words
-    for dw in delete_words:
-        # Replace words that are by themselves
-        # e.g. do not replace "and" in "random", do replace in "materials and design"
-        title = title.replace(" "+dw+" ", " ")
-        # Same for underscore separation
-        title = title.replace("_"+dw+"_", "_")
-        # Replace words at the start and end of the title
-        if title.startswith(dw+" "):
-            title = title[len(dw+" "):]
-        if title.endswith(" "+dw):
-            title = title[:-len(" "+dw)]
-    # Verify title has non-stopwords
-    if not title.strip():
-        raise ValueError("Title invalid: No content")
-
-    # Assemble name as first three words (includes author) + last word, with underscores
-    title_words = [w for w in title.split(" ") if w]
-    proto_name = "_".join(title_words[:3] + title_words[-1:]).strip("_")
-    # Clear double underscores
-    while proto_name.find("__") != -1:
-        proto_name = proto_name.replace("__", "_")
-    # Filter out special characters
-    if not proto_name.isalnum():
-        source_id = ""
-        for char in proto_name:
-            # If is alnum, or non-duplicate underscore, add to source_id
-            if char.isalnum() or (char == "_" and not source_id.endswith("_")):
-                source_id += char
-    else:
-        source_id = proto_name
-    # Re-strip for safety
-    source_id = source_id.strip(" _")
-    #########################################
-    '''
     # Add test flag if necessary
     if test:
-        '''
-        # If test flag already applied, don't re-apply
-        if source_id.startswith("test"):
-            # Just add back initial underscore
-            source_id = "_" + source_id
-        # Otherwise, apply test flag
-        else:
-            source_id = "_test_" + source_id
-        '''
         source_name = "_test_" + source_name
 
     # Determine version number to add
-    '''
-    # Remove any existing version number
-    source_name = split_source_id(source_id)["source_name"]
-    '''
     # Get last Search version
     search_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
