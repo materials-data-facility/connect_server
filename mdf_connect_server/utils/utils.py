@@ -269,18 +269,37 @@ def fetch_whitelist(auth_level, member_level=None):
     return whitelist
 
 
-def make_source_id(title, test=False, index=None):
+def make_source_id(title, author=None, test=False, index=None):
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
+    # Stopwords to delete from the source_name
+    # Not using NTLK to avoid an entire package dependency for one minor feature,
+    # and the NLTK stopwords are unlikely to be in a dataset title ("your", "that'll", etc.)
     delete_words = [
-        "and",
-        "or",
-        "the",
         "a",
         "an",
-        "of"
+        "and",
+        "as",
+        "data",
+        "dataset",
+        "for",
+        "from",
+        "in",
+        "of",
+        "or",
+        "study",
+        "test",  # Clears test flag from new source_id
+        "that",
+        "the",
+        "this",
+        "to",
+        "very",
+        "with"
     ]
+    # Prepend author name (without spaces) to title
+    if author:
+        title = author.replace(" ", "") + title
     title = title.strip().lower()
     # Remove unimportant words
     for dw in delete_words:
@@ -294,22 +313,28 @@ def make_source_id(title, test=False, index=None):
             title = title[len(dw+" "):]
         if title.endswith(" "+dw):
             title = title[:-len(" "+dw)]
-    # Replace spaces with underscores, remove leading/trailing underscores
-    title = title.replace(" ", "_").strip("_")
+    # Verify title has non-stopwords
+    if not title.strip():
+        raise ValueError("Title invalid: No content")
+
+    # Assemble name as first three words (includes author) + last word, with underscores
+    title_words = [w for w in title.split(" ") if w]
+    proto_name = "_".join(title_words[:3] + title_words[-1]).strip("_")
     # Clear double underscores
-    while title.find("__") != -1:
-        title = title.replace("__", "_")
+    while proto_name.find("__") != -1:
+        proto_name = proto_name.replace("__", "_")
     # Filter out special characters
-    if not title.isalnum():
+    if not proto_name.isalnum():
         source_id = ""
-        for char in title:
+        for char in proto_name:
             # If is alnum, or non-duplicate underscore, add to source_id
             if char.isalnum() or (char == "_" and not source_id.endswith("_")):
                 source_id += char
     else:
-        source_id = title
+        source_id = proto_name
     # Add test flag if necessary
     if test:
+        '''
         # If test flag already applied, don't re-apply
         if source_id.startswith("test"):
             # Just add back initial underscore
@@ -317,6 +342,8 @@ def make_source_id(title, test=False, index=None):
         # Otherwise, apply test flag
         else:
             source_id = "_test_" + source_id
+        '''
+        source_id = "_test_" + source_id
 
     # Determine version number to add
     # Remove any existing version number
@@ -370,7 +397,7 @@ def make_source_id(title, test=False, index=None):
                      .format(old_search_version, search_version, source_id))
         raise ValueError("Dataset entry in Search has error")
 
-    source_id = "{}_v{}-{}".format(source_name, search_version, sub_version)
+    source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
 
     return {
         "source_id": source_id,
@@ -384,9 +411,10 @@ def make_source_id(title, test=False, index=None):
 def split_source_id(source_id):
     """Retrieve the source_name and version information from a source_id.
     Not complex logic, but easier to have in one location.
-    Standard form: {source_name}_v{search_version}-{submission_version}
-    Legacy form: {source_name}_v{legacy_version}
-        The legacy version is both the search version and submission version.
+    Standard form: {source_name}_v{search_version}.{submission_version}
+    Legacy dash form: {source_name}_v{search_version}-{submission_version}
+    Legacy merged form: {source_name}_v{legacy_version}
+        The legacy merged form version is both the search version and submission version.
 
     Arguments:
     source_id (str): The source_id to split. If this is not a valid-form source_id,
@@ -403,7 +431,8 @@ def split_source_id(source_id):
     """
     # Check if source_id is valid
     # TODO: Remove legacy-form support
-    if not (re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
+    if not (re.search("_v[0-9]+\\.[0-9]+$", source_id)
+            or re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
         return {
             "success": False,
             "source_name": source_id,
@@ -414,12 +443,16 @@ def split_source_id(source_id):
 
     source_name, versions = source_id.rsplit("_v", 1)
     # TODO: Remove legacy-form support
-    v_info = versions.split("-", 1)
+    v_info = versions.split(".", 1)
     if len(v_info) == 2:
         search_version, submission_version = v_info
     else:
-        search_version = v_info[0]
-        submission_version = v_info[0]
+        v_info = versions.split("-", 1)
+        if len(v_info) == 2:
+            search_version, submission_version = v_info
+        else:
+            search_version = v_info[0]
+            submission_version = v_info[0]
 
     return {
         "success": True,

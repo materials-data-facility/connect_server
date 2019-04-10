@@ -294,6 +294,13 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                     text="Could not parse dataset entry", except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
+            # If not converting, show status as skipped
+            # Also check if records were parsed inappropriately, flag error in log
+            elif sub_conf.get("no_convert"):
+                if num_records != 0:
+                    logger.error("{}: Records parsed with no_convert flag ({} records)"
+                                 .format(source_id, num_records))
+                utils.update_status(source_id, "converting", "N", except_on_fail=True)
             # If no records, warn user
             elif num_records < 1:
                 utils.update_status(source_id, "converting", "U",

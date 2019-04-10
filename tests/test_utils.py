@@ -17,27 +17,28 @@ def test_fetch_whitelist():
 def test_make_source_id():
     # Standard usage
     correct1 = {
-        "source_id": "foo_bar_v123_study_v1-1",
-        "source_name": "foo_bar_v123_study",
+        "source_id": "smith_foo_bar_study_v1.1",
+        "source_name": "smith_foo_bar_study",
         "search_version": 1,
         "submission_version": 1,
         "user_id_list": set()
     }
-    assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Study", test=False) == correct1
-    assert utils.make_source_id("foo_bar_v123_study_v1", test=False) == correct1
-    assert utils.make_source_id("foo_bar_v123_study_v1-1", test=False) == correct1
+    assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Study", "Smith", test=False) == correct1
+    assert utils.make_source_id("foo_bar_v123_study_v1", "Smith!", test=False) == correct1
+    assert utils.make_source_id("foo_bar_v123_study_v1-1", "  smith   " test=False) == correct1
 
     # Test usage
     correct2 = {
-        "source_id": "_test_foo_bar_v123_study_v1-1",
-        "source_name": "_test_foo_bar_v123_study",
+        "source_id": "_test_foxhound_foo_v123_study_v1.1",
+        "source_name": "_test_foxhound_foo_v123_study",
         "search_version": 1,
         "submission_version": 1,
         "user_id_list": set()
     }
-    assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Study", test=True) == correct2
-    assert utils.make_source_id("foo_bar_v123_study_v1", test=True) == correct2
-    assert utils.make_source_id("foo_bar_v123_study_v1-1", test=True) == correct2
+    assert utils.make_source_id("Foo and V123:,; a Bar !@#$ Study", "Fox-Hound",
+                                test=True) == correct2
+    assert utils.make_source_id("foo_v123_bar_study_v1", "Fox Hound", test=True) == correct2
+    assert utils.make_source_id("foo_v123_bar_study_v1-1", "Fox-!-Hound", test=True) == correct2
 
     # Double usage should not mutate
     assert utils.make_source_id(correct1["source_id"], test=False) == correct1
@@ -55,6 +56,47 @@ def test_make_source_id():
 
 def test_split_source_id():
     # Standard form
+    assert utils.split_source_id("_test_foo_bar_study_v1.1") == {
+        "success": True,
+        "source_name": "_test_foo_bar_study",
+        "source_id": "_test_foo_bar_study_v1.1",
+        "search_version": 1,
+        "submission_version": 1
+    }
+    assert utils.split_source_id("study_v8_engines_v2.8") == {
+        "success": True,
+        "source_name": "study_v8_engines",
+        "source_id": "study_v8_engines_v2.8",
+        "search_version": 2,
+        "submission_version": 8
+    }
+    # Incorrect form
+    assert utils.split_source_id("just_this") == {
+        "success": False,
+        "source_name": "just_this",
+        "source_id": "just_this",
+        "search_version": 0,
+        "submission_version": 0
+    }
+    # Invalid forms
+    # NOTE: Should never happen, but should be handled appropriately anyway
+    assert utils.split_source_id("study_v3.4_engines_v2.8") == {
+        "success": True,
+        "source_name": "study_v3.4_engines",
+        "source_id": "study_v3.4_engines_v2.8",
+        "search_version": 2,
+        "submission_version": 8
+    }
+    assert utils.split_source_id("just_v3.4_this") == {
+        "success": False,
+        "source_name": "just_v3.4_this",
+        "source_id": "just_v3.4_this",
+        "search_version": 0,
+        "submission_version": 0
+    }
+
+    # TODO: Remove legacy-form support
+    # Legacy-dash form
     assert utils.split_source_id("_test_foo_bar_study_v1-1") == {
         "success": True,
         "source_name": "_test_foo_bar_study",
@@ -69,17 +111,7 @@ def test_split_source_id():
         "search_version": 2,
         "submission_version": 8
     }
-    # Incorrect form
-    assert utils.split_source_id("just_this") == {
-        "success": False,
-        "source_name": "just_this",
-        "source_id": "just_this",
-        "search_version": 0,
-        "submission_version": 0
-    }
-
-    # TODO: Remove legacy-form support
-    # Legacy form
+    # Legacy-merge form
     assert utils.split_source_id("_test_old_oqmd_v13") == {
         "success": True,
         "source_name": "_test_old_oqmd",
