@@ -269,7 +269,7 @@ def fetch_whitelist(auth_level, member_level=None):
     return whitelist
 
 
-def make_source_id(title, author=None, test=False, index=None):
+def make_source_id(title, author, test=False, index=None):
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
@@ -297,9 +297,59 @@ def make_source_id(title, author=None, test=False, index=None):
         "very",
         "with"
     ]
-    # Prepend author name (without spaces) to title
+    # Remove any existing version number from title
+    title = split_source_id(title)["source_name"]
+
+    # Tokenize title and author
+    # Valid token separators are space and underscore
+    # Discard empty tokens
+    title_tokens = [t for t in title.strip().replace("_", " ").split() if t]
+    author_tokens = [t for t in author.strip().replace("_", " ").split() if t]
+
+    # Clean title tokens
+    title_clean = []
+    for token in title_tokens:
+        # Clean token is lowercase and alphanumeric
+        # TODO: After Py3.7 upgrade, use .isascii()
+        clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        if clean_token and clean_token not in delete_words:
+            title_clean.append(clean_token)
+
+    # Clean author tokens, merge into one word
+    author_word = ""
+    for token in author_tokens:
+        clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        author_word += clean_token
+
+    # Remove author_word from title, if exists (e.g. from previous make_source_id())
+    while author_word in title_clean:
+        title_clean.remove(author_word)
+
+    # Select words from title for source_name
+    # Use up to the first two words + last word
+    if len(title_clean) >= 1:
+        word1 = title_clean[0]
+    else:
+        # Must have at least one word
+        raise ValueError("Title '{}' invalid: No content".format(title))
+    if len(title_clean) >= 2:
+        word2 = title_clean[1]
+    else:
+        word2 = ""
+    if len(title_clean) >= 3:
+        word3 = title_clean[-1]
+    else:
+        word3 = ""
+
+    # Assemble source_name
+    # Strip trailing underscores from missing words
+    source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
+
+    '''
+    ############################
+    # Prepend author name (without spaces) to title (space in between)
     if author:
-        title = author.replace(" ", "") + title
+        title = author.replace(" ", "") + " " + title
     title = title.strip().lower()
     # Remove unimportant words
     for dw in delete_words:
@@ -319,7 +369,7 @@ def make_source_id(title, author=None, test=False, index=None):
 
     # Assemble name as first three words (includes author) + last word, with underscores
     title_words = [w for w in title.split(" ") if w]
-    proto_name = "_".join(title_words[:3] + title_words[-1]).strip("_")
+    proto_name = "_".join(title_words[:3] + title_words[-1:]).strip("_")
     # Clear double underscores
     while proto_name.find("__") != -1:
         proto_name = proto_name.replace("__", "_")
@@ -332,6 +382,10 @@ def make_source_id(title, author=None, test=False, index=None):
                 source_id += char
     else:
         source_id = proto_name
+    # Re-strip for safety
+    source_id = source_id.strip(" _")
+    #########################################
+    '''
     # Add test flag if necessary
     if test:
         '''
@@ -343,11 +397,13 @@ def make_source_id(title, author=None, test=False, index=None):
         else:
             source_id = "_test_" + source_id
         '''
-        source_id = "_test_" + source_id
+        source_name = "_test_" + source_name
 
     # Determine version number to add
+    '''
     # Remove any existing version number
     source_name = split_source_id(source_id)["source_name"]
+    '''
     # Get last Search version
     search_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
@@ -394,7 +450,7 @@ def make_source_id(title, author=None, test=False, index=None):
     # Old > new is an error
     else:
         logger.error("Old Search version '{}' > new '{}': {}"
-                     .format(old_search_version, search_version, source_id))
+                     .format(old_search_version, search_version, source_name))
         raise ValueError("Dataset entry in Search has error")
 
     source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
@@ -457,7 +513,7 @@ def split_source_id(source_id):
     return {
         "success": True,
         "source_name": source_name,
-        "source_id": "{}_v{}-{}".format(source_name, search_version, submission_version),
+        "source_id": "{}_v{}.{}".format(source_name, search_version, submission_version),
         "search_version": int(search_version),
         "submission_version": int(submission_version)
     }
