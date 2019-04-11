@@ -144,16 +144,16 @@ def test_split_source_id():
     }
 
 
-def test_scan_status():
+def test_scan_table():
     # Regular usage
     # Requires multiple statuses in DB
     # TODO: Set/find known static source_id in StatusDB
-    res = utils.scan_status()
+    res = utils.scan_table(table_name="status", )
     assert res["success"]
     count1 = len(res["results"])
     sample1 = res["results"][0]
 
-    res = utils.scan_status(fields="source_id")
+    res = utils.scan_table(table_name="status", fields="source_id")
     assert res["success"]
     # Fields arg should not restrict results
     assert len(res["results"]) == count1
@@ -161,41 +161,43 @@ def test_scan_status():
     assert all([("source_id" in entry.keys() and len(entry.keys()) == 1)
                 for entry in res["results"]])
 
-    res = utils.scan_status(fields=["source_id", "test"])
+    res = utils.scan_table(table_name="status", fields=["source_id", "test"])
     assert res["success"]
     assert len(res["results"]) == count1
     assert all([("source_id" in entry.keys() and "test" in entry.keys() and len(entry.keys()) == 2)
                 for entry in res["results"]])
 
-    res = utils.scan_status(filters=("code", "!=", None))  # Exists
+    res = utils.scan_table(table_name="status", filters=("code", "!=", None))  # Exists
     assert res["success"]
     assert len(res["results"]) == count1
 
-    res = utils.scan_status(filters=[("source_id", "!=", sample1["source_id"])])
+    res = utils.scan_table(table_name="status", filters=[("source_id", "!=", sample1["source_id"])])
     assert res["success"]
     assert len(res["results"]) == count1 - 1
 
-    res = utils.scan_status(filters=[("source_id", "==", sample1["source_id"])])
+    res = utils.scan_table(table_name="status", filters=[("source_id", "==", sample1["source_id"])])
     assert res["success"]
     assert len(res["results"]) == 1
     assert res["results"][0] == sample1
 
-    res = utils.scan_status(filters=("submission_time", ">", sample1["submission_time"]))
+    res = utils.scan_table(table_name="status",
+                           filters=("submission_time", ">", sample1["submission_time"]))
     assert res["success"]
     count2 = len(res["results"])
     assert count2 < count1
 
-    res = utils.scan_status(filters=[("submission_time", ">", sample1["submission_time"]),
-                                     ("code", "<", sample1["code"])])
+    res = utils.scan_table(table_name="status",
+                           filters=[("submission_time", ">", sample1["submission_time"]),
+                                    ("code", "<", sample1["code"])])
     assert res["success"]
 
     # Errors
-    res = utils.scan_status(fields=True)
+    res = utils.scan_table(table_name="status", fields=True)
     assert not res["success"] and res.get("error", None) is not None
-    res = utils.scan_status(filters=("field", "[]", "ab"))
+    res = utils.scan_table(table_name="status", filters=("field", "[]", "ab"))
     assert not res["success"] and res.get("error", None) is not None
-    res = utils.scan_status(filters=("field", "in", "ab"))
+    res = utils.scan_table(table_name="status", filters=("field", "in", "ab"))
     assert not res["success"] and res.get("error", None) is not None
-    res = utils.scan_status(filters=("field", "@", "ab"))
+    res = utils.scan_table(table_name="status", filters=("field", "@", "ab"))
     assert not res["success"] and res.get("error", None) is not None
-    res = utils.scan_status(filters={"field": "val"})
+    res = utils.scan_table(table_name="status", filters={"field": "val"})

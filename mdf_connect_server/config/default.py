@@ -5,6 +5,7 @@ DEFAULT = {
     "LOCAL_PATH": os.path.expanduser("~/data/"),
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
     "SERVICE_DATA": os.path.expanduser("~/integrations/"),
+    "CURATION_DATA": os.path.expanduser("~/curation/"),
 
     "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
 

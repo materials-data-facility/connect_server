@@ -75,18 +75,17 @@ def processor():
             logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                # In-curation processes should not be cancelled
-                # 'curating' is sentinel value for curation in progress
-                dead_status = utils.read_status(dead_proc.name)
+                # Hibernating processes should not be cancelled (e.g. in-curation)
+                dead_status = utils.read_table("status", dead_proc.name)
                 if not dead_status["success"]:
                     logger.error("Unable to read status for '{}': {}".format(dead_proc.name,
                                                                              dead_status))
                     continue
                 logger.info("Dead: {} ({})".format(dead_proc.name,
                                                    dead_status["status"]["curation"]))
-                if dead_status["status"]["curation"] is True:
+                if dead_status["status"]["hibernating"] is True:
                     active_processes.remove(dead_proc)
-                    logger.debug("{}: Dead but curating, not cancelled".format(dead_proc.name))
+                    logger.debug("{}: Hibernating".format(dead_proc.name))
                 else:
                     cancel_res = utils.cancel_submission(dead_proc.name)
                     if cancel_res["stopped"]:
@@ -128,7 +127,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     """
     # Setup
     utils.update_status(source_id, "sub_start", "P", except_on_fail=True)
-    utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
+    utils.modify_status_entry(source_id, {"pid": os.getpid(), "hibernating": False},
+                              except_on_fail=True)
     try:
         # Connect auth
         # CAAC required for user auth later
@@ -141,6 +141,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         globus_publish_client = mdf_clients["publish"]
 
         # User auth
+        # When coming from curation, the access token (from the curator) is not used
         access_token = access_token.replace("Bearer ", "")
         dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
         user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
@@ -153,9 +154,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # Cancel the previous version(s)
     source_info = utils.split_source_id(source_id)
-    scan_res = utils.scan_status(fields="source_id",
-                                 filters=[("source_id", "^", source_info["source_name"]),
-                                          ("source_id", "<", source_id)])
+    scan_res = utils.scan_table(table_name="status", fields="source_id",
+                                filters=[("source_id", "^", source_info["source_name"]),
+                                         ("source_id", "<", source_id)])
     if not scan_res["success"]:
         utils.update_status(source_id, "sub_start", "F", text=scan_res["error"],
                             except_on_fail=True)
@@ -179,15 +180,16 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     utils.update_status(source_id, "sub_start", "S", except_on_fail=True)
     # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
+    if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
         utils.complete_submission(source_id)
         return
 
+    local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
+    feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
+    curation_state_file = os.path.join(CONFIG["CURATION_DATA"], source_id + ".json")
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
-        local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
-        feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
         # If we're converting, download data locally, then set canon source to local
         # This allows non-Globus sources (because to download to Connect's EP)
         if not sub_conf["no_convert"]:
@@ -265,7 +267,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         }
 
         # NOTE: Cancellation point
-        if utils.read_status(source_id).get("status", {}).get("cancelled"):
+        if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
             logger.debug("{}: Cancel signal acknowledged".format(source_id))
             utils.complete_submission(source_id)
             return
@@ -313,7 +315,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             logger.debug("{}: {} entries parsed".format(source_id, num_records+1))
 
         # NOTE: Cancellation point
-        if utils.read_status(source_id).get("status", {}).get("cancelled"):
+        if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
             logger.debug("{}: Cancel signal acknowledged".format(source_id))
             utils.complete_submission(source_id)
             return
@@ -324,27 +326,91 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Trigger curation if required
         if sub_conf.get("curation"):
             utils.update_status(source_id, "curation", "P", except_on_fail=True)
-            # TODO: Real curation flow
-            # Likely with state save to file, reload and skip reconverting
-            logger.info("CURATION TRIGGERED FOR {}".format(source_id))
-            utils.modify_status_entry(source_id, {"curation": True}, except_on_fail=True)
+            # Create curation task in curation table
+            curation_task = {
+                "source_id": source_id,
+                "allowed_curators": [],
+                "dataset": dataset,
+                "records": [],
+                "submission_info": sub_conf
+            }
+            create_res = utils.create_curation_task(curation_task)
+            if not create_res["success"]:
+                utils.update_status(source_id, "curation", "F",
+                                    text=create_res.get("error", "Unable to create curation task"),
+                                    except_on_fail=True)
+                return
 
-            # Pretending curation succeeded, state restored
-            utils.modify_status_entry(source_id, {"curation": "Admin fiat"}, except_on_fail=True)
-            utils.update_status(source_id, "curation", "M", text="Accepted by admin fiat",
-                                except_on_fail=True)
+            # Save state
+            os.makedirs(CONFIG["CURATION_DATA"], exist_ok=True)
+            with open(curation_state_file, 'w') as save_file:
+                #TODO: Define state to save
+                state_data = {
+                }
+                json.dump(state_data, save_file)
+                logger.debug("{}: Saved state for curation".format(source_id))
+
+            # Trigger hibernation
+            #utils.modify_status_entry(source_id, {"hibernating": True}, except_on_fail=True)
+            return
         else:
             utils.update_status(source_id, "curation", "N", except_on_fail=True)
-    # Returning from successful curation
+
+    # Returning from curation
+    # Submission accepted
+    elif sub_conf["curation"].startswith("ACCEPT"):
+        # Load state
+        with open(curation_state_file) as save_file:
+            state_data = json.load(save_file)
+            #TODO: Load state variables
+        logger.debug("{}: Loaded state from curation".format(source_id))
+        # Delete state file
+        try:
+            os.remove(curation_state_file)
+        except FileNotFoundError:
+            utils.update_status(source_id, "curation", "F",
+                                text="Unable to cleanly load curation information",
+                                except_on_fail=True)
+            return
+
+        # Delete curation task
+        delete_res = utils.delete_from_table("curation", source_id)
+        if not delete_res["success"]:
+            utils.update_status(source_id, "curation", "F",
+                                text=delete_res.get("error", "Curation cleanup failed"),
+                                except_on_fail=True)
+            return
+        utils.update_status(source_id, "curation", "M", text=sub_conf["curation"],
+                            except_on_fail=True)
+    # Submission rejected
+    elif sub_conf["curation"].startswith("REJECT"):
+        # Delete state file
+        try:
+            os.remove(curation_state_file)
+        except FileNotFoundError:
+            logger.error("{}: Unable to delete curation state file '{}'"
+                         .format(source_id, curation_state_file))
+        # Delete curation task
+        delete_res = utils.delete_from_table("curation", source_id)
+        if not delete_res["success"]:
+            logger.error("{}: Unable to delete rejected curation from database: {}"
+                         .format(source_id, delete_res.get("error")))
+
+        utils.update_status(source_id, "curation", "F", text=sub_conf["curation"],
+                            except_on_fail=True)
+        return
+    # Curation invalid
     else:
-        # TODO
-        print("Successful curation is not implemented")
+        utils.update_status(source_id, "curation", "F",
+                            text="Unknown curation state: '{}'".format(sub_conf["curation"]),
+                            except_on_fail=True)
+        return
 
     # Integrations
     service_res = {}
 
     # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
+    if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
         utils.complete_submission(source_id)
         return
@@ -446,9 +512,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Get old Citrine dataset version, if exists
-        scan_res = utils.scan_status(fields=["source_id", "citrine_id"],
-                                     filters=[("source_name", "==", source_info["source_name"]),
-                                              ("citrine_id", "!=", None)])
+        scan_res = utils.scan_table(table_name="status", fields=["source_id", "citrine_id"],
+                                    filters=[("source_name", "==", source_info["source_name"]),
+                                             ("citrine_id", "!=", None)])
         if not scan_res["success"]:
             logger.error("Status scan failed: {}".format(scan_res["error"]))
         old_cit_subs = scan_res.get("results", [])

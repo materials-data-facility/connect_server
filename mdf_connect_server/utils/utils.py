@@ -41,9 +41,12 @@ DMO_CLIENT = boto3.resource('dynamodb',
                             aws_access_key_id=CONFIG["AWS_KEY"],
                             aws_secret_access_key=CONFIG["AWS_SECRET"],
                             region_name="us-east-1")
-DMO_TABLE = CONFIG["DYNAMO_TABLE"]
+DMO_TABLES = {
+    "status": CONFIG["DYNAMO_STATUS_TABLE"],
+    "curation": CONFIG["DYNAMO_CURATION_TABLE"]
+}
 DMO_SCHEMA = {
-    "TableName": DMO_TABLE,
+    # "TableName": DMO_TABLE,
     "AttributeDefinitions": [{
         "AttributeName": "source_id",
         "AttributeType": "S"
@@ -372,8 +375,8 @@ def make_source_id(title, author, test=False, index=None):
         raise ValueError("Dataset entry in Search has error")
 
     # Get old submission information
-    scan_res = scan_status(fields=["source_id", "user_id"],
-                           filters=[("source_id", "^", source_name)])
+    scan_res = scan_table(table_name="status", fields=["source_id", "user_id"],
+                          filters=[("source_id", "^", source_name)])
     if not scan_res["success"]:
         logger.error("Unable to scan status database for '{}': '{}'"
                      .format(source_name, scan_res["error"]))
@@ -1071,7 +1074,7 @@ def cancel_submission(source_id, wait=True):
     """
     logger.debug("Attempting to cancel {}".format(source_id))
     # Check if submission can be cancelled
-    stat_res = read_status(source_id)
+    stat_res = read_table("status", source_id)
     if not stat_res["success"]:
         stat_res["stopped"] = False
         return stat_res
@@ -1117,7 +1120,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         try:
-            while read_status(source_id)["status"]["active"]:
+            while read_table("status", source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
@@ -1128,7 +1131,7 @@ def cancel_submission(source_id, wait=True):
             complete_submission(source_id)
 
     # Change status code to reflect cancellation
-    old_status_code = read_status(source_id)["status"]["code"]
+    old_status_code = read_table("status", source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
                                      .replace("T", "X").replace("P", "X")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
@@ -1160,7 +1163,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     error (str): The error message. Only exists if success is False.
     """
     # Check that status active is True
-    if not read_status(source_id).get("status", {}).get("active", False):
+    if not read_table("status", source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -1170,7 +1173,8 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     if cleanup:
         cleanup_paths = [
             os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/",
-            os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
+            os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/",
+            os.path.join(CONFIG["CURATION_DATA"], source_id) + ".json"
         ]
         for cleanup in cleanup_paths:
             if os.path.exists(cleanup):
@@ -1314,8 +1318,8 @@ def validate_status(status, new_status=False):
         }
 
 
-def read_status(source_id):
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+def read_table(table_name, source_id):
+    tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1324,7 +1328,7 @@ def read_status(source_id):
     if not status_res:
         return {
             "success": False,
-            "error": "ID {} not found in status database".format(source_id)
+            "error": "ID {} not found in {} database".format(source_id, table_name)
             }
     return {
         "success": True,
@@ -1332,10 +1336,11 @@ def read_status(source_id):
         }
 
 
-def scan_status(fields=None, filters=None):
-    """Scan the status database.
+def scan_table(table_name, fields=None, filters=None):
+    """Scan the status or curation databases..
 
     Arguments:
+    table_name (str): The Dynamo table to scan.
     fields (list of str): The fields from the results to return.
                           Default None, to return all fields.
     filters (list of tuples): The filters to apply. Format: (field, operator, value)
@@ -1362,8 +1367,8 @@ def scan_status(fields=None, filters=None):
         results (list of dict): The status entries returned.
         error (str): If success is False, the error that occurred.
     """
-    # Get Dynamo table
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    # Get Dynamo status table
+    tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1490,7 +1495,7 @@ def scan_status(fields=None, filters=None):
 
 
 def create_status(status):
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1501,7 +1506,7 @@ def create_status(status):
     status["cancelled"] = False
     status["pid"] = os.getpid()
     status["extensions"] = []
-    status["curation"] = None
+    status["hibernating"] = False
     status["code"] = "z" * len(STATUS_STEPS)
 
     status_valid = validate_status(status, new_status=True)
@@ -1509,7 +1514,7 @@ def create_status(status):
         return status_valid
 
     # Check that status does not already exist
-    if read_status(status["source_id"])["success"]:
+    if read_table("status", status["source_id"])["success"]:
         return {
             "success": False,
             "error": "ID {} already exists in database".format(status["source_id"])
@@ -1546,14 +1551,14 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_status(source_id)
+    old_status = read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1642,14 +1647,14 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_status(source_id)
+    old_status = read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1657,7 +1662,7 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
     status = old_status["status"]
 
     # Overwrite old status
-    status = mdf_toolbox.dict_merge(deepcopy(modifications), status)
+    status = mdf_toolbox.dict_merge(modifications, status)
 
     status_valid = validate_status(status)
     if not status_valid["success"]:
@@ -1815,8 +1820,77 @@ def translate_status(status):
         }
 
 
-def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCHEMA):
-    tbl_res = get_dmo_table(client, table_name)
+def create_curation_task(task):
+    tbl_res = get_dmo_table("curation")
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Check that task does not already exist
+    if read_table("curation", task["source_id"])["success"]:
+        return {
+            "success": False,
+            "error": "ID {} already exists in database".format(task["source_id"])
+        }
+    try:
+        table.put_item(Item=task, ConditionExpression=Attr("source_id").not_exists())
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        logger.info("Curation task for {}: Created".format(task["source_id"]))
+        return {
+            "success": True,
+            "curation_task": task
+        }
+
+
+def delete_from_table(table_name, source_id):
+    tbl_res = get_dmo_table(table_name)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Check that entry exists
+    if read_table(table_name, source_id)["success"]:
+        return {
+            "success": False,
+            "error": "ID {} does not exist in database".format(source_id)
+        }
+    try:
+        table.delete_item(Key={"source_id": source_id})
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+
+    # Verify entry deleted
+    if read_table(table_name, source_id)["success"]:
+        return {
+            "success": False,
+            "error": "Entry not deleted from database"
+        }
+
+    return {
+        "success": True
+    }
+
+
+def initialize_dmo_table(table_name, client=DMO_CLIENT):
+    try:
+        table_key = DMO_TABLES[table_name]
+    except KeyError:
+        return {
+            "success": False,
+            "error": "Invalid table '{}'".format(table_name)
+        }
+    schema = deepcopy(DMO_SCHEMA)
+    schema["TableName"] = table_key
+
+    tbl_res = get_dmo_table(table_name, client)
     # Table should not be active already
     if tbl_res["success"]:
         return {
@@ -1841,7 +1915,7 @@ def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCH
             "error": repr(e)
             }
 
-    tbl_res2 = get_dmo_table(client, table_name)
+    tbl_res2 = get_dmo_table(table_name, client)
     if not tbl_res2["success"]:
         return {
             "success": False,
@@ -1854,9 +1928,16 @@ def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCH
             }
 
 
-def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
+def get_dmo_table(table_name, client=DMO_CLIENT):
     try:
-        table = client.Table(table_name)
+        table_key = DMO_TABLES[table_name]
+    except KeyError:
+        return {
+            "success": False,
+            "error": "Invalid table '{}'".format(table_name)
+        }
+    try:
+        table = client.Table(table_key)
         dmo_status = table.table_status
         if dmo_status != "ACTIVE":
             raise ValueError("Table not active")

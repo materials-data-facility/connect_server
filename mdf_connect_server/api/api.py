@@ -418,11 +418,11 @@ def accept_ingest():
             "error": repr(e)
         }), 500)
     new_source_id = new_source_info["source_id"]
-    new_status_info = utils.read_status(new_source_id)
+    new_status_info = utils.read_table("status", new_source_id)
     # Get "old" source_id for current/previous submission
-    scan_res = utils.scan_status(fields="source_id",
-                                 filters=[("source_id", "^", new_source_info["source_name"]),
-                                          ("source_id", "!=", new_source_id)])
+    scan_res = utils.scan_table(table_name="status", fields="source_id",
+                                filters=[("source_id", "^", new_source_info["source_name"]),
+                                         ("source_id", "!=", new_source_id)])
     if not scan_res["success"]:
         return (jsonify({
             "success": False,
@@ -436,7 +436,7 @@ def accept_ingest():
 
     # Submissions from Connect will have status entries, user submission will not
     if CONFIG["API_CLIENT_ID"] in identities:
-        old_status_info = utils.read_status(old_source_id)
+        old_status_info = utils.read_table("status", old_source_id)
         if not old_status_info["success"]:
             logger.error(("Prior status '{}' not in status database: "
                           "{}").format(old_source_id, old_status_info["error"]))
@@ -614,7 +614,7 @@ def get_status(source_id):
             "error": "Authentication failed"
             }), 500)
 
-    raw_status = utils.read_status(source_id)
+    raw_status = utils.read_table("status", source_id)
     # Failure message if status not fetched or user not allowed to view
     # Only the submitter, ACL users, and admins can view
 
@@ -688,7 +688,7 @@ def get_user_submissions(user_id=None):
         filters = [("user_id", "in", auth_res["identities_set"])]
     else:
         filters = [("user_id", "==", user_id)]
-    scan_res = utils.scan_status(filters=filters)
+    scan_res = utils.scan_table(table_name="status", filters=filters)
 
     # Error message if no submissions
     if len(scan_res["results"]) == 0:
