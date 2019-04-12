@@ -7,8 +7,6 @@ PROD = {
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
 
-    "DEFAULT_TEST_FLAG": False,
-
     "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
 
     "INGEST_URL": "https://api.materialsdatafacility.org/ingest",

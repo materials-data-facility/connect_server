@@ -127,7 +127,7 @@ def accept_submission():
         "data_sources": metadata.pop("data_sources"),
         "data_destinations": metadata.pop("data_destinations", []),
         "curation": metadata.pop("curation", False),
-        "test": metadata.pop("test", False) or CONFIG["DEFAULT_TEST_FLAG"],
+        "test": metadata.pop("test", False),
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
         "index": metadata.pop("index", {}),
@@ -140,9 +140,13 @@ def accept_submission():
     # Create source_name
     sub_title = metadata["dc"]["titles"][0]["title"]
     try:
+        # author_name is first author familyName, first author creatorName,
+        # or submitter
+        author_name = metadata["dc"]["creators"][0].get(
+                            "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
         source_id_info = utils.make_source_id(
                                 metadata.get("mdf", {}).get("source_name") or sub_title,
-                                test=sub_conf["test"])
+                                author_name, test=sub_conf["test"])
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -339,6 +343,7 @@ def reject_ingest():
 
 
 # DEPRECATED
+'''
 def accept_ingest():
     """Accept the JSON feedstock file and begin the ingestion process."""
     logger.debug("Started new ingest task")
@@ -586,6 +591,7 @@ def accept_ingest():
         "success": True,
         "source_id": source_id
         }), 202)
+'''
 
 
 @app.route("/status/<source_id>", methods=["GET"])
@@ -768,7 +774,7 @@ def get_curator_tasks(user_id=None):
     # Format curation tasks
     curation_tasks = [{
         "source_id": entry["source_id"],
-        "submitter": entry["sub_conf"]["submitter"],
+        "submitter": entry["submission_info"]["submitter"],
         "waiting_since": entry["curation_start_date"]
     } for entry in scan_res["results"]]
 

@@ -7,8 +7,6 @@ DEV = {
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
 
-    "DEFAULT_TEST_FLAG": False,
-
     "TRANSFER_DEADLINE": 3 * 60 * 60,  # 3 hours, in seconds
 
     "INGEST_URL": "https://dev-api.materialsdatafacility.org/ingest",
