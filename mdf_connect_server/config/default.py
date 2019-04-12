@@ -25,6 +25,8 @@ DEFAULT = {
                             " restart. Please resubmit your dataset. We apologize for the"
                             " inconvenience."),
 
+    "NUM_CURATION_RECORDS": 3,
+
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds

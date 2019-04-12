@@ -133,7 +133,8 @@ def accept_submission():
         "index": metadata.pop("index", {}),
         "services": metadata.pop("services", {}),
         "conversion_config": metadata.pop("conversion_config", {}),
-        "no_convert": metadata.pop("no_convert", False)  # Pass-through flag
+        "no_convert": metadata.pop("no_convert", False),  # Pass-through flag
+        "submitter": name
     }
 
     # Create source_name
@@ -688,16 +689,183 @@ def get_user_submissions(user_id=None):
         filters = [("user_id", "in", auth_res["identities_set"])]
     else:
         filters = [("user_id", "==", user_id)]
-    scan_res = utils.scan_table(table_name="status", filters=filters)
 
+    scan_res = utils.scan_table(table_name="status", filters=filters)
+    if not scan_res["success"]:
+        return (jsonify(scan_res), 500)
+
+    # Is it an error for there to be no submissions?
+    # A bad user_id would cause that (error), but a new user would also get it (not an error)
+    '''
     # Error message if no submissions
     if len(scan_res["results"]) == 0:
         return (jsonify({
             "success": False,
             "error": "No submissions available"
             }), 404)
+    '''
 
     return (jsonify({
         "success": True,
         "submissions": [utils.translate_status(sub) for sub in scan_res["results"]]
         }), 200)
+
+
+@app.route("/curation", methods=["GET"])
+@app.route("/curation/<user_id>", methods=["GET"])
+def get_curator_tasks(user_id=None):
+    """Get all available curation tasks for a user."""
+    # User auth
+    try:
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                            auth_level="convert")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+    if not auth_res["success"]:
+        error_code = auth_res.pop("error_code")
+        return (jsonify(auth_res), error_code)
+    # Admin auth (allowed to fail)
+    try:
+        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                             auth_level="admin")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+
+    # Users can request only their own curation tasks (by user_id or by default)
+    # Admins can request any curator's tasks
+    if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
+        return (jsonify({
+            "success": False,
+            "error": "You cannot view another curator's tasks"
+            }), 403)
+
+    # Create scan filter
+    # Admins can request a special function instead of a user ID
+    if admin_res["success"] and user_id == "all":
+        filters = None
+    # TODO: Implement permissions on curation tasks
+    else:
+        filters = None
+    '''
+    elif user_id is None:
+        filters = [("user_id", "in", auth_res["identities_set"])]
+    else:
+        filters = [("user_id", "==", user_id)]
+    '''
+
+    scan_res = utils.scan_table(table_name="curation", filters=filters)
+    if not scan_res["success"]:
+        return (jsonify(scan_res), 500)
+
+    # Format curation tasks
+    curation_tasks = [{
+        "source_id": entry["source_id"],
+        "submitter": entry["sub_conf"]["submitter"],
+        "waiting_since": entry["curation_start_date"]
+    } for entry in scan_res["results"]]
+
+    return (jsonify({
+        "success": True,
+        "curation_tasks": curation_tasks
+    }), 200)
+
+
+@app.route("/curate/<source_id>", methods=["GET", "POST"])
+def curate_task(source_id):
+    """Interact with a curation task.
+    GET requests get the task information.
+    POST requests can accept or reject a task.
+    """
+    # User auth
+    try:
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                            auth_level="convert")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+    if not auth_res["success"]:
+        error_code = auth_res.pop("error_code")
+        return (jsonify(auth_res), error_code)
+    # Admin auth (allowed to fail)
+    try:
+        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
+                                             auth_level="admin")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+            }), 500)
+
+    # Fetch task from database
+    task_res = utils.read_table("curation", source_id)
+    task = task_res.get("status", {})
+
+    # Check permissions
+    # TODO: Implement permissions on curation tasks
+    # If task not found
+    if (not task_res["success"]
+        # or task not public and user not allowed and user not admin
+        or ("public" not in task["allowed_curators"]
+            and not any([identity in task["allowed_curators"]
+                         for identity in auth_res["identities_set"]])
+            and not admin_res["success"])):
+        return (jsonify({
+            "success": False,
+            "error": "Curation task for {} not found, or not available".format(source_id)
+        }), 404)
+
+    # Handle GET requests (return info)
+    if request.method == "GET":
+        return (jsonify(task), 200)
+    # Handle POST requests (accept or reject)
+    elif request.method == "POST":
+        # Get json data
+        command = request.get_json(force=True, silent=True)
+        if not command:
+            return (jsonify({
+                "success": False,
+                "error": "POST data empty or not JSON"
+            }), 400)
+        elif not command.get("action"):
+            return (jsonify({
+                "success": False,
+                "error": "You must specify an 'action' to curate"
+            }), 400)
+
+        # Accept
+        if command["action"].strip().lower() == "accept":
+            return (jsonify({
+                "success": True,
+                "message": "Acceptance submitted"
+            }), 200)
+        # Reject
+        elif command["action"].strip().lower() == "reject":
+            return (jsonify({
+                "success": True,
+                "message": "Rejection submitted"
+            }), 200)
+        # Bad action
+        else:
+            return (jsonify({
+                "success": False,
+                "error": ("Action '{}' invalid. Acceptable actions are 'accept' and 'reject'"
+                          .format(command["action"]))
+            }), 400)
+    # Can't happen
+    else:
+        return (jsonify({
+            "success": False,
+            "error": "Bad request method: '{}'".format(request.method)
+        }), 405)

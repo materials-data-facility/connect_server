@@ -1,3 +1,4 @@
+import datetime
 import json
 import logging
 from multiprocessing import Process
@@ -188,6 +189,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
     feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
     curation_state_file = os.path.join(CONFIG["CURATION_DATA"], source_id + ".json")
+    service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
+    os.makedirs(service_data)
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
         # If we're converting, download data locally, then set canon source to local
@@ -206,6 +209,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                             except_on_fail=True)
                 if not dl_res["success"]:
                     raise ValueError(dl_res["error"])
+                num_files = dl_res["total_files"]
 
             except Exception as e:
                 utils.update_status(source_id, "data_download", "F", text=repr(e),
@@ -215,7 +219,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
             utils.update_status(source_id, "data_download", "M",
                                 text=("{} files will be converted ({} archives extracted)"
-                                      .format(dl_res["total_files"], dl_res["num_extracted"])),
+                                      .format(num_files, dl_res["num_extracted"])),
                                 except_on_fail=True)
             canon_data_sources = ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)]
 
@@ -241,10 +245,6 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                         except_on_fail=True)
                     return
         utils.update_status(source_id, "data_transfer", "S", except_on_fail=True)
-
-        # Handle service integration data directory
-        service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
-        os.makedirs(service_data)
 
         # Add file info data
         sub_conf["index"]["file"] = {
@@ -327,12 +327,26 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         if sub_conf.get("curation"):
             utils.update_status(source_id, "curation", "P", except_on_fail=True)
             # Create curation task in curation table
+            with open(feedstock_file) as f:
+                # Discard dataset entry
+                f.readline()
+                # Save first few records
+                # Append the json-loaded form of records
+                # The number of records should be at most the default number,
+                # and less if less are present
+                curation_records = []
+                [curation_records.append(json.loads(f.readline()))
+                 for i in range(min(CONFIG["NUM_CURATION_RECORDS"], num_records))]
             curation_task = {
                 "source_id": source_id,
-                "allowed_curators": [],
+                # TODO: Implement permissions for curation
+                "allowed_curators": ["public"],
                 "dataset": dataset,
-                "records": [],
-                "submission_info": sub_conf
+                "sample_records": curation_records,
+                "submission_info": sub_conf,
+                "parsing_summary": ("{} records were parsed out of {} groups from {} files"
+                                    .format(num_records, num_groups, num_files)),
+                "curation_start_date": str(datetime.date.today())
             }
             create_res = utils.create_curation_task(curation_task)
             if not create_res["success"]:
@@ -344,14 +358,16 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             # Save state
             os.makedirs(CONFIG["CURATION_DATA"], exist_ok=True)
             with open(curation_state_file, 'w') as save_file:
-                #TODO: Define state to save
                 state_data = {
+                    "source_id": source_id,
+                    "sub_conf": sub_conf,
+                    "dataset": dataset
                 }
                 json.dump(state_data, save_file)
                 logger.debug("{}: Saved state for curation".format(source_id))
 
             # Trigger hibernation
-            #utils.modify_status_entry(source_id, {"hibernating": True}, except_on_fail=True)
+            utils.modify_status_entry(source_id, {"hibernating": True}, except_on_fail=True)
             return
         else:
             utils.update_status(source_id, "curation", "N", except_on_fail=True)
@@ -362,7 +378,15 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Load state
         with open(curation_state_file) as save_file:
             state_data = json.load(save_file)
-            #TODO: Load state variables
+            # Verify source_ids match
+            if state_data["source_id"] != source_id:
+                logger.error("State data incorrect: '{}' is not '{}'"
+                             .format(state_data["source_id"], source_id))
+                utils.update_status(source_id, "curation", "F",
+                                    text="Submission corrupted", except_on_fail=True)
+            # Load state variables back
+            sub_conf = state_data["sub_conf"]
+            dataset = state_data["dataset"]
         logger.debug("{}: Loaded state from curation".format(source_id))
         # Delete state file
         try:
@@ -405,6 +429,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                             text="Unknown curation state: '{}'".format(sub_conf["curation"]),
                             except_on_fail=True)
         return
+
+    ###################
+    #  Post-curation  #
+    ###################
 
     # Integrations
     service_res = {}
@@ -483,7 +511,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # Globus Publish
     # TODO: MDF Publish migration
     if sub_conf["services"].get("mdf_publish"):
-        utils.update_status(source_id, "ingest_publish", "F",
+        utils.update_status(source_id, "ingest_publish", "R",
                             text="MDF Publish not yet available", except_on_fail=True)
     if sub_conf["services"].get("globus_publish"):
         utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)

@@ -1324,15 +1324,15 @@ def read_table(table_name, source_id):
         return tbl_res
     table = tbl_res["table"]
 
-    status_res = table.get_item(Key={"source_id": source_id}, ConsistentRead=True).get("Item")
-    if not status_res:
+    entry = table.get_item(Key={"source_id": source_id}, ConsistentRead=True).get("Item")
+    if not entry:
         return {
             "success": False,
             "error": "ID {} not found in {} database".format(source_id, table_name)
             }
     return {
         "success": True,
-        "status": status_res
+        "status": entry
         }
 
 
