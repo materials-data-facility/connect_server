@@ -1854,7 +1854,7 @@ def delete_from_table(table_name, source_id):
     table = tbl_res["table"]
 
     # Check that entry exists
-    if read_table(table_name, source_id)["success"]:
+    if not read_table(table_name, source_id)["success"]:
         return {
             "success": False,
             "error": "ID {} does not exist in database".format(source_id)

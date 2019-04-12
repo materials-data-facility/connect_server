@@ -1,3 +1,4 @@
+from copy import deepcopy
 import datetime
 import json
 import logging
@@ -82,8 +83,8 @@ def processor():
                     logger.error("Unable to read status for '{}': {}".format(dead_proc.name,
                                                                              dead_status))
                     continue
-                logger.info("Dead: {} ({})".format(dead_proc.name,
-                                                   dead_status["status"]["curation"]))
+                logger.info("Dead: {} (hibernating {})"
+                            .format(dead_proc.name, dead_status["status"]["hibernating"]))
                 if dead_status["status"]["hibernating"] is True:
                     active_processes.remove(dead_proc)
                     logger.debug("{}: Hibernating".format(dead_proc.name))
@@ -191,6 +192,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     curation_state_file = os.path.join(CONFIG["CURATION_DATA"], source_id + ".json")
     service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
     os.makedirs(service_data)
+    num_files = 0
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
         # If we're converting, download data locally, then set canon source to local
@@ -337,6 +339,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 curation_records = []
                 [curation_records.append(json.loads(f.readline()))
                  for i in range(min(CONFIG["NUM_CURATION_RECORDS"], num_records))]
+            curation_dataset = deepcopy(dataset)
+            # Numbers can be converted into Decimal by DynamoDB, which causes JSON errors
+            curation_dataset["mdf"].pop("scroll_id", None)
+            curation_dataset["mdf"].pop("version", None)
             curation_task = {
                 "source_id": source_id,
                 # TODO: Implement permissions for curation
