@@ -347,8 +347,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 "source_id": source_id,
                 # TODO: Implement permissions for curation
                 "allowed_curators": ["public"],
-                "dataset": dataset,
-                "sample_records": curation_records,
+                "dataset": json.dumps(dataset),
+                "sample_records": json.dumps(curation_records),
                 "submission_info": sub_conf,
                 "parsing_summary": ("{} records were parsed out of {} groups from {} files"
                                     .format(num_records, num_groups, num_files)),
