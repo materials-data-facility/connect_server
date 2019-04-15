@@ -771,16 +771,23 @@ def get_curator_tasks(user_id=None):
     if not scan_res["success"]:
         return (jsonify(scan_res), 500)
 
-    # Format curation tasks
+    # Format curation tasks?
+    '''
     curation_tasks = [{
         "source_id": entry["source_id"],
         "submitter": entry["submission_info"]["submitter"],
-        "waiting_since": entry["curation_start_date"]
+        "waiting_since": entry["curation_start_date"],
+        "parsing_summary": entry["parsing_summary"]
     } for entry in scan_res["results"]]
 
     return (jsonify({
         "success": True,
         "curation_tasks": curation_tasks
+    }), 200)
+    '''
+    return (jsonify({
+        "success": True,
+        "curation_tasks": scan_res["results"]
     }), 200)
 
 
@@ -791,9 +798,9 @@ def curate_task(source_id):
     POST requests can accept or reject a task.
     """
     # User auth
+    access_token = request.headers.get("Authorization")
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                            auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, auth_level="convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -805,18 +812,21 @@ def curate_task(source_id):
         return (jsonify(auth_res), error_code)
     # Admin auth (allowed to fail)
     try:
-        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                             auth_level="admin")
+        admin_res = utils.authenticate_token(access_token, auth_level="admin")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
             "success": False,
             "error": "Authentication failed"
             }), 500)
+    user_id = auth_res["user_id"]
 
     # Fetch task from database
     task_res = utils.read_table("curation", source_id)
     task = task_res.get("status", {})
+    # Load JSON
+    task["dataset"] = json.loads(task["dataset"])
+    task["sample_records"] = json.loads(task["sample_records"])
 
     # Check permissions
     # TODO: Implement permissions on curation tasks
@@ -834,7 +844,10 @@ def curate_task(source_id):
 
     # Handle GET requests (return info)
     if request.method == "GET":
-        return (jsonify(task), 200)
+        return (jsonify({
+            "success": True,
+            "curation_task": task
+        }), 200)
     # Handle POST requests (accept or reject)
     elif request.method == "POST":
         # Get json data
@@ -849,18 +862,42 @@ def curate_task(source_id):
                 "success": False,
                 "error": "You must specify an 'action' to curate"
             }), 400)
+        elif not command.get("reason"):
+            return (jsonify({
+                "success": False,
+                "error": "You must specify a 'reason' for action '{}'".format(command["action"])
+            }), 400)
 
-        # Accept
-        if command["action"].strip().lower() == "accept":
+        action = command["action"].strip().upper()
+        # Accept or reject
+        if action in ["ACCEPT", "REJECT"]:
+            try:
+                curation_message = "{}: {}".format(action, command["reason"])
+                submission_args = {
+                    "metadata": {},  # Not used after convert step
+                    "sub_conf": {
+                        # Only field needed to skip to curation resume
+                        # Previous sub_conf loaded after resume
+                        "curation": curation_message
+                    },
+                    "source_id": source_id,
+                    "access_token": access_token,
+                    "user_id": user_id
+                }
+                sub_res = utils.submit_to_queue(submission_args)
+                if not sub_res["success"]:
+                    logger.error("Submission to SQS error: {}".format(sub_res["error"]))
+                    return (jsonify(sub_res), 500)
+            except Exception as e:
+                logger.error("Submission to SQS exception: {}".format(e))
+                return (jsonify({
+                    "success": False,
+                    "error": str(e)
+                }), 500)
+            logger.info("Curation task for '{}' completed: {}".format(source_id))
             return (jsonify({
                 "success": True,
-                "message": "Acceptance submitted"
-            }), 200)
-        # Reject
-        elif command["action"].strip().lower() == "reject":
-            return (jsonify({
-                "success": True,
-                "message": "Rejection submitted"
+                "message": "Acceptance submitted with reason: {}".format(command["reason"])
             }), 200)
         # Bad action
         else:
