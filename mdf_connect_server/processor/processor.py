@@ -191,7 +191,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
     curation_state_file = os.path.join(CONFIG["CURATION_DATA"], source_id + ".json")
     service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
-    os.makedirs(service_data)
+    os.makedirs(service_data, exist_ok=True)
     num_files = 0
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
@@ -380,7 +380,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # Returning from curation
     # Submission accepted
-    elif sub_conf["curation"].startswith("ACCEPT"):
+    elif sub_conf["curation"].startswith("Accept"):
+        # Save curation message
+        curation_message = sub_conf["curation"]
         # Load state
         with open(curation_state_file) as save_file:
             state_data = json.load(save_file)
@@ -410,10 +412,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                 text=delete_res.get("error", "Curation cleanup failed"),
                                 except_on_fail=True)
             return
-        utils.update_status(source_id, "curation", "M", text=sub_conf["curation"],
-                            except_on_fail=True)
+        utils.update_status(source_id, "curation", "M", text=curation_message, except_on_fail=True)
     # Submission rejected
-    elif sub_conf["curation"].startswith("REJECT"):
+    elif sub_conf["curation"].startswith("Reject"):
         # Delete state file
         try:
             os.remove(curation_state_file)
