@@ -771,7 +771,7 @@ def get_curator_tasks(user_id=None):
     if not scan_res["success"]:
         return (jsonify(scan_res), 500)
 
-    # Format curation tasks?
+    # Format curation tasks
     '''
     curation_tasks = [{
         "source_id": entry["source_id"],
@@ -785,9 +785,15 @@ def get_curator_tasks(user_id=None):
         "curation_tasks": curation_tasks
     }), 200)
     '''
+    curation_tasks = []
+    for task in scan_res["results"]:
+        task["dataset"] = json.loads(task["dataset"])
+        task["sample_records"] = json.loads(task["sample_records"])
+        curation_tasks.append(task)
+
     return (jsonify({
         "success": True,
-        "curation_tasks": scan_res["results"]
+        "curation_tasks": curation_tasks
     }), 200)
 
 
@@ -820,19 +826,18 @@ def curate_task(source_id):
             "error": "Authentication failed"
             }), 500)
     user_id = auth_res["user_id"]
+    name = auth_res["name"]
 
     # Fetch task from database
     task_res = utils.read_table("curation", source_id)
     task = task_res.get("status", {})
-    # Load JSON
-    task["dataset"] = json.loads(task["dataset"])
-    task["sample_records"] = json.loads(task["sample_records"])
 
     # Check permissions
     # TODO: Implement permissions on curation tasks
     # If task not found
     if (not task_res["success"]
         # or task not public and user not allowed and user not admin
+        # These dict accesses would fail if not short-circuited by the previous statement
         or ("public" not in task["allowed_curators"]
             and not any([identity in task["allowed_curators"]
                          for identity in auth_res["identities_set"]])
@@ -841,6 +846,10 @@ def curate_task(source_id):
             "success": False,
             "error": "Curation task for {} not found, or not available".format(source_id)
         }), 404)
+
+    # Load JSON
+    task["dataset"] = json.loads(task["dataset"])
+    task["sample_records"] = json.loads(task["sample_records"])
 
     # Handle GET requests (return info)
     if request.method == "GET":
@@ -868,11 +877,14 @@ def curate_task(source_id):
                 "error": "You must specify a 'reason' for action '{}'".format(command["action"])
             }), 400)
 
-        action = command["action"].strip().upper()
+        action = command["action"].strip().lower()
         # Accept or reject
-        if action in ["ACCEPT", "REJECT"]:
+        if action in ["accept", "reject"]:
             try:
-                curation_message = "{}: {}".format(action, command["reason"])
+                # Format action - first capital letter, past tense
+                # Ex. "accept" => "Accepted"
+                formatted_action = action[0].upper() + action[1:] + "ed"
+                curation_message = "{} by {}: {}".format(formatted_action, name, command["reason"])
                 submission_args = {
                     "metadata": {},  # Not used after convert step
                     "sub_conf": {
@@ -894,10 +906,10 @@ def curate_task(source_id):
                     "success": False,
                     "error": str(e)
                 }), 500)
-            logger.info("Curation task for '{}' completed: {}".format(source_id))
+            logger.info("Curation task for '{}' completed: {}".format(source_id, curation_message))
             return (jsonify({
                 "success": True,
-                "message": "Acceptance submitted with reason: {}".format(command["reason"])
+                "message": "Submission {}ed with reason: {}".format(action, command["reason"])
             }), 200)
         # Bad action
         else:
