@@ -471,10 +471,10 @@ def get_user_submissions(user_id=None):
 @app.route("/curation/<user_id>", methods=["GET"])
 def get_curator_tasks(user_id=None):
     """Get all available curation tasks for a user."""
+    access_token = request.headers.get("Authorization").replace("Bearer ", "")
     # User auth
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                            auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, auth_level="convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -486,8 +486,7 @@ def get_curator_tasks(user_id=None):
         return (jsonify(auth_res), error_code)
     # Admin auth (allowed to fail)
     try:
-        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                             auth_level="admin")
+        admin_res = utils.authenticate_token(access_token, auth_level="admin")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -508,12 +507,14 @@ def get_curator_tasks(user_id=None):
     try:
         mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
                                                                CONFIG["API_CLIENT_SECRET"])
-        access_token = ""
         dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
         # Get specifically Groups' access token
+        user_groups_token = None
         for grant in dependent_grant.data:
             if grant["resource_server"] == "nexus.api.globus.org":
                 user_groups_token = grant["access_token"]
+        if not user_groups_token:
+            raise ValueError("No user Groups token present")
         user_groups_authorizer = globus_sdk.AccessTokenAuthorizer(user_groups_token)
         user_groups_client = NexusClient(authorizer=user_groups_authorizer)
     except Exception as e:
@@ -585,7 +586,7 @@ def curate_task(source_id):
     POST requests can accept or reject a task.
     """
     # User auth
-    access_token = request.headers.get("Authorization")
+    access_token = request.headers.get("Authorization").replace("Bearer ", "")
     try:
         auth_res = utils.authenticate_token(access_token, auth_level="convert")
     except Exception as e:
@@ -614,12 +615,14 @@ def curate_task(source_id):
     try:
         mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
                                                                CONFIG["API_CLIENT_SECRET"])
-        access_token = ""
         dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
+        user_groups_token = None
         # Get specifically Groups' access token
         for grant in dependent_grant.data:
             if grant["resource_server"] == "nexus.api.globus.org":
                 user_groups_token = grant["access_token"]
+        if not user_groups_token:
+            raise ValueError("No user Groups token present")
         user_groups_authorizer = globus_sdk.AccessTokenAuthorizer(user_groups_token)
         user_groups_client = NexusClient(authorizer=user_groups_authorizer)
     except Exception as e:
