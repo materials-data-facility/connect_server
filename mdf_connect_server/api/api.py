@@ -4,6 +4,8 @@ import logging
 import os
 
 from flask import Flask, jsonify, redirect, request
+from globus_nexus_client import NexusClient
+import globus_sdk
 import jsonschema
 
 from mdf_connect_server import CONFIG
@@ -501,47 +503,78 @@ def get_curator_tasks(user_id=None):
             "error": "You cannot view another curator's tasks"
             }), 403)
 
-    # Create scan filter
-    # Admins can request a special function instead of a user ID
-    if admin_res["success"] and user_id == "all":
-        filters = None
-    # TODO: Implement permissions on curation tasks
-    else:
-        filters = None
-    '''
-    elif user_id is None:
-        filters = [("user_id", "in", auth_res["identities_set"])]
-    else:
-        filters = [("user_id", "==", user_id)]
-    '''
+    # Use the user's credentials to fetch groups they're in
+    # We can't actually use the user_id because we can't get that user's groups (for admins)
+    try:
+        mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
+                                                               CONFIG["API_CLIENT_SECRET"])
+        access_token = ""
+        dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
+        # Get specifically Groups' access token
+        for grant in dependent_grant.data:
+            if grant["resource_server"] == "nexus.api.globus.org":
+                user_groups_token = grant["access_token"]
+        user_groups_authorizer = globus_sdk.AccessTokenAuthorizer(user_groups_token)
+        user_groups_client = NexusClient(authorizer=user_groups_authorizer)
+    except Exception as e:
+        logger.error("Group authentication error: {}".format(repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": "Group authentication failure",
+            }), 500)
+    # Get all user's groups
+    user_groups_raw = user_groups_client.list_groups(my_roles="member,manager,admin",
+                                                     for_all_identities=True,
+                                                     fields="id,name,my_status,my_role")
+    user_groups_ids = []
+    for group in user_groups_raw:
+        # Only get active memberships
+        if group["my_status"] == "active":
+            user_groups_ids.append(group["id"])
 
-    scan_res = utils.scan_table(table_name="curation", filters=filters)
+    # Scan with no filter
+    # There is no OR in Dynamo scanning, so we would have to scan the curation table once
+    # per group the user is in to match all available curation tasks,
+    # leading to unnacceptable latency. Instead, we're doing the filtering manually.
+    #
+    # A different solution would be caching the curator groups and scanning only for tasks
+    # curated by groups the user is in, but it would be too difficult to update
+    # that cache when a new curation task  is created (in Processing).
+    #
+    # Additionally, post-scan filtering allows curation by specific users instead of groups
+    # (not used at the moment but potentially useful)
+    scan_res = utils.scan_table(table_name="curation")
     if not scan_res["success"]:
         return (jsonify(scan_res), 500)
 
-    # Format curation tasks
-    '''
-    curation_tasks = [{
-        "source_id": entry["source_id"],
-        "submitter": entry["submission_info"]["submitter"],
-        "waiting_since": entry["curation_start_date"],
-        "parsing_summary": entry["parsing_summary"]
-    } for entry in scan_res["results"]]
-
-    return (jsonify({
-        "success": True,
-        "curation_tasks": curation_tasks
-    }), 200)
-    '''
-    curation_tasks = []
+    # Filter results manually
+    available_tasks = []
     for task in scan_res["results"]:
-        task["dataset"] = json.loads(task["dataset"])
-        task["sample_records"] = json.loads(task["sample_records"])
-        curation_tasks.append(task)
+        # Check for membership in any allowed group, or specific user ID
+        # or if admin selected "all"
+        if any([(uuid in user_groups_ids
+                 or uuid in auth_res["identities_set"]
+                 or (admin_res["success"] and user_id == "all"))
+                for uuid in task["allowed_curators"]]):
+
+            # Load JSON elements
+            task["dataset"] = json.loads(task["dataset"])
+            task["sample_records"] = json.loads(task["sample_records"])
+            available_tasks.append(task)
+
+            # Format task? (Is the full result useful for this route?)
+            '''
+            available_tasks.append({
+                "source_id": task["source_id"],
+                "submitter": task["submission_info"]["submitter"],
+                "waiting_since": task["curation_start_date"],
+                "parsing_summary": task["parsing_summary"]
+            })
+            '''
 
     return (jsonify({
         "success": True,
-        "curation_tasks": curation_tasks
+        "curation_tasks": available_tasks
     }), 200)
 
 
@@ -576,19 +609,50 @@ def curate_task(source_id):
     user_id = auth_res["user_id"]
     name = auth_res["name"]
 
+    # Use the user's credentials to fetch groups they're in
+    # We can't actually use the user_id because we can't get that user's groups (for admins)
+    try:
+        mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
+                                                               CONFIG["API_CLIENT_SECRET"])
+        access_token = ""
+        dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
+        # Get specifically Groups' access token
+        for grant in dependent_grant.data:
+            if grant["resource_server"] == "nexus.api.globus.org":
+                user_groups_token = grant["access_token"]
+        user_groups_authorizer = globus_sdk.AccessTokenAuthorizer(user_groups_token)
+        user_groups_client = NexusClient(authorizer=user_groups_authorizer)
+    except Exception as e:
+        logger.error("Group authentication error: {}".format(repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": "Group authentication failure",
+            }), 500)
+    # Get all user's groups
+    user_groups_raw = user_groups_client.list_groups(my_roles="member,manager,admin",
+                                                     for_all_identities=True,
+                                                     fields="id,name,my_status,my_role")
+    user_groups_ids = []
+    for group in user_groups_raw:
+        # Only get active memberships
+        if group["my_status"] == "active":
+            user_groups_ids.append(group["id"])
+
     # Fetch task from database
     task_res = utils.read_table("curation", source_id)
     task = task_res.get("status", {})
 
     # Check permissions
-    # TODO: Implement permissions on curation tasks
     # If task not found
     if (not task_res["success"]
-        # or task not public and user not allowed and user not admin
         # These dict accesses would fail if not short-circuited by the previous statement
+        # or task not public
         or ("public" not in task["allowed_curators"]
-            and not any([identity in task["allowed_curators"]
-                         for identity in auth_res["identities_set"]])
+            # and user not in allowed list (by group membership or user ID)
+            and not any([(uuid in user_groups_ids
+                          or uuid in auth_res["identities_set"])
+                         for uuid in task["allowed_curators"]])
+            # and user not admin
             and not admin_res["success"])):
         return (jsonify({
             "success": False,

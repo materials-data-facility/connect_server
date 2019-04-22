@@ -146,8 +146,11 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # When coming from curation, the access token (from the curator) is not used
         access_token = access_token.replace("Bearer ", "")
         dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
-        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                                dependent_grant.data[0]["access_token"])
+        # Get specifically Transfer's access token
+        for grant in dependent_grant.data:
+            if grant["resource_server"] == "transfer.api.globus.org":
+                user_transfer_token = grant["access_token"]
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(user_transfer_token)
         user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
         utils.update_status(source_id, "sub_start", "F", text=repr(e), except_on_fail=True)
@@ -345,8 +348,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             curation_dataset["mdf"].pop("version", None)
             curation_task = {
                 "source_id": source_id,
-                # TODO: Implement permissions for curation
-                "allowed_curators": ["public"],
+                "allowed_curators": sub_conf.get("permission_groups", sub_conf["acl"]),
                 "dataset": json.dumps(dataset),
                 "sample_records": json.dumps(curation_records),
                 "submission_info": sub_conf,

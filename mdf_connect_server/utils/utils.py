@@ -159,24 +159,27 @@ def authenticate_token(token, auth_level, member_level=None):
             "error_code": 401
         }
     # Finally, verify user is in appropriate group
-    try:
-        whitelist = fetch_whitelist(auth_level, member_level)
-        if len(whitelist) == 0:
-            raise ValueError("Whitelist empty")
-    except Exception as e:
-        logger.warning("Whitelist generation failed: {}".format(e))
-        return {
-            "success": False,
-            "error": "Unable to fetch Group memberships.",
-            "error_code": 500
-        }
-    if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        logger.info("User '{}' not in whitelist '{}'.".format(auth_res["username"], auth_level))
-        return {
-            "success": False,
-            "error": "You cannot access this service or organization",
-            "error_code": 403
-        }
+    # Unless auth_level is "public" in which case it always passes
+    if auth_level != "public":
+        try:
+            whitelist = fetch_whitelist(auth_level, member_level)
+            if len(whitelist) == 0:
+                raise ValueError("Whitelist empty")
+        except Exception as e:
+            logger.warning("Whitelist generation failed: {}".format(e))
+            return {
+                "success": False,
+                "error": "Unable to fetch Group memberships",
+                "error_code": 500
+            }
+        if not any([uid in whitelist for uid in auth_res["identities_set"]]):
+            logger.info("User '{}' not in whitelist '{}'."
+                        .format(auth_res["username"], auth_level))
+            return {
+                "success": False,
+                "error": "You cannot access this service or organization",
+                "error_code": 403
+            }
 
     return {
         "success": True,
@@ -203,6 +206,10 @@ def fetch_whitelist(auth_level, member_level=None):
     Returns:
         list of str: Whitelist of appropriate user IDs.
     """
+    # If auth_level is "public" then whitelist is "public"
+    if auth_level == "public":
+        return ["public"]
+
     # Add member levels higher than selected to allowed_roles
     if member_level is None or member_level == "member":
         allowed_roles = ["admin", "manager", "member"]
