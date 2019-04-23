@@ -85,39 +85,20 @@ SUCCESS_CODES = [
     "N"
 ]
 
-# Global save locations for whitelists
-CONVERT_GROUP = {
-    # Globus Groups UUID
-    "group_id": CONFIG["CONVERT_GROUP_ID"],
-    # Group member IDs
-    "whitelist": [],
-    # UNIX timestamp of last update
-    "updated": 0,
-    # Refresh frequency (in seconds)
-    #   X days * 24 hours/day * 60 minutes/hour * 60 seconds/minute
-    "frequency": 1 * 60 * 60  # 1 hour
-}
-ADMIN_GROUP = {
-    "group_id": CONFIG["ADMIN_GROUP_ID"],
-    "whitelist": [],
-    "updated": 0,
-    "frequency": 1 * 24 * 60 * 60  # 1 day
-}
 
-
-def authenticate_token(token, auth_level, member_level=None):
+def authenticate_token(token, groups, require_all=False):
     """Authenticate a token.
     Arguments:
         token (str): The token to authenticate with.
-        auth_level (str): Connect privilege level or other group required.
-                Values: admin, convert, [Group ID]
-        member_level (str): For non-Connect groups, membership level required.
-                No effect on auth_levels admin, convert, ingest.
-                Values: admin, manager, member
-                Default: member
+        groups (str or list of str): The Globus Group UUIDs to require the user belong to.
+                The special value "public" is also allowed to always pass this check.
+        require_all (bool): When True, the user must be in all groups to succeed the
+                group check.
+                When False, the user must be in at least one group to succeed.
+                Default False.
 
     Returns:
-        dict: Token and user info
+        dict: Token and user info.
     """
     if not token:
         return {
@@ -158,28 +139,85 @@ def authenticate_token(token, auth_level, member_level=None):
             "error": "Not authorized to MDF Connect scope",
             "error_code": 401
         }
-    # Finally, verify user is in appropriate group
-    # Unless auth_level is "public" in which case it always passes
-    if auth_level != "public":
-        try:
-            whitelist = fetch_whitelist(auth_level, member_level)
-            if len(whitelist) == 0:
-                raise ValueError("Whitelist empty")
-        except Exception as e:
-            logger.warning("Whitelist generation failed: {}".format(e))
-            return {
-                "success": False,
-                "error": "Unable to fetch Group memberships",
-                "error_code": 500
-            }
-        if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-            logger.info("User '{}' not in whitelist '{}'."
-                        .format(auth_res["username"], auth_level))
-            return {
-                "success": False,
-                "error": "You cannot access this service or organization",
-                "error_code": 403
-            }
+    # Finally, verify user is in appropriate group(s)
+    if isinstance(groups, str):
+        groups = [groups]
+
+    # Groups setup
+    groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
+    groups_auth["services"] = ["groups"]
+    try:
+        nexus = mdf_toolbox.confidential_login(groups_auth)["groups"]
+    except Exception as e:
+        logger.error("NexusClient creation error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Unable to connect to Globus Groups",
+            "error_code": 500
+        }
+
+    auth_succeeded = False
+    group_roles = []
+    for grp in groups:
+        # public always succeeds
+        if grp.lower() == "public":
+            group_roles.append("member")
+            auth_succeeded = True
+        else:
+            # Translate convert and admin groups
+            if grp.lower() == "convert":
+                grp = CONFIG["CONVERT_GROUP_ID"]
+            elif grp.lower() == "admin":
+                grp = CONFIG["ADMIN_GROUP_ID"]
+            # Group membership check
+            try:
+                member_info = nexus.get_group_membership(grp, auth_res["username"])
+                assert member_info["status"] == "active"
+                group_roles.append(member_info["role"])
+            # Not in group or not active
+            except (globus_sdk.GlobusAPIError, AssertionError):
+                # If must be in all groups, fail out after one failure, otherwise continue
+                if require_all:
+                    return {
+                        "success": False,
+                        "error": "You cannot access this service or organization",
+                        "error_code": 403
+                    }
+            # Error getting membership
+            except Exception as e:
+                logger.error("NexusClient fetch error: {}".format(repr(e)))
+                return {
+                    "success": False,
+                    "error": "Unable to connect to Globus Groups",
+                    "error_code": 500
+                }
+            else:
+                auth_succeeded = True
+    if not auth_succeeded:
+        return {
+            "success": False,
+            "error": "You cannot access this service or organization",
+            "error_code": 403
+        }
+
+    # Admin membership check (allowed to fail)
+    try:
+        admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], auth_res["username"])
+        assert admin_info["status"] == "active"
+    # Not active admin, which is fine
+    except (globus_sdk.GlobusAPIError, AssertionError):
+        is_admin = False
+    # Error getting membership
+    except Exception as e:
+        logger.error("NexusClient admin fetch error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Unable to connect to Globus Groups",
+            "error_code": 500
+        }
+    # Successful check, is admin
+    else:
+        is_admin = True
 
     return {
         "success": True,
@@ -188,95 +226,10 @@ def authenticate_token(token, auth_level, member_level=None):
         "username": auth_res["username"],
         "name": auth_res["name"] or "Not given",
         "email": auth_res["email"] or "Not given",
-        "identities_set": auth_res["identities_set"]
+        "identities_set": auth_res["identities_set"],
+        "group_roles": group_roles,
+        "is_admin": is_admin
     }
-
-
-def fetch_whitelist(auth_level, member_level=None):
-    """Fetch the whitelist of appropriate group members.
-
-    Arguments:
-        auth_level (str): Connect privilege level or other group required.
-                Values: admin, convert, [Group ID]
-        member_level (str): For non-Connect groups, membership level required.
-                No effect on auth_levels admin, convert.
-                Values: admin, manager, member
-                Default: member
-
-    Returns:
-        list of str: Whitelist of appropriate user IDs.
-    """
-    # If auth_level is "public" then whitelist is "public"
-    if auth_level == "public":
-        return ["public"]
-
-    # Add member levels higher than selected to allowed_roles
-    if member_level is None or member_level == "member":
-        allowed_roles = ["admin", "manager", "member"]
-    elif member_level == "manager":
-        allowed_roles = ["admin", "manager"]
-    elif member_level == "admin":
-        allowed_roles = ["admin"]
-    else:
-        raise ValueError("Invalid member_level '{}'".format(member_level))
-    whitelist = []
-    groups_auth = {
-        "app_name": "MDF Open Connect",
-        "client_id": CONFIG["API_CLIENT_ID"],
-        "client_secret": CONFIG["API_CLIENT_SECRET"],
-        "services": ["groups"]
-    }
-    # Always add admin list
-    # Check for staleness
-    global ADMIN_GROUP
-    if int(time.time()) - ADMIN_GROUP["updated"] > ADMIN_GROUP["frequency"]:
-        # If NexusClient has not been created yet, create it
-        if type(groups_auth) is dict:
-            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-        # Get all the members
-        member_list = groups_auth.get_group_memberships(ADMIN_GROUP["group_id"])["members"]
-        # Whitelist is all IDs in the group that are active
-        ADMIN_GROUP["whitelist"] = [member["identity_id"]
-                                    for member in member_list
-                                    if member["status"] == "active"]
-        # Update timestamp
-        ADMIN_GROUP["updated"] = int(time.time())
-    whitelist.extend(ADMIN_GROUP["whitelist"])
-    # Add either convert or ingest whitelists
-    if auth_level == "convert":
-        global CONVERT_GROUP
-        if int(time.time()) - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
-            # If NexusClient has not been created yet, create it
-            if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-            # Get all the members
-            member_list = groups_auth.get_group_memberships(CONVERT_GROUP["group_id"])["members"]
-            # Whitelist is all IDs in the group that are active
-            CONVERT_GROUP["whitelist"] = [member["identity_id"]
-                                          for member in member_list
-                                          if member["status"] == "active"]
-            # Update timestamp
-            CONVERT_GROUP["updated"] = int(time.time())
-        whitelist.extend(CONVERT_GROUP["whitelist"])
-    elif auth_level == "admin":
-        # Already handled admins
-        pass
-    else:
-        # Assume auth_level is Group ID
-        # If NexusClient has not been created yet, create it
-        if type(groups_auth) is dict:
-            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-        # Get all the members
-        try:
-            member_list = groups_auth.get_group_memberships(auth_level)["members"]
-        except Exception:
-            pass
-        else:
-            whitelist.extend([member["identity_id"]
-                              for member in member_list
-                              if (member["status"] == "active"
-                                  and member["role"] in allowed_roles)])
-    return whitelist
 
 
 def make_source_id(title, author, test=False, index=None):

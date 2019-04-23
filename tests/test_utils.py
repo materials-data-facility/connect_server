@@ -2,18 +2,6 @@ from mdf_connect_server import utils
 import pytest  # noqa: F401
 
 
-def test_fetch_whitelist():
-    # Assert admins are correct
-    jgaff = "117e8833-68f5-4cb2-afb3-05b25db69be1"
-    blaiszik = "c8745ef4-d274-11e5-bee8-3b6845397ac9"
-    admin = utils.fetch_whitelist("admin")
-    assert jgaff in admin and blaiszik in admin
-
-    convert = utils.fetch_whitelist("convert")
-    assert len(convert) > len(admin)
-    assert all([x in convert for x in admin])
-
-
 def test_make_source_id():
     # Standard usage
     correct1 = {

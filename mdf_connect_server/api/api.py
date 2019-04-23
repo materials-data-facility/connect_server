@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 import json
 import logging
@@ -7,6 +8,7 @@ from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
 import globus_sdk
 import jsonschema
+import mdf_toolbox
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server import utils
@@ -49,7 +51,7 @@ def accept_submission():
     logger.debug("Started new submission")
     access_token = request.headers.get("Authorization")
     try:
-        auth_res = utils.authenticate_token(access_token, auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, "convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -61,7 +63,6 @@ def accept_submission():
         return (jsonify(auth_res), error_code)
 
     user_id = auth_res["user_id"]
-    # username = auth_res["username"]
     name = auth_res["name"]
     email = auth_res["email"]
     identities = auth_res["identities_set"]
@@ -198,26 +199,30 @@ def accept_submission():
         metadata["mdf"]["organizations"], sub_conf = \
             utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
     # Check that user is in appropriate org group(s), if applicable
-    # Also collect managers' UUID for ACL
+    # Also collect managers' UUIDs for ACL
     if sub_conf.get("permission_groups"):
         managers = set()
         for group_uuid in sub_conf["permission_groups"]:
             try:
-                auth_res = utils.authenticate_token(access_token, auth_level=group_uuid)
+                group_res = utils.authenticate_token(access_token, group_uuid, require_all=True)
             except Exception as e:
-                logger.error("Authentication failure: {}".format(e))
+                logger.error("Authentication failure: {}".format(repr(e)))
                 return (jsonify({
                     "success": False,
                     "error": "Authentication failed"
                 }), 500)
-            if not auth_res["success"]:
-                error_code = auth_res.pop("error_code")
-                return (jsonify(auth_res), error_code)
+            if not group_res["success"]:
+                error_code = group_res.pop("error_code")
+                return (jsonify(group_res), error_code)
             try:
-                manager_list = utils.fetch_whitelist(group_uuid, "manager")
-                managers.update(manager_list)
+                groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
+                groups_auth["services"] = ["groups"]
+                nexus = mdf_toolbox.confidential_login(groups_auth)["groups"]
+                for user in nexus.get_group_memberships(group_uuid):
+                    if user["role"] == "manager" or user["role"] == "admin":
+                        managers.add(user["identity_id"])
             except Exception as e:
-                logger.error("Whitelist fetch failure: {}".format(e))
+                logger.error("Manager fetch failure: {}".format(repr(e)))
                 return (jsonify({
                     "success": False,
                     "error": "Group authentication failed"
@@ -349,8 +354,7 @@ def get_status(source_id):
     """Fetch and return status information"""
     # User auth
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                            auth_level="convert")
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -360,16 +364,6 @@ def get_status(source_id):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-    # Admin auth (allowed to fail)
-    try:
-        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                             auth_level="admin")
-    except Exception as e:
-        logger.error("Authentication failure: {}".format(e))
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
 
     raw_status = utils.read_table("status", source_id)
     # Failure message if status not fetched or user not allowed to view
@@ -384,7 +378,7 @@ def get_status(source_id):
             # and user is not in ACL
             and not any([uid in raw_status["status"]["acl"] for uid in auth_res["identities_set"]])
             # and user is not admin
-            and not admin_res["success"])):
+            and not auth_res["is_admin"])):
         # Summary:
         # if (NOT found)
         #    OR (NOT public AND user != submitter AND user not in acl_list AND user is not admin)
@@ -405,8 +399,7 @@ def get_user_submissions(user_id=None):
     """Get all submission statuses by a user."""
     # User auth
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                            auth_level="convert")
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -416,20 +409,10 @@ def get_user_submissions(user_id=None):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-    # Admin auth (allowed to fail)
-    try:
-        admin_res = utils.authenticate_token(request.headers.get("Authorization"),
-                                             auth_level="admin")
-    except Exception as e:
-        logger.error("Authentication failure: {}".format(e))
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
 
     # Users can request only their own submissions (by user_id or by default)
     # Admins can request any user's submissions
-    if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
+    if not (auth_res["is_admin"] or user_id is None or user_id in auth_res["identities_set"]):
         return (jsonify({
             "success": False,
             "error": "You are not authorized to view that submission's status"
@@ -437,9 +420,9 @@ def get_user_submissions(user_id=None):
 
     # Create scan filter
     # Admins can request a special function instead of a user ID
-    if admin_res["success"] and user_id == "all":
+    if auth_res["is_admin"] and user_id == "all":
         filters = None
-    elif admin_res["success"] and user_id == "active":
+    elif auth_res["is_admin"] and user_id == "active":
         filters = [("active", "==", True)]
     elif user_id is None:
         filters = [("user_id", "in", auth_res["identities_set"])]
@@ -450,7 +433,7 @@ def get_user_submissions(user_id=None):
     if not scan_res["success"]:
         return (jsonify(scan_res), 500)
 
-    # Is it an error for there to be no submissions?
+    # TODO: Is it an error for there to be no submissions?
     # A bad user_id would cause that (error), but a new user would also get it (not an error)
     '''
     # Error message if no submissions
@@ -474,7 +457,7 @@ def get_curator_tasks(user_id=None):
     access_token = request.headers.get("Authorization").replace("Bearer ", "")
     # User auth
     try:
-        auth_res = utils.authenticate_token(access_token, auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, "convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -484,19 +467,10 @@ def get_curator_tasks(user_id=None):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-    # Admin auth (allowed to fail)
-    try:
-        admin_res = utils.authenticate_token(access_token, auth_level="admin")
-    except Exception as e:
-        logger.error("Authentication failure: {}".format(e))
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
 
     # Users can request only their own curation tasks (by user_id or by default)
     # Admins can request any curator's tasks
-    if not (admin_res["success"] or user_id is None or user_id in auth_res["identities_set"]):
+    if not (auth_res["is_admin"] or user_id is None or user_id in auth_res["identities_set"]):
         return (jsonify({
             "success": False,
             "error": "You cannot view another curator's tasks"
@@ -555,7 +529,7 @@ def get_curator_tasks(user_id=None):
         # or if admin selected "all"
         if any([(uuid in user_groups_ids
                  or uuid in auth_res["identities_set"]
-                 or (admin_res["success"] and user_id == "all"))
+                 or (auth_res["is_admin"] and user_id == "all"))
                 for uuid in task["allowed_curators"]]):
 
             # Load JSON elements
@@ -585,10 +559,11 @@ def curate_task(source_id):
     GET requests get the task information.
     POST requests can accept or reject a task.
     """
+    # Authentication stage
     # User auth
     access_token = request.headers.get("Authorization").replace("Bearer ", "")
     try:
-        auth_res = utils.authenticate_token(access_token, auth_level="convert")
+        auth_res = utils.authenticate_token(access_token, "convert")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -598,65 +573,38 @@ def curate_task(source_id):
     if not auth_res["success"]:
         error_code = auth_res.pop("error_code")
         return (jsonify(auth_res), error_code)
-    # Admin auth (allowed to fail)
-    try:
-        admin_res = utils.authenticate_token(access_token, auth_level="admin")
-    except Exception as e:
-        logger.error("Authentication failure: {}".format(e))
-        return (jsonify({
-            "success": False,
-            "error": "Authentication failed"
-            }), 500)
+
     user_id = auth_res["user_id"]
     name = auth_res["name"]
-
-    # Use the user's credentials to fetch groups they're in
-    # We can't actually use the user_id because we can't get that user's groups (for admins)
-    try:
-        mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
-                                                               CONFIG["API_CLIENT_SECRET"])
-        dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
-        user_groups_token = None
-        # Get specifically Groups' access token
-        for grant in dependent_grant.data:
-            if grant["resource_server"] == "nexus.api.globus.org":
-                user_groups_token = grant["access_token"]
-        if not user_groups_token:
-            raise ValueError("No user Groups token present")
-        user_groups_authorizer = globus_sdk.AccessTokenAuthorizer(user_groups_token)
-        user_groups_client = NexusClient(authorizer=user_groups_authorizer)
-    except Exception as e:
-        logger.error("Group authentication error: {}".format(repr(e)))
-        return (jsonify({
-            "success": False,
-            "error": "Group authentication failure",
-            }), 500)
-    # Get all user's groups
-    user_groups_raw = user_groups_client.list_groups(my_roles="member,manager,admin",
-                                                     for_all_identities=True,
-                                                     fields="id,name,my_status,my_role")
-    user_groups_ids = []
-    for group in user_groups_raw:
-        # Only get active memberships
-        if group["my_status"] == "active":
-            user_groups_ids.append(group["id"])
 
     # Fetch task from database
     task_res = utils.read_table("curation", source_id)
     task = task_res.get("status", {})
 
-    # Check permissions
-    # If task not found
-    if (not task_res["success"]
-        # These dict accesses would fail if not short-circuited by the previous statement
-        # or task not public
-        or ("public" not in task["allowed_curators"]
-            # and user not in allowed list (by group membership or user ID)
-            and not any([(uuid in user_groups_ids
-                          or uuid in auth_res["identities_set"])
-                         for uuid in task["allowed_curators"]])
-            # and user not admin
-            and not admin_res["success"])):
+    # Check permissions, starting with short-circuits
+    # Fail if task not found
+    if not task_res["success"]:
+        user_allowed = False
+    # Succeed if task public, user ID is in allowed list, or user is admin
+    elif ("public" in task["allowed_curators"]
+          or user_id in task["allowed_curators"]
+          or auth_res["is_admin"]):
+        user_allowed = True
+    # Otherwise, check group permissions
+    else:
+        try:
+            group_res = utils.authenticate_token(access_token, task["allowed_curators"],
+                                                 require_all=False)
+            user_allowed = group_res["success"]
+        except Exception as e:
+            logger.error("Authentication failure: {}".format(e))
+            return (jsonify({
+                "success": False,
+                "error": "Authentication failed"
+                }), 500)
+
+    # If user not allowed, fail
+    if not user_allowed:
         return (jsonify({
             "success": False,
             "error": "Curation task for {} not found, or not available".format(source_id)
@@ -666,6 +614,7 @@ def curate_task(source_id):
     task["dataset"] = json.loads(task["dataset"])
     task["sample_records"] = json.loads(task["sample_records"])
 
+    # Request handling stage
     # Handle GET requests (return info)
     if request.method == "GET":
         return (jsonify({
