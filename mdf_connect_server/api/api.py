@@ -1,4 +1,3 @@
-from copy import deepcopy
 from datetime import datetime
 import json
 import logging
@@ -8,7 +7,6 @@ from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
 import globus_sdk
 import jsonschema
-import mdf_toolbox
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server import utils
@@ -199,9 +197,7 @@ def accept_submission():
         metadata["mdf"]["organizations"], sub_conf = \
             utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
     # Check that user is in appropriate org group(s), if applicable
-    # Also collect managers' UUIDs for ACL
     if sub_conf.get("permission_groups"):
-        managers = set()
         for group_uuid in sub_conf["permission_groups"]:
             try:
                 group_res = utils.authenticate_token(access_token, group_uuid, require_all=True)
@@ -214,20 +210,8 @@ def accept_submission():
             if not group_res["success"]:
                 error_code = group_res.pop("error_code")
                 return (jsonify(group_res), error_code)
-            try:
-                groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
-                groups_auth["services"] = ["groups"]
-                nexus = mdf_toolbox.confidential_login(groups_auth)["groups"]
-                for user in nexus.get_group_memberships(group_uuid):
-                    if user["role"] == "manager" or user["role"] == "admin":
-                        managers.add(user["identity_id"])
-            except Exception as e:
-                logger.error("Manager fetch failure: {}".format(repr(e)))
-                return (jsonify({
-                    "success": False,
-                    "error": "Group authentication failed"
-                }), 500)
-        sub_conf["acl"].extend(managers)
+        # Also allow permission group memebrs to see submission
+        sub_conf["acl"].extend(sub_conf["permission_groups"])
 
     # If ACL includes "public", no other entries needed
     if "public" in sub_conf["acl"]:
@@ -497,8 +481,8 @@ def get_curator_tasks(user_id=None):
             "success": False,
             "error": "Group authentication failure",
             }), 500)
-    # Get all user's groups
-    user_groups_raw = user_groups_client.list_groups(my_roles="member,manager,admin",
+    # Get all user's groups where user can curate (manager role or above)
+    user_groups_raw = user_groups_client.list_groups(my_roles="manager,admin",
                                                      for_all_identities=True,
                                                      fields="id,name,my_status,my_role")
     user_groups_ids = []
@@ -536,16 +520,6 @@ def get_curator_tasks(user_id=None):
             task["dataset"] = json.loads(task["dataset"])
             task["sample_records"] = json.loads(task["sample_records"])
             available_tasks.append(task)
-
-            # Format task? (Is the full result useful for this route?)
-            '''
-            available_tasks.append({
-                "source_id": task["source_id"],
-                "submitter": task["submission_info"]["submitter"],
-                "waiting_since": task["curation_start_date"],
-                "parsing_summary": task["parsing_summary"]
-            })
-            '''
 
     return (jsonify({
         "success": True,
@@ -595,7 +569,12 @@ def curate_task(source_id):
         try:
             group_res = utils.authenticate_token(access_token, task["allowed_curators"],
                                                  require_all=False)
-            user_allowed = group_res["success"]
+            # User must be in group, and manager or higher
+            if group_res["success"] and ("manager" in group_res["group_roles"]
+                                         or "admin" in group_res["group_roles"]):
+                user_allowed = True
+            else:
+                user_allowed = False
         except Exception as e:
             logger.error("Authentication failure: {}".format(e))
             return (jsonify({
