@@ -189,3 +189,23 @@ def test_scan_table():
     res = utils.scan_table(table_name="status", filters=("field", "@", "ab"))
     assert not res["success"] and res.get("error", None) is not None
     res = utils.scan_table(table_name="status", filters={"field": "val"})
+
+
+def test_lookup_http_host():
+    # Petrel
+    assert utils.lookup_http_host("e38ee745-6d04-11e5-ba46-22000b92c6ec") == \
+        "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org"
+    # NCSA
+    assert utils.lookup_http_host("82f1b5c6-6e9b-11e5-ba47-22000b92c6ec") == \
+        "https://data.materialsdatafacility.org"
+    # In link forms
+    assert utils.lookup_http_host("globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/abc") == \
+        "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org"
+    assert utils.lookup_http_host("https://app.globus.org/file-manager?origin_id="
+                                  "82f1b5c6-6e9b-11e5-ba47-22000b92c6ec&origin_path=%2F"
+                                  "mdf-test2%2Fpublished%2F") == \
+        "https://data.materialsdatafacility.org"
+    # Invalid
+    assert utils.lookup_http_host("NotAnEndpoint") is None
+    # None
+    assert utils.lookup_http_host(None) is None

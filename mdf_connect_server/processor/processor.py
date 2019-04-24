@@ -254,7 +254,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         # Add file info data
         sub_conf["index"]["file"] = {
             "globus_host": sub_conf["canon_destination"],
-            "http_host": CONFIG["BACKUP_HOST"],  # TODO: Correct
+            "http_host": utils.lookup_http_host(sub_conf["canon_destination"]),
             "local_path": local_path,
         }
         convert_params = {

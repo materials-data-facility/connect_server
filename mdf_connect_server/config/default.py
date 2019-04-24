@@ -61,8 +61,7 @@ DEFAULT = {
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
-    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a",
-    "INGEST_GROUP_ID": "3ce2c53e-3752-11e8-891c-0e00fd09bf20"
+    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
 }
 with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
     DEFAULT["MRR_TEMPLATE"] = f.read()

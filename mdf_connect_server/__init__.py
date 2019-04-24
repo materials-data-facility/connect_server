@@ -2,7 +2,8 @@ import os
 
 from mdf_toolbox import dict_merge
 
-from mdf_connect_server.config import DEFAULT, DEV, GROUPINGS, KEYS, ORGANIZATIONS, PROD
+from mdf_connect_server.config import (DEFAULT, DEV, GLOBUS_HTTP_HOSTS,
+                                       GROUPINGS, KEYS, ORGANIZATIONS, PROD)
 
 
 CONFIG = {}
@@ -17,6 +18,7 @@ elif server == "development":
 else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
                            " or 'development', even for processing only.")
+CONFIG["GLOBUS_HTTP_HOSTS"] = GLOBUS_HTTP_HOSTS
 CONFIG["GROUPING_RULES"] = GROUPINGS
 CONFIG["ORGANIZATIONS"] = ORGANIZATIONS
 # Add credentials

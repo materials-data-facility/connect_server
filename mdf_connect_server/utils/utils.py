@@ -876,6 +876,11 @@ def make_globus_app_link(globus_uri):
     return globus_link
 
 
+def lookup_http_host(globus_uri):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(str(globus_uri)))
+    return CONFIG["GLOBUS_HTTP_HOSTS"].get(globus_uri_info.netloc or globus_uri_info.path, None)
+
+
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
                         data_ep=None, data_path=None, data_loc=None):
     if not data_loc:

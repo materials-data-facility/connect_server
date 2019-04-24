@@ -571,7 +571,6 @@ def _parse_file_info(group, params=None):
                 globus_endpoint (str): Data file endpoint.
                 http_host (str): Data file HTTP host.
                 local_path (str): The path to the root of the files on the current machine.
-                host_path (str): The path to the root on the hosting machine. Default local_path.
 
     Returns:
     list of dict: The record(s) parsed.
@@ -599,7 +598,7 @@ def _parse_file_info(group, params=None):
                 "globus": "globus://{}{}".format(host_endpoint, host_file),
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
-                "url": http_host + host_file,
+                "url": (http_host + host_file) if http_host else None,
                 "length": os.path.getsize(file_path),
                 "filename": os.path.basename(file_path),
                 "sha512": sha512(f.read()).hexdigest()
