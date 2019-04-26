@@ -210,7 +210,7 @@ def accept_submission():
             if not group_res["success"]:
                 error_code = group_res.pop("error_code")
                 return (jsonify(group_res), error_code)
-        # Also allow permission group memebrs to see submission
+        # Also allow permission group members to see submission
         sub_conf["acl"].extend(sub_conf["permission_groups"])
 
     # If ACL includes "public", no other entries needed
@@ -219,30 +219,59 @@ def accept_submission():
     # Set correct ACL in metadata
     metadata["mdf"]["acl"] = sub_conf["acl"]
 
+    # Set defaults for services if parameters not set or test flag overrides
+    # Test defaults
     if sub_conf["test"]:
+        # MDF Search
         sub_conf["services"]["mdf_search"] = {
             "index": CONFIG["INGEST_TEST_INDEX"]
         }
-        if sub_conf["services"].get("citrine"):
-            sub_conf["services"]["citrine"] = {
-                "public": False
-            }
-        if sub_conf["services"].get("mrr"):
-            sub_conf["services"]["mrr"] = {
-                "test": True
-            }
-    else:
-        # Put in defaults
+        # MDF Publish
         if sub_conf["services"].get("mdf_publish") is True:
             sub_conf["services"]["mdf_publish"] = {
                 "publication_location": ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_PATH"], source_id)))
             }
+        if sub_conf["services"].get("mdf_publish"):
+            sub_conf["services"]["mdf_publish"]["doi_test"] = True
+            # Store DOI in dataset entry
+            metadata["dc"]["identifier"] = {
+                "identifier": utils.make_dc_doi(sub_conf["services"]["mdf_publish"]["doi_test"]),
+                "identifierType": "DOI"
+            }
+        # Citrine
+        if sub_conf["services"].get("citrine"):
+            sub_conf["services"]["citrine"] = {
+                "public": False
+            }
+        # MRR
+        if sub_conf["services"].get("mrr"):
+            sub_conf["services"]["mrr"] = {
+                "test": True
+            }
+    # Non-test defaults
+    else:
+        # MDF Publish
+        if sub_conf["services"].get("mdf_publish") is True:
+            sub_conf["services"]["mdf_publish"] = {
+                "publication_location": ("globus://{}{}/"
+                                         .format(CONFIG["BACKUP_EP"],
+                                                 os.path.join(CONFIG["BACKUP_PATH"], source_id)))
+            }
+        if sub_conf["services"].get("mdf_publish"):
+            sub_conf["services"]["mdf_publish"]["doi_test"] = CONFIG["DEFAULT_DOI_TEST"]
+            # Store DOI in dataset entry
+            metadata["dc"]["identifier"] = {
+                "identifier": utils.make_dc_doi(sub_conf["services"]["mdf_publish"]["doi_test"]),
+                "identifierType": "DOI"
+            }
+        # Citrine
         if sub_conf["services"].get("citrine") is True:
             sub_conf["services"]["citrine"] = {
                 "public": CONFIG["DEFAULT_CITRINATION_PUBLIC"]
             }
+        # MRR
         if sub_conf["services"].get("mrr") is True:
             sub_conf["services"]["mrr"] = {
                 "test": CONFIG["DEFAULT_MRR_TEST"]
@@ -260,7 +289,7 @@ def accept_submission():
     # If Publishing, canonical data location is Publish location
     elif sub_conf["services"].get("mdf_publish"):
         sub_conf["canon_destination"] = sub_conf["services"]["mdf_publish"]["publication_location"]
-    # Otherwise (not Publishing), canon destination is Petrel
+    # Otherwise (not Publishing), canon destination is backup (Petrel)
     else:
         sub_conf["canon_destination"] = ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],

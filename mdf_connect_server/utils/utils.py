@@ -3,7 +3,9 @@ from datetime import date
 import json
 import logging
 import os
+import random
 import re
+import string
 import subprocess
 import time
 import urllib
@@ -879,6 +881,36 @@ def make_globus_app_link(globus_uri):
 def lookup_http_host(globus_uri):
     globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(str(globus_uri)))
     return CONFIG["GLOBUS_HTTP_HOSTS"].get(globus_uri_info.netloc or globus_uri_info.path, None)
+
+
+def get_dc_creds(test):
+    if test:
+        return CONFIG["DATACITE_CREDS"]["TEST"]
+    else:
+        return CONFIG["DATACITE_CREDS"]["NONTEST"]
+
+
+def make_dc_doi(test):
+    creds = get_dc_creds(test)
+    doi_unique = False
+    while not doi_unique:
+        # Create new DOI by appending random characters to prefix
+        new_doi = creds["DC_PREFIX"]
+        for i in range(CONFIG["NUM_DOI_SECTIONS"]):
+            new_doi += "".join(random.choices(string.ascii_lowercase + string.digits,
+                                              k=CONFIG["NUM_DOI_CHARS"]))
+            new_doi += "-"
+        new_doi = new_doi.strip("-")
+
+        # Check that new_doi is unique, not used previously
+        # NOTE: Technically there is a non-zero chance that two identical IDs are generated
+        #       before either submit to DataCite, and both reach the mdf_publish stage.
+        #       However, the probability is low enough that we do not mitigate this
+        #       condition. Should it occur, the later submission will fail.
+        doi_fetch = requests.get(creds["DC_URL"]+new_doi)
+        if doi_fetch.status_code == 404:
+            doi_unique = True
+    return new_doi
 
 
 def globus_publish_data(publish_client, transfer_client, metadata, collection,

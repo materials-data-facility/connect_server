@@ -24,6 +24,10 @@ PROD = {
 
     "DEFAULT_CLEANUP": True,
 
+    "DEFAULT_DOI_TEST": False,
+    "NUM_DOI_CHARS": 4,  # Characters per section
+    "NUM_DOI_SECTIONS": 3,
+
     "DEFAULT_PUBLISH_COLLECTION": 21,
     "TEST_PUBLISH_COLLECTION": 35,
 

@@ -517,11 +517,18 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     else:
         utils.update_status(source_id, "ingest_backup", "N", except_on_fail=True)
 
-    # Globus Publish
-    # TODO: MDF Publish migration
+    # MDF Publish
     if sub_conf["services"].get("mdf_publish"):
+        #TODO: Publish migration
         utils.update_status(source_id, "ingest_publish", "R",
                             text="MDF Publish not yet available", except_on_fail=True)
+        return
+        ###################
+
+        publish_conf = sub_conf["services"]["mdf_publish"]
+        dc_creds = utils.get_dc_creds(publish_conf["doi_test"])
+
+    '''
     if sub_conf["services"].get("globus_publish"):
         utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)
         # collection should be in id or name
@@ -543,9 +550,10 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             service_res["globus_publish"] = stat_link
     else:
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
+    '''
 
-    # Citrine
-    if sub_conf["services"].get("citrine"):
+    # Citrine (skip if not converted)
+    if sub_conf["services"].get("citrine") and not sub_conf.get("no_convert"):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Get old Citrine dataset version, if exists
@@ -577,7 +585,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                     "failure_count": 0
                 }
         except Exception as e:
-            utils.update_status(source_id, "ingest_citrine", "R", text=repr(e),
+            utils.update_status(source_id, "ingest_citrine", "R", text=str(e),
                                 except_on_fail=True)
         else:
             if not cit_res["success"]:
