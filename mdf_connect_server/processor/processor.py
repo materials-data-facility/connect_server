@@ -356,6 +356,12 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                     .format(num_records, num_groups, num_files)),
                 "curation_start_date": str(datetime.date.today())
             }
+            # If no allowed curators or public allowed, set to public
+            if (not curation_task["allowed_curators"]
+                    or "public" in curation_task["allowed_curators"]):
+                curation_task["allowed_curators"] = ["public"]
+
+            # Create task in database
             create_res = utils.create_curation_task(curation_task)
             if not create_res["success"]:
                 utils.update_status(source_id, "curation", "F",
@@ -520,7 +526,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # MDF Publish
     if sub_conf["services"].get("mdf_publish"):
         #TODO: Publish migration
-        utils.update_status(source_id, "ingest_publish", "R",
+        utils.update_status(source_id, "ingest_publish", "F",
                             text="MDF Publish not yet available", except_on_fail=True)
         return
         ###################
