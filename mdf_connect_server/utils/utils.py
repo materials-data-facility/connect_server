@@ -158,6 +158,10 @@ def authenticate_token(token, groups, require_all=False):
             "error_code": 500
         }
 
+    # "username" as recognized in Groups is actually either the email or
+    # the string before "@globusid.org" for Globus IDs
+    # Only matters for Globus IDs, because email and username are different then
+    user_identifier = auth_res["email"] or auth_res["username"].replace("@globusid.org", "")
     auth_succeeded = False
     group_roles = []
     for grp in groups:
@@ -173,7 +177,7 @@ def authenticate_token(token, groups, require_all=False):
                 grp = CONFIG["ADMIN_GROUP_ID"]
             # Group membership check
             try:
-                member_info = nexus.get_group_membership(grp, auth_res["username"])
+                member_info = nexus.get_group_membership(grp, user_identifier)
                 assert member_info["status"] == "active"
                 group_roles.append(member_info["role"])
             # Not in group or not active
@@ -204,7 +208,7 @@ def authenticate_token(token, groups, require_all=False):
 
     # Admin membership check (allowed to fail)
     try:
-        admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], auth_res["username"])
+        admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
         assert admin_info["status"] == "active"
     # Not active admin, which is fine
     except (globus_sdk.GlobusAPIError, AssertionError):
@@ -225,7 +229,7 @@ def authenticate_token(token, groups, require_all=False):
         "success": True,
         "token_info": auth_res,
         "user_id": auth_res["sub"],
-        "username": auth_res["username"],
+        "username": user_identifier,
         "name": auth_res["name"] or "Not given",
         "email": auth_res["email"] or "Not given",
         "identities_set": auth_res["identities_set"],
