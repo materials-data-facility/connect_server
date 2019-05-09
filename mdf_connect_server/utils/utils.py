@@ -917,6 +917,81 @@ def make_dc_doi(test):
     return new_doi
 
 
+def translate_dc_schema(dc_md):
+    """Translate Datacite Schema to Datacite DOI Schema (slightly different)."""
+    doi_data = deepcopy(dc_md)
+    # identifiers
+    if doi_data.get("identifier"):
+        doi_data["doi"] = doi_data["identifier"]["identifier"]
+        doi_data["identifiers"] = [doi_data.pop("identifier")]
+    # creators
+    if doi_data.get("creators"):
+        new_creators = []
+        for creator in doi_data["creators"]:
+            if creator.get("creatorName"):
+                creator["name"] = creator.pop("creatorName")
+            if creator.get("affiliations"):
+                creator["affiliation"] = creator.pop("affiliations")
+            new_creators.append(creator)
+        doi_data["creators"] = new_creators
+    # contributors
+    if doi_data.get("contributors"):
+        new_contributors = []
+        for contributor in doi_data["contributors"]:
+            if contributor.get("contributorName"):
+                contributor["name"] = contributor.pop("creatorName")
+            if contributor.get("affiliations"):
+                contributor["affiliation"] = contributor.pop("affiliations")
+            new_contributors.append(contributor)
+        doi_data["contributors"] = new_contributors
+    # types
+    if doi_data.get("resourceType"):
+        doi_data["types"] = doi_data.pop("resourceType")
+    # alternateIdentifiers (does not exist)
+    if doi_data.get("alternateIdentifiers"):
+        doi_data.pop("alternateIdentifiers")
+
+    doi_md = {
+        "type": "dois",
+        "data": {
+            "attributes": doi_data
+        }
+    }
+
+    return doi_md
+
+
+def datacite_mint_doi(dc_md, test):
+    if not dc_md.get("identifier"):
+        return {
+            "success": False,
+            "error": "No DOI found"
+        }
+    creds = get_dc_creds(test)
+    doi_md = translate_dc_schema(dc_md)
+    res = requests.post(creds["DC_URL"], auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
+                        json=doi_md)
+    try:
+        res_json = res.json()
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "error": "DOI minting failed",
+            "details": res.content
+        }
+
+    if res.status_code >= 300:
+        return {
+            "success": False,
+            "error": "; ".join([err["title"] for err in res_json["errors"]])
+        }
+    else:
+        return {
+            "success": True,
+            "datacite": res_json["data"]
+        }
+
+
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
                         data_ep=None, data_path=None, data_loc=None):
     if not data_loc:

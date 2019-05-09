@@ -26,7 +26,7 @@ DEV = {
     "DEFAULT_CLEANUP": True,
 
     "DEFAULT_DOI_TEST": True,
-    "NUM_DOI_CHARS": 2, # Characters per section
+    "NUM_DOI_CHARS": 2,  # Characters per section
     "NUM_DOI_SECTIONS": 6,
 
     "DEFAULT_PUBLISH_COLLECTION": 35,

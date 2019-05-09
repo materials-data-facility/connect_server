@@ -525,14 +525,26 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # MDF Publish
     if sub_conf["services"].get("mdf_publish"):
-        #TODO: Publish migration
-        utils.update_status(source_id, "ingest_publish", "F",
-                            text="MDF Publish not yet available", except_on_fail=True)
-        return
-        ###################
+        #TODO: Remove after testing
+        if not sub_conf["test"]
+            utils.update_status(source_id, "ingest_publish", "F",
+                                text="MDF Publish not yet available", except_on_fail=True)
+            return
 
         publish_conf = sub_conf["services"]["mdf_publish"]
-        dc_creds = utils.get_dc_creds(publish_conf["doi_test"])
+        #TODO: Verify move data to location? Canon dest set in API
+        #      Set URL in DC block? Need schema clarification. Should do in API?
+        mdf_publish_res = utils.datacite_mint_doi(dataset["dc"])
+        if not mdf_publish_res["success"]:
+            logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
+            utils.update_status(source_id, "ingest_publish", "F",
+                                text="Unable to mint DOI for publication", except_on_fail=True)
+            return
+        #TODO: Save Datacite return value somewhere
+        utils.update_status(source_id, "ingest_publish", "S", except_on_fail=True)
+
+    else:
+        utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
 
     '''
     if sub_conf["services"].get("globus_publish"):
@@ -554,8 +566,6 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                 text=fin_res["dc.description.provenance"], link=stat_link,
                                 except_on_fail=True)
             service_res["globus_publish"] = stat_link
-    else:
-        utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
     '''
 
     # Citrine (skip if not converted)

@@ -236,13 +236,10 @@ def accept_submission():
         if sub_conf["services"].get("mdf_publish"):
             sub_conf["services"]["mdf_publish"]["doi_test"] = True
             # Store DOI in dataset entry
-            #TODO: Enable after DOI minting finalized
-            '''
             metadata["dc"]["identifier"] = {
                 "identifier": utils.make_dc_doi(sub_conf["services"]["mdf_publish"]["doi_test"]),
                 "identifierType": "DOI"
             }
-            '''
         # Citrine
         if sub_conf["services"].get("citrine"):
             sub_conf["services"]["citrine"] = {
@@ -265,13 +262,10 @@ def accept_submission():
         if sub_conf["services"].get("mdf_publish"):
             sub_conf["services"]["mdf_publish"]["doi_test"] = CONFIG["DEFAULT_DOI_TEST"]
             # Store DOI in dataset entry
-            #TODO: Enable after DOI minting finalized
-            '''
             metadata["dc"]["identifier"] = {
                 "identifier": utils.make_dc_doi(sub_conf["services"]["mdf_publish"]["doi_test"]),
                 "identifierType": "DOI"
             }
-            '''
         # Citrine
         if sub_conf["services"].get("citrine") is True:
             sub_conf["services"]["citrine"] = {
