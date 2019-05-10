@@ -12,7 +12,7 @@ import mdf_toolbox
 import requests
 
 from mdf_connect_server import CONFIG, utils
-from mdf_connect_server.processor import convert, search_ingest, update_search_entry
+from mdf_connect_server.processor import convert
 
 
 # Set up root logger
@@ -137,10 +137,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
                                                                CONFIG["API_CLIENT_SECRET"])
         mdf_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                           {"services": ["publish", "transfer"]})
+                                           {"services": ["transfer"]})
         mdf_clients = mdf_toolbox.confidential_login(mdf_creds)
         mdf_transfer_client = mdf_clients["transfer"]
-        globus_publish_client = mdf_clients["publish"]
 
         # User auth
         # When coming from curation, the access token (from the curator) is not used
@@ -468,7 +467,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
             "batch_size": CONFIG["SEARCH_BATCH_SIZE"]
         }
-        search_res = search_ingest(**search_args)
+        search_res = utils.search_ingest(**search_args)
         if not search_res["success"]:
             utils.update_status(source_id, "ingest_search", "F",
                                 text="; ".join(search_res["errors"]), except_on_fail=True)
@@ -526,7 +525,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     # MDF Publish
     if sub_conf["services"].get("mdf_publish"):
         #TODO: Remove after testing
-        if not sub_conf["test"]
+        if not sub_conf["test"]:
             utils.update_status(source_id, "ingest_publish", "F",
                                 text="MDF Publish not yet available", except_on_fail=True)
             return
@@ -540,7 +539,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             utils.update_status(source_id, "ingest_publish", "F",
                                 text="Unable to mint DOI for publication", except_on_fail=True)
             return
-        #TODO: Save Datacite return value somewhere
+        
+
         utils.update_status(source_id, "ingest_publish", "S", except_on_fail=True)
 
     else:
@@ -689,8 +689,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     utils.update_status(source_id, "ingest_cleanup", "P", except_on_fail=True)
 
     dataset["services"] = service_res
-    ds_update = update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                                    updated_entry=dataset, overwrite=False)
+    ds_update = utils.update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+                                          updated_entry=dataset, overwrite=False)
     if not ds_update["success"]:
         utils.update_status(source_id, "ingest_cleanup", "F",
                             text=ds_update.get("error", "Unable to update dataset"),

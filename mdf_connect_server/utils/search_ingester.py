@@ -8,7 +8,8 @@ from time import sleep
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
-from mdf_connect_server import CONFIG, utils
+from mdf_connect_server import CONFIG
+from .utils import split_source_id
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def search_ingest(feedstock_file, source_id, index, batch_size,
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                                {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
-    source_info = utils.split_source_id(source_id)
+    source_info = split_source_id(source_id)
 
     # Delete previous version of this dataset in Search
     del_q = {
