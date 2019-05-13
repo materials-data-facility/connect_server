@@ -212,8 +212,7 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
     return
 
 
-def update_search_entry(index, updated_entry,
-                        subject=None, acl=None, overwrite=False):
+def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=False):
     """Update an entry in Search.
     Arguments:
     index (str): The Search index to ingest into.

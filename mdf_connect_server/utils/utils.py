@@ -908,7 +908,7 @@ def make_dc_doi(test):
 
         # Check that new_doi is unique, not used previously
         # NOTE: Technically there is a non-zero chance that two identical IDs are generated
-        #       before either submit to DataCite, and both reach the mdf_publish stage.
+        #       before either submit to DataCite.
         #       However, the probability is low enough that we do not mitigate this
         #       condition. Should it occur, the later submission will fail.
         doi_fetch = requests.get(creds["DC_URL"]+new_doi)
@@ -917,13 +917,25 @@ def make_dc_doi(test):
     return new_doi
 
 
-def translate_dc_schema(dc_md):
+def translate_dc_schema(dc_md, doi=None, url=None):
     """Translate Datacite Schema to Datacite DOI Schema (slightly different)."""
     doi_data = deepcopy(dc_md)
+
+    # url
+    if url:
+        doi_data["url"] = url
+
     # identifiers
     if doi_data.get("identifier"):
         doi_data["doi"] = doi_data["identifier"]["identifier"]
         doi_data["identifiers"] = [doi_data.pop("identifier")]
+    elif doi:
+        doi_data["doi"] = doi
+        doi_data["identifiers"] = [{
+            "identifier": doi,
+            "identifierType": "DOI"
+        }]
+
     # creators
     if doi_data.get("creators"):
         new_creators = []
@@ -934,6 +946,7 @@ def translate_dc_schema(dc_md):
                 creator["affiliation"] = creator.pop("affiliations")
             new_creators.append(creator)
         doi_data["creators"] = new_creators
+
     # contributors
     if doi_data.get("contributors"):
         new_contributors = []
@@ -944,16 +957,18 @@ def translate_dc_schema(dc_md):
                 contributor["affiliation"] = contributor.pop("affiliations")
             new_contributors.append(contributor)
         doi_data["contributors"] = new_contributors
+
     # types
     if doi_data.get("resourceType"):
         doi_data["types"] = doi_data.pop("resourceType")
+
     # alternateIdentifiers (does not exist)
     if doi_data.get("alternateIdentifiers"):
         doi_data.pop("alternateIdentifiers")
 
     doi_md = {
-        "type": "dois",
         "data": {
+            "type": "dois",
             "attributes": doi_data
         }
     }
@@ -961,14 +976,13 @@ def translate_dc_schema(dc_md):
     return doi_md
 
 
-def datacite_mint_doi(dc_md, test):
-    if not dc_md.get("identifier"):
-        return {
-            "success": False,
-            "error": "No DOI found"
-        }
+def datacite_mint_doi(dc_md, test, url=None):
+    if not dc_md.get("identifier") and not dc_md.get("identifiers"):
+        doi = make_dc_doi(test)
+    else:
+        doi = None
+    doi_md = translate_dc_schema(dc_md, doi=doi, url=url)
     creds = get_dc_creds(test)
-    doi_md = translate_dc_schema(dc_md)
     res = requests.post(creds["DC_URL"], auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
                         json=doi_md)
     try:

@@ -1,8 +1,10 @@
 from copy import deepcopy
+from ctypes import c_bool
 import datetime
 import json
 import logging
-from multiprocessing import Process
+import multiprocessing
+import queue
 import os
 import signal
 from time import sleep
@@ -68,7 +70,8 @@ def processor():
             if len(submissions["entries"]):
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
-                    driver = Process(target=submission_driver, kwargs=sub, name=sub["source_id"])
+                    driver = multiprocessing.Process(target=submission_driver,
+                                                     kwargs=sub, name=sub["source_id"])
                     driver.start()
                     active_processes.append(driver)
                 utils.delete_from_queue(submissions["delete_info"])
@@ -532,41 +535,48 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
         publish_conf = sub_conf["services"]["mdf_publish"]
         #TODO: Verify move data to location? Canon dest set in API
-        #      Set URL in DC block? Need schema clarification. Should do in API?
-        mdf_publish_res = utils.datacite_mint_doi(dataset["dc"])
+        #TODO: Set URL in DC block? Need schema clarification. Should do in API?
+        url = "https://example.com"
+
+        # Mint DOI
+        mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
+                                                  url=url)
         if not mdf_publish_res["success"]:
             logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
             utils.update_status(source_id, "ingest_publish", "F",
                                 text="Unable to mint DOI for publication", except_on_fail=True)
             return
-        
 
-        utils.update_status(source_id, "ingest_publish", "S", except_on_fail=True)
+        # Ingest DOI metadata to correct Search index
+        # Using utils.search_ingester.submit_ingests to error handle Search's async ingests
+        # Unfortunately, submit_ingests is intended for multiprocessing and requires
+        # more setup than necessary for this case.
+        publish_index = "mdf-publish" if not publish_conf["doi_test"] else "mdf-publish-test"
+        ingestable = mdf_toolbox.format_gmeta([mdf_toolbox.format_gmeta(
+                                                                mdf_publish_res["datacite"])])
+        in_queue = queue.Queue()
+        err_queue = queue.Queue()
+        in_queue.put(json.dumps(ingestable))
+        utils.submit_ingests(in_queue, err_queue, publish_index,
+                             multiprocessing.Value(c_bool, True), source_id)
+        errors = []
+        try:
+            while True:
+                errors.append(json.loads(err_queue.get(timeout=1)))
+        except queue.Empty:
+            pass
+        if errors:
+            utils.update_status(source_id, "ingest_publish", "F", text="; ".join(errors),
+                                except_on_fail=True)
+            return
+
+        utils.update_status(source_id, "ingest_publish", "L",
+                            text="Published dataset with MDF Publish", link=url,
+                            except_on_fail=True)
+        service_res["mdf_publish"] = url
 
     else:
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
-
-    '''
-    if sub_conf["services"].get("globus_publish"):
-        utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)
-        # collection should be in id or name
-        collection = (sub_conf["services"]["globus_publish"].get("collection_id")
-                      or sub_conf["services"]["globus_publish"].get("collection_name")
-                      or CONFIG["DEFAULT_PUBLISH_COLLECTION"])
-        try:
-            fin_res = utils.globus_publish_data(globus_publish_client, mdf_transfer_client,
-                                                dataset, collection, CONFIG["LOCAL_EP"],
-                                                os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/")
-        except Exception as e:
-            utils.update_status(source_id, "ingest_publish", "R", text=repr(e),
-                                except_on_fail=True)
-        else:
-            stat_link = CONFIG["PUBLISH_LINK"].format(fin_res["id"])
-            utils.update_status(source_id, "ingest_publish", "L",
-                                text=fin_res["dc.description.provenance"], link=stat_link,
-                                except_on_fail=True)
-            service_res["globus_publish"] = stat_link
-    '''
 
     # Citrine (skip if not converted)
     if sub_conf["services"].get("citrine") and not sub_conf.get("no_convert"):
