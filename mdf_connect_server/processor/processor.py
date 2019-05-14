@@ -585,7 +585,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             return
 
         utils.update_status(source_id, "ingest_publish", "L",
-                            text="Published dataset with MDF Publish", link=url,
+                            text="Dataset published with MDF Publish", link=search_iden,
                             except_on_fail=True)
         service_res["mdf_publish"] = url
 
