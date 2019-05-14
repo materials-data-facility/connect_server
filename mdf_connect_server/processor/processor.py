@@ -535,30 +535,44 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
         publish_conf = sub_conf["services"]["mdf_publish"]
         #TODO: Verify move data to location? Canon dest set in API
-        #TODO: Set URL in DC block? Need schema clarification. Should do in API?
+        #TODO: Set URL in DC block? Need schema clarification.
         url = "https://example.com"
 
         # Mint DOI
-        mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
-                                                  url=url)
-        if not mdf_publish_res["success"]:
-            logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
+        try:
+            mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
+                                                      url=url)
+        except Exception as e:
+            logger.error("DOI minting exception: {}".format(repr(e)))
             utils.update_status(source_id, "ingest_publish", "F",
-                                text="Unable to mint DOI for publication", except_on_fail=True)
-            return
+                                text="DOI minting failed", except_on_fail=True)
+        else:
+            if not mdf_publish_res["success"]:
+                logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
+                utils.update_status(source_id, "ingest_publish", "F",
+                                    text="Unable to mint DOI for publication", except_on_fail=True)
+                return
 
         # Ingest DOI metadata to correct Search index
         # Using utils.search_ingester.submit_ingests to error handle Search's async ingests
         # Unfortunately, submit_ingests is intended for multiprocessing and requires
         # more setup than necessary for this case.
-        publish_index = "mdf-publish" if not publish_conf["doi_test"] else "mdf-publish-test"
-        ingestable = mdf_toolbox.format_gmeta([mdf_toolbox.format_gmeta(
-                                                                mdf_publish_res["datacite"])])
-        in_queue = queue.Queue()
-        err_queue = queue.Queue()
-        in_queue.put(json.dumps(ingestable))
-        utils.submit_ingests(in_queue, err_queue, publish_index,
-                             multiprocessing.Value(c_bool, True), source_id)
+        try:
+            publish_index = "mdf-publish" if not publish_conf["doi_test"] else "mdf-publish-test"
+            search_iden = ("https://doi.org/{}"
+                           .format(mdf_publish_res["datacite"]["attributes"]["doi"]))
+            ingestable = mdf_toolbox.format_gmeta(
+                            [mdf_toolbox.format_gmeta(mdf_publish_res["datacite"], acl=["public"],
+                                                      identifier=search_iden)])
+            in_queue = queue.Queue()
+            err_queue = queue.Queue()
+            in_queue.put(json.dumps(ingestable))
+            utils.submit_ingests(in_queue, err_queue, publish_index,
+                                 multiprocessing.Value(c_bool, True), source_id)
+        except Exception as e:
+            logger.error("Publishing exception: {}".format(repr(e)))
+            utils.update_status(source_id, "ingest_publish", "F",
+                                text="Failed to save publication", except_on_fail=True)
         errors = []
         try:
             while True:
