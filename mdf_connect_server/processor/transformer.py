@@ -484,8 +484,8 @@ def parse_electron_microscopy(group, params=None):
                                      .get('beam_energy', None))
             em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
                                        .get('magnification', None))
-            em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
-                                    .get('acquisition_mode', None))
+            em['acquisition_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                          .get('acquisition_mode', None))
             detector = (data.get('Acquisition_instrument', {}).get(inst, {})
                             .get('Detector', None))
             if detector:
