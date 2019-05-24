@@ -924,6 +924,7 @@ def translate_dc_schema(dc_md, doi=None, url=None):
     # url
     if url:
         doi_data["url"] = url
+        doi_data["landingPage"] = url
 
     # identifiers
     if doi_data.get("identifier"):
@@ -976,11 +977,10 @@ def translate_dc_schema(dc_md, doi=None, url=None):
     return doi_md
 
 
-def datacite_mint_doi(dc_md, test, url=None):
-    if not dc_md.get("identifier") and not dc_md.get("identifiers"):
+def datacite_mint_doi(dc_md, test, url=None, doi=None):
+    if not doi and not dc_md.get("identifier") and not dc_md.get("identifiers"):
         doi = make_dc_doi(test)
-    else:
-        doi = None
+
     doi_md = translate_dc_schema(dc_md, doi=doi, url=url)
     creds = get_dc_creds(test)
     res = requests.post(creds["DC_URL"], auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
@@ -1006,6 +1006,33 @@ def datacite_mint_doi(dc_md, test, url=None):
         }
 
 
+def datacite_update_doi(doi, updates, test, url=None):
+    update_md = translate_dc_schema(updates, doi=doi, url=url)
+    creds = get_dc_creds(test)
+    res = requests.put(creds["DC_URL"]+doi, auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
+                       json=update_md)
+    try:
+        res_json = res.json()
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "error": "DOI update failed",
+            "details": res.content
+        }
+
+    if res.status_code >= 300:
+        return {
+            "success": False,
+            "error": "; ".join([err["title"] for err in res_json["errors"]])
+        }
+    else:
+        return {
+            "success": True,
+            "datacite": res_json["data"]
+        }
+
+
+'''
 def globus_publish_data(publish_client, transfer_client, metadata, collection,
                         data_ep=None, data_path=None, data_loc=None):
     if not data_loc:
@@ -1073,6 +1100,7 @@ def get_publish_metadata(metadata):
         "accept_license": True
     }
     return pub_metadata
+'''
 
 
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,

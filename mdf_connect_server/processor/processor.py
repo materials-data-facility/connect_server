@@ -266,7 +266,6 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "feedstock_file": feedstock_file,
             "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
                                                    CONFIG["GROUPING_RULES"]),
-            "num_transformers": CONFIG["NUM_TRANSFORMERS"],
             "validation_info": {
                 "project_blocks": sub_conf.get("project_blocks", []),
                 "required_fields": sub_conf.get("required_fields", [])
@@ -534,18 +533,19 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             return
 
         publish_conf = sub_conf["services"]["mdf_publish"]
-        #TODO: Verify move data to location? Canon dest set in API
-        #TODO: Set URL in DC block? Need schema clarification.
-        url = "https://example.com"
+        # Data already moved to canon dest as a requirement of success so far
 
         # Mint DOI
         try:
+            doi = utils.make_dc_doi(test=publish_conf["doi_test"])
+            landing_page = CONFIG["DOI_LANDING_PAGE"].format(doi)
             mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
-                                                      url=url)
+                                                      url=landing_page, doi=doi)
         except Exception as e:
             logger.error("DOI minting exception: {}".format(repr(e)))
             utils.update_status(source_id, "ingest_publish", "F",
                                 text="DOI minting failed", except_on_fail=True)
+            return
         else:
             if not mdf_publish_res["success"]:
                 logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
@@ -553,17 +553,15 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                     text="Unable to mint DOI for publication", except_on_fail=True)
                 return
 
-        # Ingest DOI metadata to correct Search index
-        # Using utils.search_ingester.submit_ingests to error handle Search's async ingests
+        # Ingest DOI metadata to correct Search index.
+        # Using utils.search_ingester.submit_ingests to error handle Search's async ingests.
         # Unfortunately, submit_ingests is intended for multiprocessing and requires
         # more setup than necessary for this case.
         try:
             publish_index = "mdf-publish" if not publish_conf["doi_test"] else "mdf-publish-test"
-            search_iden = ("https://doi.org/{}"
-                           .format(mdf_publish_res["datacite"]["attributes"]["doi"]))
             ingestable = mdf_toolbox.format_gmeta(
                             [mdf_toolbox.format_gmeta(mdf_publish_res["datacite"], acl=["public"],
-                                                      identifier=search_iden)])
+                                                      identifier=doi)])
             in_queue = queue.Queue()
             err_queue = queue.Queue()
             in_queue.put(json.dumps(ingestable))
@@ -573,6 +571,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             logger.error("Publishing exception: {}".format(repr(e)))
             utils.update_status(source_id, "ingest_publish", "F",
                                 text="Failed to save publication", except_on_fail=True)
+            return
         errors = []
         try:
             while True:
@@ -585,9 +584,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             return
 
         utils.update_status(source_id, "ingest_publish", "L",
-                            text="Dataset published with MDF Publish", link=search_iden,
+                            text="Dataset published with MDF Publish", link=landing_page,
                             except_on_fail=True)
-        service_res["mdf_publish"] = url
+        service_res["mdf_publish"] = landing_page
 
     else:
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)

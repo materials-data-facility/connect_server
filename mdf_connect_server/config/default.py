@@ -31,6 +31,9 @@ DEFAULT = {
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
 
+    "DOI_LANDING_PAGE": "https://petreldata.net/mdf-publish/detail/{}",
+
+    '''
     "PUBLISH_COLLECTIONS": {
         "21": {
             "name": "MDF Open",
@@ -46,6 +49,7 @@ DEFAULT = {
         }
     },
     "PUBLISH_LINK": "https://publish.globus.org/jspui/handle/ITEM/{}",
+    '''
 
     "CITRINATION_LINK": "https://citrination.com/datasets/{cit_ds_id}/",
 

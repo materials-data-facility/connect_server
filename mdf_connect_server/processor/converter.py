@@ -7,7 +7,7 @@ from queue import Empty
 
 import mdf_toolbox
 
-from mdf_connect_server import utils
+from mdf_connect_server import CONFIG, utils
 from mdf_connect_server.processor import transform, Validator
 
 
@@ -25,7 +25,6 @@ def convert(root_path, convert_params):
         service_data (str): The path to a directory to store integration data.
         feedstock_file (str): Path to output feedstock to.
         group_config (dict): Grouping configuration.
-        num_transformers (int): The number of transformer processes to use. Default 1.
         validation_info (dict): Validator configuration. Default None.
 
     Returns:
@@ -39,7 +38,7 @@ def convert(root_path, convert_params):
     """
     source_id = convert_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
     source_info = utils.split_source_id(source_id)
-    vald = Validator()
+    vald = Validator(schema_path=CONFIG["SCHEMA_PATH"])
 
     # Process dataset entry (to fail validation early if dataset entry is invalid)
     full_dataset = convert_params["dataset"]
@@ -77,7 +76,7 @@ def convert(root_path, convert_params):
     transformers = [multiprocessing.Process(target=transform,
                                             args=(input_queue, output_queue,
                                                   input_complete, convert_params))
-                    for i in range(convert_params.get("num_transformers", 1))]
+                    for i in range(CONFIG["NUM_TRANSFORMERS"])]
     [t.start() for t in transformers]
     logger.debug("{}: Transformers started".format(source_id))
 

@@ -6,8 +6,6 @@ from tempfile import TemporaryFile
 from bson import ObjectId
 import jsonschema
 
-from mdf_connect_server import CONFIG
-
 
 class Validator:
     """Validates MDF feedstock.
@@ -20,7 +18,7 @@ class Validator:
             (success check)
         gen = get_finished_dataset()
     """
-    def __init__(self, schema_path=None):
+    def __init__(self, schema_path):
         self.__dataset = None  # Serves as initialized flag
         self.__source_info = None
         self.__tempfile = None
@@ -30,10 +28,7 @@ class Validator:
         self.__project_blocks = None
         self.__required_fields = None
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
-        if schema_path:
-            self.__schema_dir = schema_path
-        else:
-            self.__schema_dir = CONFIG["SCHEMA_PATH"]
+        self.__schema_dir = schema_path
 
     def start_dataset(self, ds_md, source_info=None, validation_info=None):
         """Validate a dataset against the MDF schema.
