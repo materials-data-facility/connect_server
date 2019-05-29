@@ -122,9 +122,11 @@ def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
             entry = json.loads(str_entry)
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
-            iden = (CONFIG["SEARCH_SUBJECT_PATTERN"]
-                    .format(entry["mdf"].get("parent_id", entry["mdf"]["mdf_id"]),
-                            entry["mdf"]["mdf_id"]))
+            # Identifier is source_id for datasets, source_id + mdf_id for records
+            if entry["mdf"]["resource_type"] == "dataset":
+                iden = entry["mdf"]["source_id"]
+            else:
+                iden = entry["mdf"]["source_id"] + "." + entry["mdf"]["mdf_id"]
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size

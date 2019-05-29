@@ -1,10 +1,8 @@
 from copy import deepcopy
-from ctypes import c_bool
 import datetime
 import json
 import logging
 import multiprocessing
-import queue
 import os
 import signal
 from time import sleep
@@ -533,14 +531,28 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             return
 
         publish_conf = sub_conf["services"]["mdf_publish"]
+
         # Data already moved to canon dest as a requirement of success so far
 
         # Mint DOI
         try:
-            doi = utils.make_dc_doi(test=publish_conf["doi_test"])
-            landing_page = CONFIG["DOI_LANDING_PAGE"].format(doi)
+            # Create DOI and add to dataset DC
+            dataset["dc"]["identifier"] = {
+                "identifier": utils.make_dc_doi(test=publish_conf["doi_test"]),
+                "identifierType": "DOI"
+            }
+            # Add publication dates and publisher
+            dataset["dc"]["publisher"] = "Materials Data Facility"
+            dataset["dc"]["publicationYear"] = datetime.now().year
+            if not dataset["dc"]["dates"]:
+                dataset["dc"]["dates"] = []
+            dataset["dc"]["dates"].append({
+                "date": str(datetime.now().date()),
+                "dateType": "Accepted"
+            })
+            landing_page = CONFIG["DATASET_LANDING_PAGE"].format(source_id)
             mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
-                                                      url=landing_page, doi=doi)
+                                                      url=landing_page)
         except Exception as e:
             logger.error("DOI minting exception: {}".format(repr(e)))
             utils.update_status(source_id, "ingest_publish", "F",
@@ -552,36 +564,6 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 utils.update_status(source_id, "ingest_publish", "F",
                                     text="Unable to mint DOI for publication", except_on_fail=True)
                 return
-
-        # Ingest DOI metadata to correct Search index.
-        # Using utils.search_ingester.submit_ingests to error handle Search's async ingests.
-        # Unfortunately, submit_ingests is intended for multiprocessing and requires
-        # more setup than necessary for this case.
-        try:
-            publish_index = "mdf-publish" if not publish_conf["doi_test"] else "mdf-publish-test"
-            ingestable = mdf_toolbox.format_gmeta(
-                            [mdf_toolbox.format_gmeta(mdf_publish_res["datacite"], acl=["public"],
-                                                      identifier=doi)])
-            in_queue = queue.Queue()
-            err_queue = queue.Queue()
-            in_queue.put(json.dumps(ingestable))
-            utils.submit_ingests(in_queue, err_queue, publish_index,
-                                 multiprocessing.Value(c_bool, True), source_id)
-        except Exception as e:
-            logger.error("Publishing exception: {}".format(repr(e)))
-            utils.update_status(source_id, "ingest_publish", "F",
-                                text="Failed to save publication", except_on_fail=True)
-            return
-        errors = []
-        try:
-            while True:
-                errors.append(json.loads(err_queue.get(timeout=1)))
-        except queue.Empty:
-            pass
-        if errors:
-            utils.update_status(source_id, "ingest_publish", "F", text="; ".join(errors),
-                                except_on_fail=True)
-            return
 
         utils.update_status(source_id, "ingest_publish", "L",
                             text="Dataset published with MDF Publish", link=landing_page,

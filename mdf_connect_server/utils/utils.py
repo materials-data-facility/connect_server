@@ -1,5 +1,4 @@
 from copy import deepcopy
-from datetime import date
 import json
 import logging
 import os
@@ -1032,77 +1031,6 @@ def datacite_update_doi(doi, updates, test, url=None):
         }
 
 
-'''
-def globus_publish_data(publish_client, transfer_client, metadata, collection,
-                        data_ep=None, data_path=None, data_loc=None):
-    if not data_loc:
-        if not data_ep or not data_path:
-            raise ValueError("Invalid call to globus_publish_data()")
-        data_loc = []
-    if data_ep and data_path:
-        data_loc.append("globus://{}{}".format(data_ep, data_path))
-    # Format collection
-    collection_id = publish_collection_lookup(publish_client, collection)
-    # Submit metadata
-    pub_md = get_publish_metadata(metadata)
-    md_result = publish_client.push_metadata(collection_id, pub_md)
-    pub_endpoint = md_result['globus.shared_endpoint.name']
-    pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-    submission_id = md_result["id"]
-    # Transfer data
-    for loc in data_loc:
-        loc = loc.replace("globus://", "")
-        ep, path = loc.split("/", 1)
-        path = "/" + path + ("/" if not path.endswith("/") else "")
-        transfer = mdf_toolbox.custom_transfer(
-                        transfer_client, ep, pub_endpoint, [(path, pub_path)],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-        for event in transfer:
-            pass
-        if not event["success"]:
-            raise ValueError("{}: {}".format(event.get("code", "No code found"),
-                                             event.get("description", "No description found")))
-    # Complete submission
-    fin_res = publish_client.complete_submission(submission_id)
-
-    return fin_res.data
-
-
-def publish_collection_lookup(publish_client, collection):
-    valid_cols = publish_client.list_collections().data
-    try:
-        collection_id = int(collection)
-    except ValueError:
-        collection_id = 0
-        for coll in valid_cols:
-            if collection.replace(" ", "").lower() == coll["name"].replace(" ", "").lower():
-                if collection_id:
-                    raise ValueError("Collection name '{}' has multiple matches"
-                                     .format(collection))
-                collection_id = coll["id"]
-    if not any([col["id"] == collection_id for col in valid_cols]):
-        raise ValueError("Collection not found")
-
-    return collection_id
-
-
-def get_publish_metadata(metadata):
-    dc_metadata = metadata.get("dc", {})
-    # TODO: Find full Publish schema for translation
-    # Required fields
-    pub_metadata = {
-        "dc.title": ", ".join([title.get("title", "")
-                               for title in dc_metadata.get("titles", [])]),
-        "dc.date.issued": str(date.today().year),
-        "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": [author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])],
-        "accept_license": True
-    }
-    return pub_metadata
-'''
-
-
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
                    public=CONFIG["DEFAULT_CITRINATION_PUBLIC"]):
     cit_client = CitrinationClient(api_key).data
@@ -1671,6 +1599,21 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
+    # Clean text and link (if present)
+    if text:
+        # This could be done with a complex regex and replace, but .replace() is simpler
+        # and more robust - r'\\\\' only catches multiples of two backslashes,
+        # while r'\\' catches nothing, according to basic testing.
+        # So replacing all the reasonable escape sequences with spaces, deleting all backslashes,
+        # and condensing the spaces is sufficient.
+        # Removing newlines is okay in this particular case (simple status messages).
+        text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ").replace("\\", "")
+        while "  " in text:
+            text = text.replace("  ", " ")
+    if link:
+        link = urllib.parse.quote(link)
+
+    # Get status table
     tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:

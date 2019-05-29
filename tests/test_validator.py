@@ -1,3 +1,4 @@
+from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import Validator
 import pytest
 
@@ -287,7 +288,7 @@ def test_validator():
         }
     }]
 
-    val = Validator()
+    val = Validator(schema_path=CONFIG["SCHEMA_PATH"])
     assert val.status() == "Dataset not started."
     assert val.add_record({}) == {
                             "success": False,

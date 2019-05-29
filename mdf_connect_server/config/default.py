@@ -14,7 +14,6 @@ DEFAULT = {
 
     "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
-    "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
@@ -31,25 +30,8 @@ DEFAULT = {
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
 
-    "DOI_LANDING_PAGE": "https://petreldata.net/mdf-publish/detail/{}",
-
-    '''
-    "PUBLISH_COLLECTIONS": {
-        "21": {
-            "name": "MDF Open",
-            "group": "1c562600-1083-11e6-846d-22000ab80e73"
-        },
-        "35": {
-            "name": "MDF Test",
-            "group": "115fb604-a2cb-11e7-a5d0-22000b500e8d"
-        },
-        "55": {
-            "name": "NUCAPT",
-            "group": "7ac7bef4-ba8e-11e7-9f15-22000b93c8ac"
-        }
-    },
-    "PUBLISH_LINK": "https://publish.globus.org/jspui/handle/ITEM/{}",
-    '''
+    "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{source_id}",
+    "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{source_id}.{mdf_id}",
 
     "CITRINATION_LINK": "https://citrination.com/datasets/{cit_ds_id}/",
 
