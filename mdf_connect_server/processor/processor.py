@@ -560,8 +560,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 return
 
         utils.update_status(source_id, "ingest_publish", "L",
-                            text="Dataset published with MDF Publish", link=landing_page,
-                            except_on_fail=True)
+                            text=("Dataset published though MDF Publish with DOI '{}'"
+                                  .format(dataset["dc"]["identifier"]["identifier"])),
+                            link=landing_page, except_on_fail=True)
         service_res["mdf_publish"] = landing_page
 
     else:
