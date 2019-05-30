@@ -1,5 +1,5 @@
 from copy import deepcopy
-import datetime
+from datetime import datetime
 import json
 import logging
 import multiprocessing
@@ -353,7 +353,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 "submission_info": sub_conf,
                 "parsing_summary": ("{} records were parsed out of {} groups from {} files"
                                     .format(num_records, num_groups, num_files)),
-                "curation_start_date": str(datetime.date.today())
+                "curation_start_date": str(datetime.today())
             }
             # If no allowed curators or public allowed, set to public
             if (not curation_task["allowed_curators"]
@@ -524,12 +524,6 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # MDF Publish
     if sub_conf["services"].get("mdf_publish"):
-        #TODO: Remove after testing
-        if not sub_conf["test"]:
-            utils.update_status(source_id, "ingest_publish", "F",
-                                text="MDF Publish not yet available", except_on_fail=True)
-            return
-
         publish_conf = sub_conf["services"]["mdf_publish"]
 
         # Data already moved to canon dest as a requirement of success so far
@@ -544,7 +538,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             # Add publication dates and publisher
             dataset["dc"]["publisher"] = "Materials Data Facility"
             dataset["dc"]["publicationYear"] = datetime.now().year
-            if not dataset["dc"]["dates"]:
+            if not dataset["dc"].get("dates"):
                 dataset["dc"]["dates"] = []
             dataset["dc"]["dates"].append({
                 "date": str(datetime.now().date()),

@@ -30,8 +30,8 @@ DEFAULT = {
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
 
-    "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{source_id}",
-    "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{source_id}.{mdf_id}",
+    "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}",
+    "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}.{}",
 
     "CITRINATION_LINK": "https://citrination.com/datasets/{cit_ds_id}/",
 

@@ -244,10 +244,11 @@ def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=
 
     if not subject:
         try:
-            subject = (CONFIG["SEARCH_SUBJECT_PATTERN"]
-                       .format(updated_entry["mdf"].get("parent_id",
-                                                        updated_entry["mdf"]["mdf_id"]),
-                               updated_entry["mdf"]["mdf_id"]))
+            # Identifier is source_id for datasets, source_id + mdf_id for records
+            if updated_entry["mdf"]["resource_type"] == "dataset":
+                subject = updated_entry["mdf"]["source_id"]
+            else:
+                subject = updated_entry["mdf"]["source_id"] + "." + updated_entry["mdf"]["mdf_id"]
         except KeyError as e:
             return {
                 "success": False,

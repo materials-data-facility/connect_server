@@ -1611,7 +1611,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         while "  " in text:
             text = text.replace("  ", " ")
     if link:
-        link = urllib.parse.quote(link)
+        link = urllib.parse.quote(link, safe="/:")
 
     # Get status table
     tbl_res = get_dmo_table("status")
