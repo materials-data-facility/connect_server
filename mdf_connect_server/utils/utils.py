@@ -183,6 +183,8 @@ def authenticate_token(token, groups, require_all=False):
             except (globus_sdk.GlobusAPIError, AssertionError):
                 # If must be in all groups, fail out after one failure, otherwise continue
                 if require_all:
+                    logger.debug("Auth rejected: require_all set, user '{}' not in '{}'"
+                                 .format(user_identifier, grp))
                     return {
                         "success": False,
                         "error": "You cannot access this service or organization",
@@ -199,6 +201,8 @@ def authenticate_token(token, groups, require_all=False):
             else:
                 auth_succeeded = True
     if not auth_succeeded:
+        logger.debug("Auth rejected: User '{}' not in any group: '{}'"
+                     .format(user_identifier, groups))
         return {
             "success": False,
             "error": "You cannot access this service or organization",
@@ -299,7 +303,8 @@ def make_source_id(title, author, test=False, index=None):
         word1 = title_clean[0]
     else:
         # Must have at least one word
-        raise ValueError("Title '{}' invalid: No content".format(title))
+        raise ValueError("Title '{}' invalid: Must have at least one word that is not "
+                         "the author name".format(title))
     if len(title_clean) >= 2:
         word2 = title_clean[1]
     else:

@@ -151,8 +151,8 @@ def accept_submission():
     except Exception as e:
         return (jsonify({
             "success": False,
-            "error": repr(e)
-        }), 500)
+            "error": str(e)
+        }), 400)
     source_id = source_id_info["source_id"]
     source_name = source_id_info["source_name"]
     if (len(source_id_info["user_id_list"]) > 0
