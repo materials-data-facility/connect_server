@@ -157,11 +157,15 @@ def authenticate_token(token, groups, require_all=False):
             "error_code": 500
         }
 
-    # "username" as recognized in Groups is actually either the email or
-    # the string before "@globusid.org" for Globus IDs
-    # Only matters for Globus IDs, because email and username are different then
-    user_identifier = auth_res["email"] or auth_res["username"].replace("@globusid.org", "")
+    # Globus Groups does not take UUIDs, only usernames, but Globus Auth uses UUIDs
+    # for identity-aware applications. Therefore, for Connect to be identity-aware,
+    # we must convert the UUIDs into usernames.
+    # However, the GlobusID "username" is not the email-like address, just the prefix.
+    user_usernames = set([iden["username"].replace("@globusid.org", "")
+                          for iden in auth_client.get_identities(
+                                                    ids=auth_res["identities_set"])["identities"]])
     auth_succeeded = False
+    missing_groups = []  # Used for require_all compliance
     group_roles = []
     for grp in groups:
         # public always succeeds
@@ -174,35 +178,38 @@ def authenticate_token(token, groups, require_all=False):
                 grp = CONFIG["CONVERT_GROUP_ID"]
             elif grp.lower() == "admin":
                 grp = CONFIG["ADMIN_GROUP_ID"]
-            # Group membership check
-            try:
-                member_info = nexus.get_group_membership(grp, user_identifier)
-                assert member_info["status"] == "active"
-                group_roles.append(member_info["role"])
-            # Not in group or not active
-            except (globus_sdk.GlobusAPIError, AssertionError):
-                # If must be in all groups, fail out after one failure, otherwise continue
-                if require_all:
-                    logger.debug("Auth rejected: require_all set, user '{}' not in '{}'"
-                                 .format(user_identifier, grp))
+            # Group membership checks - each identity with each group
+            for user_identifier in user_usernames:
+                try:
+                    member_info = nexus.get_group_membership(grp, user_identifier)
+                    assert member_info["status"] == "active"
+                    group_roles.append(member_info["role"])
+                # Not in group or not active
+                except (globus_sdk.GlobusAPIError, AssertionError):
+                    # Log failed groups
+                    missing_groups.append(grp)
+                # Error getting membership
+                except Exception as e:
+                    logger.error("NexusClient fetch error: {}".format(repr(e)))
                     return {
                         "success": False,
-                        "error": "You cannot access this service or organization",
-                        "error_code": 403
+                        "error": "Unable to connect to Globus Groups",
+                        "error_code": 500
                     }
-            # Error getting membership
-            except Exception as e:
-                logger.error("NexusClient fetch error: {}".format(repr(e)))
-                return {
-                    "success": False,
-                    "error": "Unable to connect to Globus Groups",
-                    "error_code": 500
-                }
-            else:
-                auth_succeeded = True
+                else:
+                    auth_succeeded = True
+    # If must be in all groups, fail out if any groups missing
+    if require_all and missing_groups:
+        logger.debug("Auth rejected: require_all set, user '{}' not in '{}'"
+                     .format(user_usernames, missing_groups))
+        return {
+            "success": False,
+            "error": "You cannot access this service or organization",
+            "error_code": 403
+        }
     if not auth_succeeded:
         logger.debug("Auth rejected: User '{}' not in any group: '{}'"
-                     .format(user_identifier, groups))
+                     .format(user_usernames, groups))
         return {
             "success": False,
             "error": "You cannot access this service or organization",
@@ -210,23 +217,25 @@ def authenticate_token(token, groups, require_all=False):
         }
 
     # Admin membership check (allowed to fail)
-    try:
-        admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
-        assert admin_info["status"] == "active"
-    # Not active admin, which is fine
-    except (globus_sdk.GlobusAPIError, AssertionError):
-        is_admin = False
-    # Error getting membership
-    except Exception as e:
-        logger.error("NexusClient admin fetch error: {}".format(repr(e)))
-        return {
-            "success": False,
-            "error": "Unable to connect to Globus Groups",
-            "error_code": 500
-        }
-    # Successful check, is admin
-    else:
-        is_admin = True
+    is_admin = False
+    for user_identifier in user_usernames:
+        try:
+            admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
+            assert admin_info["status"] == "active"
+        # Username is not active admin, which is fine
+        except (globus_sdk.GlobusAPIError, AssertionError):
+            pass
+        # Error getting membership
+        except Exception as e:
+            logger.error("NexusClient admin fetch error: {}".format(repr(e)))
+            return {
+                "success": False,
+                "error": "Unable to connect to Globus Groups",
+                "error_code": 500
+            }
+        # Successful check, is admin
+        else:
+            is_admin = True
 
     return {
         "success": True,
