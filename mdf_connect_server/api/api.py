@@ -692,6 +692,7 @@ def curate_task(source_id):
         }), 405)
 
 
+@app.route("/schemas", methods=["GET"])
 @app.route("/schemas/<schema_type>", methods=["GET"])
 def get_schema(schema_type=None):
     """Return schema of selected type.
@@ -734,9 +735,10 @@ def get_schema(schema_type=None):
         try:
             all_schemas = {}
             for schema_name in schema_list:
-                with open(os.path.join(CONFIG["SCHEMA_PATH"], schema_name)) as schema_file:
+                with open(os.path.join(CONFIG["SCHEMA_PATH"],
+                                       "{}.json".format(schema_name))) as schema_file:
                     raw_schema = json.load(schema_file)
-                all_schemas[schema_name.replace(".json", "")] = utils.expand_refs(raw_schema)
+                all_schemas[schema_name] = utils.expand_refs(raw_schema)
         except Exception as e:
             logger.error("While fetching all schemas: {}".format(repr(e)))
             return (jsonify({
