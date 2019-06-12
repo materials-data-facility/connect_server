@@ -690,3 +690,88 @@ def curate_task(source_id):
             "success": False,
             "error": "Bad request method: '{}'".format(request.method)
         }), 405)
+
+
+@app.route("/schemas/<schema_type>", methods=["GET"])
+def get_schema(schema_type=None):
+    """Return schema of selected type.
+    Valid types:
+        - Named files in schema directory
+        - "list" or None, which returns a list of available schemas
+        - "all", which returns data on every schema in MDF
+    """
+    if schema_type is None:
+        schema_type = "list"
+
+    # Get list of all schema names
+    if schema_type == "list":
+        try:
+            schema_list = [name.replace(".json", "") for name in os.listdir(CONFIG["SCHEMA_PATH"])
+                           if name.endswith(".json")]
+        except Exception as e:
+            logger.error("While fetching schema list: {}".format(repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Unable to fetch list of MDF schemas"
+            }), 500)
+        else:
+            return (jsonify({
+                "success": True,
+                "schema_list": schema_list
+            }), 200)
+
+    # Get all schemas in MDF
+    elif schema_type == "all":
+        try:
+            schema_list = [name.replace(".json", "") for name in os.listdir(CONFIG["SCHEMA_PATH"])
+                           if name.endswith(".json")]
+        except Exception as e:
+            logger.error("While fetching schema list: {}".format(repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Unable to fetch list of MDF schemas"
+            }), 500)
+        try:
+            all_schemas = {}
+            for schema_name in schema_list:
+                with open(os.path.join(CONFIG["SCHEMA_PATH"], schema_name)) as schema_file:
+                    raw_schema = json.load(schema_file)
+                all_schemas[schema_name.replace(".json", "")] = utils.expand_refs(raw_schema)
+        except Exception as e:
+            logger.error("While fetching all schemas: {}".format(repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Unable to fetch content of all MDF schemas"
+            }), 500)
+        else:
+            return (jsonify({
+                "success": True,
+                "all_schemas": all_schemas
+            }), 200)
+
+    # Get single named schema
+    else:
+        # Sanitize schema_type into filename-appropriate format
+        schema_name = schema_type.replace(".json", "").strip().replace(" ", "_").lower()
+        try:
+            with open(os.path.join(CONFIG["SCHEMA_PATH"],
+                                   "{}.json".format(schema_name))) as schema_file:
+                raw_schema = json.load(schema_file)
+            schema = utils.expand_refs(raw_schema)
+        except FileNotFoundError:
+            return (jsonify({
+                "success": False,
+                "error": "Schema '{}' (from '{}') not found".format(schema_name, schema_type)
+            }), 404)
+        except Exception as e:
+            logger.error("While fetching schema '{}' (from '{}'): {}"
+                         .format(schema_name, schema_type, repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Unable to fetch schema '{}' (from '{}')".format(schema_name, schema_type)
+            }), 500)
+        else:
+            return (jsonify({
+                "success": True,
+                "schema": schema
+            }), 200)
