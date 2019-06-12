@@ -200,7 +200,7 @@ def accept_submission():
     if sub_conf.get("permission_groups"):
         for group_uuid in sub_conf["permission_groups"]:
             try:
-                group_res = utils.authenticate_token(access_token, group_uuid, require_all=True)
+                group_res = utils.authenticate_token(access_token, group_uuid)
             except Exception as e:
                 logger.error("Authentication failure: {}".format(repr(e)))
                 return (jsonify({
