@@ -151,8 +151,8 @@ def accept_submission():
     except Exception as e:
         return (jsonify({
             "success": False,
-            "error": repr(e)
-        }), 500)
+            "error": str(e)
+        }), 400)
     source_id = source_id_info["source_id"]
     source_name = source_id_info["source_name"]
     if (len(source_id_info["user_id_list"]) > 0
@@ -216,6 +216,10 @@ def accept_submission():
     # If ACL includes "public", no other entries needed
     if "public" in sub_conf["acl"]:
         sub_conf["acl"] = ["public"]
+    # Otherwise, make sure Connect admins have permission, also deduplicate
+    else:
+        sub_conf["acl"].append(CONFIG["ADMIN_GROUP_ID"])
+        sub_conf["acl"] = list(set(sub_conf["acl"]))
     # Set correct ACL in metadata
     metadata["mdf"]["acl"] = sub_conf["acl"]
 

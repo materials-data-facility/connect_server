@@ -26,7 +26,7 @@ PROD = {
 
     "DEFAULT_DOI_TEST": False,
     "NUM_DOI_CHARS": 4,  # Characters per section
-    "NUM_DOI_SECTIONS": 3,
+    "NUM_DOI_SECTIONS": 2,
 
     "DEFAULT_PUBLISH_COLLECTION": 21,
     "TEST_PUBLISH_COLLECTION": 35,
