@@ -1,18 +1,27 @@
-from hashlib import sha512
-import json
-import logging
 import os
-from queue import Empty
-import re
-
 # pycalphad and hyperspy imports require this env var set
 os.environ["MPLBACKEND"] = "agg"
-import pycalphad  # noqa: E402
+# pycalphad and hyperspy run into dlopen static TLS errors, so retry imports when failing
+try:
+    import pycalphad  # noqa: E402
+except ImportError:
+    import pycalphad
+try:
+    import hyperspy.api as hs  # noqa: E402
+except ImportError:
+    import hyperspy.api as hs  # noqa: E402
+
+from hashlib import sha512  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+# import os  # noqa: E402
+from queue import Empty  # noqa: E402
+import re  # noqa: E402
+import urllib  # noqa: E402
 
 # E402: module level import not at top of file
 import ase.io  # noqa: E402
 from bson import ObjectId  # noqa: E402
-import hyperspy.api as hs  # noqa: E402
 import magic  # noqa: E402
 import mdf_toolbox  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -475,8 +484,8 @@ def parse_electron_microscopy(group, params=None):
                                      .get('beam_energy', None))
             em['magnification'] = (data.get('Acquisition_instrument', {}).get(inst, {})
                                        .get('magnification', None))
-            em['image_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
-                                    .get('acquisition_mode', None))
+            em['acquisition_mode'] = (data.get('Acquisition_instrument', {}).get(inst, {})
+                                          .get('acquisition_mode', None))
             detector = (data.get('Acquisition_instrument', {}).get(inst, {})
                             .get('Detector', None))
             if detector:
@@ -562,38 +571,34 @@ def _parse_file_info(group, params=None):
                 globus_endpoint (str): Data file endpoint.
                 http_host (str): Data file HTTP host.
                 local_path (str): The path to the root of the files on the current machine.
-                host_path (str): The path to the root on the hosting machine. Default local_path.
 
     Returns:
     list of dict: The record(s) parsed.
     """
     try:
-        file_params = params["parsers"]["file"]
-    except Exception:
-        raise ValueError("File info parser params missing")
+        globus_host_info = urllib.parse.urlparse(params["parsers"]["file"]["globus_host"])
+        host_endpoint = globus_host_info.netloc
+        host_path = globus_host_info.path
+    except Exception as e:
+        raise ValueError("File info host_endpoint missing or corrupted: {}".format(str(e)))
     try:
-        globus_endpoint = file_params["globus_endpoint"]
-    except Exception:
-        raise ValueError("File info globus_endpoint missing")
-    try:
-        http_host = file_params["http_host"]
+        http_host = params["parsers"]["file"]["http_host"]
     except Exception:
         raise ValueError("File info http_host missing")
     try:
-        local_path = file_params["local_path"]
+        local_path = params["parsers"]["file"]["local_path"]
     except Exception:
         raise ValueError("File info local_path missing")
-    host_path = file_params.get("host_path", local_path)
 
     files = []
     for file_path in group:
         host_file = file_path.replace(local_path, host_path)
         with open(file_path, "rb") as f:
             md = {
-                "globus": "globus://" + str(globus_endpoint) + str(host_file),
+                "globus": "globus://{}{}".format(host_endpoint, host_file),
                 "data_type": magic.from_file(file_path),
                 "mime_type": magic.from_file(file_path, mime=True),
-                "url": http_host + host_file,
+                "url": (http_host + host_file) if http_host else None,
                 "length": os.path.getsize(file_path),
                 "filename": os.path.basename(file_path),
                 "sha512": sha512(f.read()).hexdigest()

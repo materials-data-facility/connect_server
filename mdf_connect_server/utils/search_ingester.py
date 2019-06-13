@@ -2,78 +2,63 @@ from ctypes import c_bool
 import json
 import logging
 import multiprocessing
-import os
 from queue import Empty
 from time import sleep
 
 from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
-from mdf_connect_server import CONFIG, utils
-from mdf_connect_server.processor import Validator
+from mdf_connect_server import CONFIG
+from .utils import split_source_id
 
 
 logger = logging.getLogger(__name__)
 
 
-def search_ingest(feedstock, source_id, index, batch_size,
-                  num_submitters=CONFIG["NUM_SUBMITTERS"], feedstock_save=None):
+def search_ingest(feedstock_file, source_id, index, batch_size,
+                  num_submitters=CONFIG["NUM_SUBMITTERS"]):
     """Ingests feedstock from file.
 
     Arguments:
-    feedstock (str): The path to feedstock to ingest.
+    feedstock_file (str): The feedstock file to ingest.
+    source_id (str): The source_id of the feedstock.
     index (str): The Search index to ingest into.
     batch_size (int): Max size of a single ingest operation. -1 for unlimited. Default 100.
     num_submitters (int): The number of submission processes to create. Default NUM_SUBMITTERS.
-    feedstock_save (str): Path to file for saving final feedstock. Default None, to save nothing.
 
     Returns:
     dict: success (bool): True on success.
           errors (list): The errors encountered.
+          details (str): If success is False, details about the major error, if available.
     """
     ingest_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                                {"services": ["search_ingest"]}))["search_ingest"]
     index = mdf_toolbox.translate_index(index)
-    source_info = utils.split_source_id(source_id)
+    source_info = split_source_id(source_id)
 
-    # Validate feedstock
-    with open(feedstock, 'r') as stock:
-        val = Validator()
-        dataset_entry = json.loads(next(stock))
-        ds_res = val.start_dataset(dataset_entry, source_info)
-        if not ds_res.get("success"):
-            raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(ds_res)))
-
-        # Delete previous version of this dataset in Search
-        del_q = {
-            "q": "mdf.source_name:{}".format(source_info["source_name"]),
-            "advanced": True
-        }
-        # Try deleting from Search until success or try limit reached
-        # Necessary because Search will 5xx but possibly succeed on large deletions
-        i = 0
-        while True:
-            try:
-                del_res = ingest_client.delete_by_query(index, del_q)
-                break
-            except GlobusAPIError as e:
-                if i < CONFIG["SEARCH_RETRIES"]:
-                    logger.warning("{}: Retrying Search delete error: {}"
-                                   .format(source_id, repr(e)))
-                    i += 1
-                else:
-                    raise
-        if del_res["num_subjects_deleted"]:
-            logger.info(("{}: {} Search entries cleared from "
-                         "{}").format(source_id, del_res["num_subjects_deleted"],
-                                      source_info["source_name"]))
-
-        for rc in stock:
-            record = json.loads(rc)
-            rc_res = val.add_record(record)
-            if not rc_res.get("success"):
-                raise ValueError("Feedstock '{}' invalid: {}".format(feedstock, str(rc_res)))
+    # Delete previous version of this dataset in Search
+    del_q = {
+        "q": "mdf.source_name:{}".format(source_info["source_name"]),
+        "advanced": True
+    }
+    # Try deleting from Search until success or try limit reached
+    # Necessary because Search will 5xx but possibly succeed on large deletions
+    i = 0
+    while True:
+        try:
+            del_res = ingest_client.delete_by_query(index, del_q)
+            break
+        except GlobusAPIError as e:
+            if i < CONFIG["SEARCH_RETRIES"]:
+                logger.warning("{}: Retrying Search delete error: {}".format(source_id, repr(e)))
+                i += 1
+            else:
+                raise
+    if del_res["num_subjects_deleted"]:
+        logger.info(("{}: {} Search entries cleared from "
+                     "{}").format(source_id, del_res["num_subjects_deleted"],
+                                  source_info["source_name"]))
 
     # Set up multiprocessing
     ingest_queue = multiprocessing.Queue()
@@ -87,8 +72,7 @@ def search_ingest(feedstock, source_id, index, batch_size,
                   for i in range(num_submitters)]
     # Create queue populator
     populator = multiprocessing.Process(target=populate_queue,
-                                        args=(ingest_queue, val, batch_size,
-                                              (feedstock_save or os.devnull), source_id))
+                                        args=(ingest_queue, feedstock_file, batch_size, source_id))
     logger.debug("{}: Search ingestion starting".format(source_id))
     # Start processes
     populator.start()
@@ -130,20 +114,19 @@ def search_ingest(feedstock, source_id, index, batch_size,
     }
 
 
-def populate_queue(ingest_queue, validator, batch_size, feedstock_save, source_id):
-    # Populate ingest queue and save results if requested
-    os.makedirs(os.path.dirname(feedstock_save), exist_ok=True)
-    with open(feedstock_save, 'w') as save_loc:
-        batch = []
-        for entry in validator.get_finished_dataset():
-            # Save entry
-            json.dump(entry, save_loc)
-            save_loc.write("\n")
+def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
+    # Populate ingest queue
+    batch = []
+    with open(feedstock_file) as feed_in:
+        for str_entry in feed_in:
+            entry = json.loads(str_entry)
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
-            iden = (CONFIG["SEARCH_SUBJECT_PATTERN"]
-                    .format(entry["mdf"].get("parent_id", entry["mdf"]["mdf_id"]),
-                            entry["mdf"]["mdf_id"]))
+            # Identifier is source_id for datasets, source_id + mdf_id for records
+            if entry["mdf"]["resource_type"] == "dataset":
+                iden = entry["mdf"]["source_id"]
+            else:
+                iden = entry["mdf"]["source_id"] + "." + entry["mdf"]["mdf_id"]
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size
@@ -231,8 +214,7 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
     return
 
 
-def update_search_entry(index, updated_entry,
-                        subject=None, acl=None, overwrite=False):
+def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=False):
     """Update an entry in Search.
     Arguments:
     index (str): The Search index to ingest into.
@@ -262,10 +244,11 @@ def update_search_entry(index, updated_entry,
 
     if not subject:
         try:
-            subject = (CONFIG["SEARCH_SUBJECT_PATTERN"]
-                       .format(updated_entry["mdf"].get("parent_id",
-                                                        updated_entry["mdf"]["mdf_id"]),
-                               updated_entry["mdf"]["mdf_id"]))
+            # Identifier is source_id for datasets, source_id + mdf_id for records
+            if updated_entry["mdf"]["resource_type"] == "dataset":
+                subject = updated_entry["mdf"]["source_id"]
+            else:
+                subject = updated_entry["mdf"]["source_id"] + "." + updated_entry["mdf"]["mdf_id"]
         except KeyError as e:
             return {
                 "success": False,

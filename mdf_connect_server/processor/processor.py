@@ -1,17 +1,18 @@
+from copy import deepcopy
+from datetime import datetime
 import json
 import logging
-from multiprocessing import Process
+import multiprocessing
 import os
 import signal
 from time import sleep
-import urllib
 
 import globus_sdk
 import mdf_toolbox
 import requests
 
 from mdf_connect_server import CONFIG, utils
-from mdf_connect_server.processor import convert, search_ingest, update_search_entry
+from mdf_connect_server.processor import convert
 
 
 # Set up root logger
@@ -19,7 +20,7 @@ logger = logging.getLogger("mdf_connect_server")
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
-logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {name}: {message}",
+logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
                                       style='{',
                                       datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
@@ -67,15 +68,8 @@ def processor():
             if len(submissions["entries"]):
                 logger.debug("{} submissions retrieved".format(len(submissions["entries"])))
                 for sub in submissions["entries"]:
-                    if sub["submission_type"] == "convert":
-                        driver = Process(target=convert_driver, kwargs=sub,
-                                         name="C"+sub["source_id"])
-                    elif sub["submission_type"] == "ingest":
-                        driver = Process(target=ingest_driver, kwargs=sub,
-                                         name="I"+sub["source_id"])
-                    else:
-                        raise ValueError(("Submission type '{}' "
-                                          "invalid").format(sub["submission_type"]))
+                    driver = multiprocessing.Process(target=submission_driver,
+                                                     kwargs=sub, name=sub["source_id"])
                     driver.start()
                     active_processes.append(driver)
                 utils.delete_from_queue(submissions["delete_info"])
@@ -84,18 +78,19 @@ def processor():
             logger.error("Processor error: {}".format(e))
         try:
             for dead_proc in [proc for proc in active_processes if not proc.is_alive()]:
-                # Convert processes should not be cancelled if they finished
-                # 'converted' is sentinel value for convert finished
-                logger.info("Dead: {} ({})"
-                            .format(
-                                dead_proc.name,
-                                utils.read_status(dead_proc.name[1:])["status"]["converted"]))
-                if (dead_proc.name[0] == "C"
-                        and utils.read_status(dead_proc.name[1:])["status"]["converted"]):
+                # Hibernating processes should not be cancelled (e.g. in-curation)
+                dead_status = utils.read_table("status", dead_proc.name)
+                if not dead_status["success"]:
+                    logger.error("Unable to read status for '{}': {}".format(dead_proc.name,
+                                                                             dead_status))
+                    continue
+                logger.info("Dead: {} (hibernating {})"
+                            .format(dead_proc.name, dead_status["status"]["hibernating"]))
+                if dead_status["status"]["hibernating"] is True:
                     active_processes.remove(dead_proc)
-                    logger.debug("{}: Logged dead, not cancelled".format(dead_proc.name))
+                    logger.debug("{}: Hibernating".format(dead_proc.name))
                 else:
-                    cancel_res = utils.cancel_submission(dead_proc.name[1:])
+                    cancel_res = utils.cancel_submission(dead_proc.name)
                     if cancel_res["stopped"]:
                         active_processes.remove(dead_proc)
                         logger.debug("{}: Dead and cancelled/cleaned up"
@@ -106,13 +101,13 @@ def processor():
                                             dead_proc.name,
                                             cancel_res.get("error", "No error provided")))
         except Exception as e:
-            logger.error("Error life-checking processes: {}".format(e))
+            logger.error("Error life-checking processes: {}".format(repr(e)))
         sleep(CONFIG["PROCESSOR_SLEEP_TIME"])
 
     # After processing finished, shut down gracefully
     logger.info("Shutting down Connect")
     for proc in active_processes:
-        cancel_res = utils.cancel_submission(proc.name[1:])
+        cancel_res = utils.cancel_submission(proc.name)
         if cancel_res["stopped"]:
             logger.debug("{}: Shutdown".format(proc.name))
         else:
@@ -122,49 +117,53 @@ def processor():
     return
 
 
-def convert_driver(submission_type, metadata, source_id, test, access_token, user_id):
+def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     """The driver function for MOC.
     Modifies the status database as steps are completed.
 
     Arguments:
-    submission_type (str): "convert" (used for error-checking).
-    metadata (dict): The JSON passed to /convert.
+    metadata (dict): The JSON passed to /submit.
+    sub_conf (dict): Submission configuration information.
     source_id (str): The source name of this submission.
-    test (bool): If the submission is a test submission.
     access_token (str): The Globus Auth access token for the submitting user.
     user_id (str): The Globus ID of the submitting user.
     """
-    # TODO: Better check?
-    assert submission_type == "convert"
     # Setup
-    utils.update_status(source_id, "convert_start", "P", except_on_fail=True)
-    utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
+    utils.update_status(source_id, "sub_start", "P", except_on_fail=True)
+    utils.modify_status_entry(source_id, {"pid": os.getpid(), "hibernating": False},
+                              except_on_fail=True)
     try:
         # Connect auth
+        # CAAC required for user auth later
         mdf_conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
                                                                CONFIG["API_CLIENT_SECRET"])
-        mdf_transfer_authorizer = globus_sdk.ClientCredentialsAuthorizer(
-                                                mdf_conf_client, scopes=CONFIG["TRANSFER_SCOPE"])
-        mdf_transfer_client = globus_sdk.TransferClient(authorizer=mdf_transfer_authorizer)
+        mdf_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                           {"services": ["transfer"]})
+        mdf_clients = mdf_toolbox.confidential_login(mdf_creds)
+        mdf_transfer_client = mdf_clients["transfer"]
 
         # User auth
+        # When coming from curation, the access token (from the curator) is not used
         access_token = access_token.replace("Bearer ", "")
         dependent_grant = mdf_conf_client.oauth2_get_dependent_tokens(access_token)
-        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                                dependent_grant.data[0]["access_token"])
+        # Get specifically Transfer's access token
+        for grant in dependent_grant.data:
+            if grant["resource_server"] == "transfer.api.globus.org":
+                user_transfer_token = grant["access_token"]
+        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(user_transfer_token)
         user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
     except Exception as e:
-        utils.update_status(source_id, "convert_start", "F", text=repr(e), except_on_fail=True)
+        utils.update_status(source_id, "sub_start", "F", text=repr(e), except_on_fail=True)
         utils.complete_submission(source_id)
         return
 
     # Cancel the previous version(s)
     source_info = utils.split_source_id(source_id)
-    scan_res = utils.scan_status(fields="source_id",
-                                 filters=[("source_id", "^", source_info["source_name"]),
-                                          ("source_id", "<", source_id)])
+    scan_res = utils.scan_table(table_name="status", fields="source_id",
+                                filters=[("source_id", "^", source_info["source_name"]),
+                                         ("source_id", "<", source_id)])
     if not scan_res["success"]:
-        utils.update_status(source_id, "convert_start", "F", text=scan_res["error"],
+        utils.update_status(source_id, "sub_start", "F", text=scan_res["error"],
                             except_on_fail=True)
         utils.complete_submission(source_id)
         return
@@ -172,7 +171,7 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         old_source_id = old_source["source_id"]
         cancel_res = utils.cancel_submission(old_source_id, wait=True)
         if not cancel_res["stopped"]:
-            utils.update_status(source_id, "convert_start", "F",
+            utils.update_status(source_id, "sub_start", "F",
                                 text=cancel_res.get("error",
                                                     ("Unable to cancel previous "
                                                      "submission '{}'").format(old_source_id)),
@@ -184,378 +183,295 @@ def convert_driver(submission_type, metadata, source_id, test, access_token, use
         else:
             logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
 
-    utils.update_status(source_id, "convert_start", "S", except_on_fail=True)
-
-    # Download data locally, back up on MDF resources
+    utils.update_status(source_id, "sub_start", "S", except_on_fail=True)
     # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
+    if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
         utils.complete_submission(source_id)
         return
-    utils.update_status(source_id, "convert_download", "P", except_on_fail=True)
+
     local_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
-    backup_path = os.path.join(CONFIG["BACKUP_PATH"], source_id) + "/"
-    try:
-        # Download from user
-        for dl_res in utils.download_data(user_transfer_client, metadata.pop("data", []),
-                                          CONFIG["LOCAL_EP"], local_path,
-                                          admin_client=mdf_transfer_client, user_id=user_id):
-            if not dl_res["success"]:
-                msg = "During data download: " + dl_res["error"]
-                utils.update_status(source_id, "convert_download", "T", text=msg,
-                                    except_on_fail=True)
-        if not dl_res["success"]:
-            raise ValueError(dl_res["error"])
-
-        # Backup to MDF
-        if CONFIG["BACKUP_EP"] and not test:
-            backup_res = utils.backup_data(mdf_transfer_client, CONFIG["LOCAL_EP"], local_path,
-                                           CONFIG["BACKUP_EP"], backup_path)
-            if not backup_res["success"]:
-                raise ValueError(backup_res["error"])
-        else:
-            logger.debug("Skipping data backup - is test ({}) or no backup EP ({})"
-                         .format(test, bool(CONFIG["BACKUP_EP"])))
-
-    except Exception as e:
-        utils.update_status(source_id, "convert_download", "F", text=repr(e), except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-
-    utils.update_status(source_id, "convert_download", "M",
-                        text=("{} files will be processed "
-                              "({} archives extracted)").format(dl_res["total_files"],
-                                                                dl_res["num_extracted"]),
-                        except_on_fail=True)
-
-    # Handle service integration data directory
+    feedstock_file = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + ".json")
+    curation_state_file = os.path.join(CONFIG["CURATION_DATA"], source_id + ".json")
     service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
-    os.makedirs(service_data)
-
-    # Pull out special fields in metadata (the rest is the dataset)
-    services = metadata.pop("services", {})
-    parse_params = metadata.pop("index", {})
-    convert_config = metadata.pop("conversion_config", {})
-    # metadata should have data location
-    metadata["data"] = {
-        "endpoint_path": "globus://{}{}".format(CONFIG["BACKUP_EP"], backup_path),
-        "link": CONFIG["TRANSFER_WEB_APP_LINK"].format(CONFIG["BACKUP_EP"],
-                                                       urllib.parse.quote(backup_path))
-    }
-    # Add file info data
-    parse_params["file"] = {
-        "globus_endpoint": CONFIG["BACKUP_EP"],
-        "http_host": CONFIG["BACKUP_HOST"],
-        "local_path": local_path,
-        "host_path": backup_path
-    }
-    convert_params = {
-        "dataset": metadata,
-        "parsers": parse_params,
-        "service_data": service_data,
-        "group_config": mdf_toolbox.dict_merge(convert_config, CONFIG["GROUPING_RULES"]),
-        "repo_config": CONFIG["REPOSITORY_RULES"],
-        "num_transformers": CONFIG["NUM_TRANSFORMERS"]
-    }
-
-    # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
-        logger.debug("{}: Cancel signal acknowledged".format(source_id))
-        utils.complete_submission(source_id)
-        return
-
-    # Convert data
-    utils.update_status(source_id, "converting", "P", except_on_fail=True)
-    try:
-        feedstock, num_groups, extensions = convert(local_path, convert_params)
-    except Exception as e:
-        utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    else:
-        utils.modify_status_entry(source_id, {"extensions": extensions})
-        # feedstock minus dataset entry is records
-        num_parsed = len(feedstock) - 1
-        # If nothing in feedstock, panic
-        if num_parsed < 0:
-            utils.update_status(source_id, "converting", "F",
-                                text="Could not parse dataset entry", except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        # If no records, warn user
-        elif num_parsed == 0:
-            utils.update_status(source_id, "converting", "U",
-                                text=("No records were parsed out of {} groups"
-                                      .format(num_groups)), except_on_fail=True)
-        else:
-            utils.update_status(source_id, "converting", "M",
-                                text=("{} records parsed out of {} groups"
-                                      .format(num_parsed, num_groups)), except_on_fail=True)
-        logger.debug("{}: {} entries parsed".format(source_id, len(feedstock)))
-
-    # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
-        logger.debug("{}: Cancel signal acknowledged".format(source_id))
-        utils.complete_submission(source_id)
-        return
-
-    # Pass dataset to /ingest
-    utils.update_status(source_id, "convert_ingest", "P", except_on_fail=True)
-    try:
-        # Write out feedstock
-        feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_raw.json")
-        with open(feed_path, 'w') as stock:
-            for entry in feedstock:
-                json.dump(entry, stock)
-                stock.write("\n")
-        ingest_args = {
-            "feedstock_location": "globus://{}{}".format(CONFIG["LOCAL_EP"], feed_path),
-            "source_name": source_id,
-            "data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)],
-            "services": services,
-            "service_data": ["globus://{}{}".format(CONFIG["LOCAL_EP"], service_data)],
-            "test": test
-        }
-        headers = {}
-        tokens = mdf_conf_client.oauth2_client_credentials_tokens(
-                                    requested_scopes=CONFIG["API_SCOPE"])
-        connect_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                            tokens.by_resource_server
-                                            ["mdf_dataset_submission"]["access_token"])
-        connect_authorizer.set_authorization_header(headers)
-        ingest_res = requests.post(CONFIG["INGEST_URL"],
-                                   json=ingest_args,
-                                   headers=headers)
-    except Exception as e:
-        utils.update_status(source_id, "convert_ingest", "F", text=repr(e),
-                            except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    else:
-        if ingest_res.status_code < 300 and ingest_res.json().get("success"):
-            utils.update_status(source_id, "convert_ingest", "S", except_on_fail=True)
-        else:
-            utils.update_status(source_id, "convert_ingest", "F",
-                                text=str(ingest_res.content), except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-
-    # Set sentinel for convert finished
-    utils.modify_status_entry(source_id, {"converted": True}, except_on_fail=True)
-
-    return {
-        "success": True,
-        "source_id": source_id
-        }
-
-
-def ingest_driver(submission_type, feedstock_location, source_id, services, data_loc,
-                  service_loc, access_token, user_id):
-    """Finalize and ingest feedstock.
-
-    Arguments:
-    submission_type (str): "ingest" (used for error-checking).
-    feedstock_location (str or list of str): The location(s) of the MDF-format feedstock.
-    source_id (str): The source name of this submission.
-    services (dict): The optional services and configurations requested.
-    data_loc (str or list of str): The location of the data.
-    service_loc (str or list of str): The location of service integration data.
-    access_token (str): The Globus Auth access token for the submitting user.
-    user_id (str): The Globus ID of the submitting user.
-    """
-    # TODO: Better check?
-    assert submission_type == "ingest"
-    utils.modify_status_entry(source_id, {"pid": os.getpid()}, except_on_fail=True)
-    utils.update_status(source_id, "ingest_start", "P", except_on_fail=True)
-    # Will need client to ingest data
-    try:
-        clients = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(
-                            CONFIG["GLOBUS_CREDS"],
-                            {"services": ["search_ingest", "publish", "transfer"]}))
-        publish_client = clients["publish"]
-        mdf_transfer_client = clients["transfer"]
-
-        base_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_raw.json")
-        final_feed_path = os.path.join(CONFIG["FEEDSTOCK_PATH"], source_id + "_final.json")
-
-        access_token = access_token.replace("Bearer ", "")
-        conf_client = globus_sdk.ConfidentialAppAuthClient(CONFIG["API_CLIENT_ID"],
-                                                           CONFIG["API_CLIENT_SECRET"])
-        dependent_grant = conf_client.oauth2_get_dependent_tokens(access_token)
-        user_transfer_authorizer = globus_sdk.AccessTokenAuthorizer(
-                                                dependent_grant.data[0]["access_token"])
-        user_transfer_client = globus_sdk.TransferClient(authorizer=user_transfer_authorizer)
-    except Exception as e:
-        utils.update_status(source_id, "ingest_start", "F", text=repr(e), except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-
-    # Cancel the previous version(s)
-    source_info = utils.split_source_id(source_id)
-    if not source_info["success"]:
-        utils.update_status(source_id, "ingest_start", "F",
-                            text="Invalid source_id: " + source_id, except_on_fail=True)
-    scan_res = utils.scan_status(fields="source_id",
-                                 filters=[("source_id", "^", source_info["source_name"]),
-                                          ("source_id", "!=", source_id)])
-    if not scan_res["success"]:
-        utils.update_status(source_id, "ingest_start", "F", text=scan_res["error"],
-                            except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    for old_source in scan_res["results"]:
-        old_source_id = old_source["source_id"]
-        cancel_res = utils.cancel_submission(old_source_id, wait=True)
-        if not cancel_res["stopped"]:
-            utils.update_status(source_id, "ingest_start", "F",
-                                text=cancel_res.get("error",
-                                                    ("Unable to cancel previous "
-                                                     "submission '{}'").format(old_source_id)),
-                                except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        if cancel_res["success"]:
-            logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
-        else:
-            logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
-
-    utils.update_status(source_id, "ingest_start", "S", except_on_fail=True)
-    utils.modify_status_entry(source_id, {"active": True}, except_on_fail=True)
-
-    # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
-        logger.debug("{}: Cancel signal acknowledged".format(source_id))
-        utils.complete_submission(source_id)
-        return
-
-    utils.update_status(source_id, "ingest_download", "P", except_on_fail=True)
-    try:
-        for dl_res in utils.download_data(user_transfer_client, feedstock_location,
-                                          CONFIG["LOCAL_EP"], base_feed_path,
-                                          admin_client=mdf_transfer_client, user_id=user_id):
-            if not dl_res["success"]:
-                utils.update_status(source_id, "ingest_download", "T",
-                                    text=dl_res["error"], except_on_fail=True)
-    except Exception as e:
-        utils.update_status(source_id, "ingest_download", "F", text=repr(e),
-                            except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    if not dl_res["success"]:
-        utils.update_status(source_id, "ingest_download", "F", text=dl_res["error"],
-                            except_on_fail=True)
-        utils.complete_submission(source_id)
-        return
-    else:
-        logger.info("{}: Feedstock downloaded".format(source_id))
-
-    # If the data should be local, make sure it is
-    # Currently only Publish needs the data
-    if services.get("globus_publish"):
-        if not data_loc:
-            utils.update_status(source_id, "ingest_download", "F",
-                                text=("Globus Publish integration was selected, "
-                                      "but the data location was not provided."),
-                                except_on_fail=True)
-            utils.update_status(source_id, "ingest_publish", "F",
-                                text="Unable to publish data without location.",
-                                except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        else:
-            # If all locations are Globus, don't need to download locally
-            if all([loc.startswith("globus://") for loc in data_loc]):
-                utils.update_status(source_id, "ingest_download", "N", except_on_fail=True)
-                data_ep = None
-                data_path = None
-            else:
-                utils.update_status(source_id, "ingest_download", "P", except_on_fail=True)
-                # Will not transfer anything if already in place
-                data_ep = CONFIG["LOCAL_EP"]
-                data_path = os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/"
-                try:
-                    for dl_res in utils.download_data(user_transfer_client, data_loc,
-                                                      data_ep, data_path,
-                                                      admin_client=mdf_transfer_client,
-                                                      user_id=user_id):
-                        if not dl_res["success"]:
-                            utils.update_status(source_id, "ingest_download", "T",
-                                                text=dl_res["error"], except_on_fail=True)
-                except Exception as e:
-                    utils.update_status(source_id, "ingest_download", "F", text=repr(e),
-                                        except_on_fail=True)
-                    utils.complete_submission(source_id)
-                    return
-                if not dl_res["success"]:
-                    utils.update_status(source_id, "ingest_download", "F",
-                                        text=dl_res["error"], except_on_fail=True)
-                    utils.complete_submission(source_id)
-                    return
-                else:
-                    utils.update_status(source_id, "ingest_download", "S",
-                                        except_on_fail=True)
-                    logger.debug("{}: Ingest data downloaded".format(source_id))
-    else:
-        utils.update_status(source_id, "ingest_download", "S", except_on_fail=True)
-
-    # Same for integrated service data
-    if services.get("citrine"):
-        if not service_loc:
-            utils.update_status(source_id, "ingest_integration", "F",
-                                text=("Citrine integration was selected, but the"
-                                      "integration data location was not provided."),
-                                except_on_fail=True)
-            utils.update_status(source_id, "ingest_citrine", "F",
-                                text="Unable to upload PIFs without location.",
-                                except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        else:
-            utils.update_status(source_id, "ingest_integration", "P", except_on_fail=True)
-            # Will not transfer anything if already in place
-            service_data = os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
+    os.makedirs(service_data, exist_ok=True)
+    num_files = 0
+    # Curation skip point
+    if type(sub_conf["curation"]) is not str:
+        # If we're converting, download data locally, then set canon source to local
+        # This allows non-Globus sources (because to download to Connect's EP)
+        if not sub_conf["no_convert"]:
+            utils.update_status(source_id, "data_download", "P", except_on_fail=True)
             try:
-                for dl_res in utils.download_data(user_transfer_client, service_loc,
-                                                  CONFIG["LOCAL_EP"], service_data,
+                # Download from user
+                for dl_res in utils.download_data(user_transfer_client, sub_conf["data_sources"],
+                                                  CONFIG["LOCAL_EP"], local_path,
                                                   admin_client=mdf_transfer_client,
                                                   user_id=user_id):
                     if not dl_res["success"]:
-                        utils.update_status(source_id, "ingest_integration", "T",
-                                            text=dl_res["error"], except_on_fail=True)
+                        msg = "During data download: " + dl_res["error"]
+                        utils.update_status(source_id, "data_download", "T", text=msg,
+                                            except_on_fail=True)
+                if not dl_res["success"]:
+                    raise ValueError(dl_res["error"])
+                num_files = dl_res["total_files"]
+
             except Exception as e:
-                utils.update_status(source_id, "ingest_integration", "F", text=repr(e),
+                utils.update_status(source_id, "data_download", "F", text=repr(e),
                                     except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
-            if not dl_res["success"]:
-                utils.update_status(source_id, "ingest_integration", "F",
-                                    text=dl_res["error"], except_on_fail=True)
+
+            utils.update_status(source_id, "data_download", "M",
+                                text=("{} files will be converted ({} archives extracted)"
+                                      .format(num_files, dl_res["num_extracted"])),
+                                except_on_fail=True)
+            canon_data_sources = ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)]
+
+        # If we're not converting, set canon source to only source
+        # Also create local dir with no data to "convert" for dataset entry
+        else:
+            utils.update_status(source_id, "data_download", "N", except_on_fail=True)
+            os.makedirs(local_path)
+            canon_data_sources = sub_conf["data_sources"]
+
+        # Move data from canon source(s) to canon dest (if different)
+        utils.update_status(source_id, "data_transfer", "P", except_on_fail=True)
+        for data_source in canon_data_sources:
+            if data_source != sub_conf["canon_destination"]:
+                logger.debug("Data transfer: '{}' to '{}'".format(data_source,
+                                                                  sub_conf["canon_destination"]))
+                backup_res = utils.backup_data(mdf_transfer_client, data_source,
+                                               sub_conf["canon_destination"])
+                if not backup_res[sub_conf["canon_destination"]]:
+                    err_text = ("Transfer from '{}' failed: {}"
+                                .format(data_source, backup_res[sub_conf["canon_destination"]]))
+                    utils.update_status(source_id, "data_transfer", "F", text=err_text,
+                                        except_on_fail=True)
+                    return
+        utils.update_status(source_id, "data_transfer", "S", except_on_fail=True)
+
+        # Add file info data
+        sub_conf["index"]["file"] = {
+            "globus_host": sub_conf["canon_destination"],
+            "http_host": utils.lookup_http_host(sub_conf["canon_destination"]),
+            "local_path": local_path,
+        }
+        convert_params = {
+            "dataset": metadata,
+            "parsers": sub_conf["index"],
+            "service_data": service_data,
+            "feedstock_file": feedstock_file,
+            "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
+                                                   CONFIG["GROUPING_RULES"]),
+            "validation_info": {
+                "project_blocks": sub_conf.get("project_blocks", []),
+                "required_fields": sub_conf.get("required_fields", [])
+            }
+        }
+
+        # NOTE: Cancellation point
+        if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
+            logger.debug("{}: Cancel signal acknowledged".format(source_id))
+            utils.complete_submission(source_id)
+            return
+
+        # Convert data
+        utils.update_status(source_id, "converting", "P", except_on_fail=True)
+        try:
+            convert_res = convert(local_path, convert_params)
+            if not convert_res["success"]:
+                utils.update_status(source_id, "converting", "F", text=convert_res["error"],
+                                    except_on_fail=True)
+                return
+            dataset = convert_res["dataset"]
+            num_records = convert_res["num_records"]
+            num_groups = convert_res["num_groups"]
+            extensions = convert_res["extensions"]
+        except Exception as e:
+            utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+            utils.complete_submission(source_id)
+            return
+        else:
+            utils.modify_status_entry(source_id, {"extensions": extensions})
+            # If nothing in dataset, panic
+            if not dataset:
+                utils.update_status(source_id, "converting", "F",
+                                    text="Could not parse dataset entry", except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
+            # If not converting, show status as skipped
+            # Also check if records were parsed inappropriately, flag error in log
+            elif sub_conf.get("no_convert"):
+                if num_records != 0:
+                    logger.error("{}: Records parsed with no_convert flag ({} records)"
+                                 .format(source_id, num_records))
+                utils.update_status(source_id, "converting", "N", except_on_fail=True)
+            # If no records, warn user
+            elif num_records < 1:
+                utils.update_status(source_id, "converting", "U",
+                                    text=("No records were parsed out of {} groups"
+                                          .format(num_groups)), except_on_fail=True)
             else:
-                utils.update_status(source_id, "ingest_integration", "S", except_on_fail=True)
-                logger.debug("{}: Integration data downloaded".format(source_id))
+                utils.update_status(source_id, "converting", "M",
+                                    text=("{} records parsed out of {} groups"
+                                          .format(num_records, num_groups)), except_on_fail=True)
+            logger.debug("{}: {} entries parsed".format(source_id, num_records+1))
+
+        # NOTE: Cancellation point
+        if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
+            logger.debug("{}: Cancel signal acknowledged".format(source_id))
+            utils.complete_submission(source_id)
+            return
+
+        ###################
+        #  Curation step  #
+        ###################
+        # Trigger curation if required
+        if sub_conf.get("curation"):
+            utils.update_status(source_id, "curation", "P", except_on_fail=True)
+            # Create curation task in curation table
+            with open(feedstock_file) as f:
+                # Discard dataset entry
+                f.readline()
+                # Save first few records
+                # Append the json-loaded form of records
+                # The number of records should be at most the default number,
+                # and less if less are present
+                curation_records = []
+                [curation_records.append(json.loads(f.readline()))
+                 for i in range(min(CONFIG["NUM_CURATION_RECORDS"], num_records))]
+            curation_dataset = deepcopy(dataset)
+            # Numbers can be converted into Decimal by DynamoDB, which causes JSON errors
+            curation_dataset["mdf"].pop("scroll_id", None)
+            curation_dataset["mdf"].pop("version", None)
+            curation_task = {
+                "source_id": source_id,
+                "allowed_curators": sub_conf.get("permission_groups", sub_conf["acl"]),
+                "dataset": json.dumps(dataset),
+                "sample_records": json.dumps(curation_records),
+                "submission_info": sub_conf,
+                "parsing_summary": ("{} records were parsed out of {} groups from {} files"
+                                    .format(num_records, num_groups, num_files)),
+                "curation_start_date": str(datetime.today())
+            }
+            # If no allowed curators or public allowed, set to public
+            if (not curation_task["allowed_curators"]
+                    or "public" in curation_task["allowed_curators"]):
+                curation_task["allowed_curators"] = ["public"]
+
+            # Create task in database
+            create_res = utils.create_curation_task(curation_task)
+            if not create_res["success"]:
+                utils.update_status(source_id, "curation", "F",
+                                    text=create_res.get("error", "Unable to create curation task"),
+                                    except_on_fail=True)
+                return
+
+            # Save state
+            os.makedirs(CONFIG["CURATION_DATA"], exist_ok=True)
+            with open(curation_state_file, 'w') as save_file:
+                state_data = {
+                    "source_id": source_id,
+                    "sub_conf": sub_conf,
+                    "dataset": dataset
+                }
+                json.dump(state_data, save_file)
+                logger.debug("{}: Saved state for curation".format(source_id))
+
+            # Trigger hibernation
+            utils.modify_status_entry(source_id, {"hibernating": True}, except_on_fail=True)
+            return
+        else:
+            utils.update_status(source_id, "curation", "N", except_on_fail=True)
+
+    # Returning from curation
+    # Submission accepted
+    elif sub_conf["curation"].startswith("Accept"):
+        # Save curation message
+        curation_message = sub_conf["curation"]
+        # Load state
+        with open(curation_state_file) as save_file:
+            state_data = json.load(save_file)
+            # Verify source_ids match
+            if state_data["source_id"] != source_id:
+                logger.error("State data incorrect: '{}' is not '{}'"
+                             .format(state_data["source_id"], source_id))
+                utils.update_status(source_id, "curation", "F",
+                                    text="Submission corrupted", except_on_fail=True)
+            # Load state variables back
+            sub_conf = state_data["sub_conf"]
+            dataset = state_data["dataset"]
+        logger.debug("{}: Loaded state from curation".format(source_id))
+        # Delete state file
+        try:
+            os.remove(curation_state_file)
+        except FileNotFoundError:
+            utils.update_status(source_id, "curation", "F",
+                                text="Unable to cleanly load curation information",
+                                except_on_fail=True)
+            return
+
+        # Delete curation task
+        delete_res = utils.delete_from_table("curation", source_id)
+        if not delete_res["success"]:
+            utils.update_status(source_id, "curation", "F",
+                                text=delete_res.get("error", "Curation cleanup failed"),
+                                except_on_fail=True)
+            return
+        utils.update_status(source_id, "curation", "M", text=curation_message, except_on_fail=True)
+    # Submission rejected
+    elif sub_conf["curation"].startswith("Reject"):
+        # Delete state file
+        try:
+            os.remove(curation_state_file)
+        except FileNotFoundError:
+            logger.error("{}: Unable to delete curation state file '{}'"
+                         .format(source_id, curation_state_file))
+        # Delete curation task
+        delete_res = utils.delete_from_table("curation", source_id)
+        if not delete_res["success"]:
+            logger.error("{}: Unable to delete rejected curation from database: {}"
+                         .format(source_id, delete_res.get("error")))
+
+        utils.update_status(source_id, "curation", "F", text=sub_conf["curation"],
+                            except_on_fail=True)
+        return
+    # Curation invalid
     else:
-        utils.update_status(source_id, "ingest_integration", "N", except_on_fail=True)
+        utils.update_status(source_id, "curation", "F",
+                            text="Unknown curation state: '{}'".format(sub_conf["curation"]),
+                            except_on_fail=True)
+        return
+
+    ###################
+    #  Post-curation  #
+    ###################
 
     # Integrations
     service_res = {}
 
     # NOTE: Cancellation point
-    if utils.read_status(source_id).get("status", {}).get("cancelled"):
+    if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
         utils.complete_submission(source_id)
         return
 
     # MDF Search (mandatory)
     utils.update_status(source_id, "ingest_search", "P", except_on_fail=True)
-    search_config = services.get("mdf_search", {})
+    search_config = sub_conf["services"].get("mdf_search", {})
     try:
-        search_res = search_ingest(
-                        feedstock=base_feed_path, source_id=source_id,
-                        index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                        batch_size=CONFIG["SEARCH_BATCH_SIZE"], feedstock_save=final_feed_path)
+        search_args = {
+            "feedstock_file": feedstock_file,
+            "source_id": source_id,
+            "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
+            "batch_size": CONFIG["SEARCH_BATCH_SIZE"]
+        }
+        search_res = utils.search_ingest(**search_args)
+        if not search_res["success"]:
+            utils.update_status(source_id, "ingest_search", "F",
+                                text="; ".join(search_res["errors"]), except_on_fail=True)
+            return
     except Exception as e:
         utils.update_status(source_id, "ingest_search", "F", text=repr(e),
                             except_on_fail=True)
@@ -565,7 +481,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         # Handle errors
         if len(search_res["errors"]) > 0:
             utils.update_status(source_id, "ingest_search", "F",
-                                text=("{} batches of records failed to ingest (up to {} records"
+                                text=("{} batches of records failed to ingest (up to {} records "
                                       "total)").format(len(search_res["errors"]),
                                                        (len(search_res["errors"])
                                                         * CONFIG["SEARCH_BATCH_SIZE"]),
@@ -574,68 +490,92 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             utils.complete_submission(source_id)
             return
 
-        # Other services use the dataset information
-        with open(final_feed_path) as f:
-            dataset = json.loads(f.readline())
         # Back up feedstock
-        backup_feed_path = os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
-                                        source_id + "_final.json")
-        try:
-            if CONFIG["BACKUP_EP"]:
-                transfer = mdf_toolbox.custom_transfer(
-                                mdf_transfer_client, CONFIG["LOCAL_EP"], CONFIG["BACKUP_EP"],
-                                [(final_feed_path, backup_feed_path)],
-                                interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                inactivity_time=CONFIG["TRANSFER_DEADLINE"],
-                                notify=False)
-                for event in transfer:
-                    if not event["success"]:
-                        logger.debug(event)
-                if not event["success"]:
-                    raise ValueError(event.get("code", "No code")
-                                     + ": " + event.get("description", "No description"))
-            else:
-                logger.info("Skipping feedstock backup - no backup EP set")
-        except Exception as e:
+        source_feed_loc = "globus://{}{}".format(CONFIG["LOCAL_EP"], feedstock_file)
+        backup_feed_loc = "globus://{}{}".format(CONFIG["BACKUP_EP"],
+                                                 os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
+                                                              source_id + "_final.json"))
+        feed_backup_res = utils.backup_data(mdf_transfer_client, source_feed_loc,
+                                            backup_feed_loc)
+        if feed_backup_res[backup_feed_loc] is not True:
             utils.update_status(source_id, "ingest_search", "R",
-                                text="Feedstock backup failed: {}".format(str(e)),
+                                text=("Feedstock backup failed: {}"
+                                      .format(feed_backup_res[backup_feed_loc])),
                                 except_on_fail=True)
         else:
             utils.update_status(source_id, "ingest_search", "S", except_on_fail=True)
-            os.remove(final_feed_path)
+            os.remove(feedstock_file)
         service_res["mdf_search"] = "This dataset was ingested to MDF Search."
 
-    # Globus Publish
-    if services.get("globus_publish"):
-        utils.update_status(source_id, "ingest_publish", "P", except_on_fail=True)
-        # collection should be in id or name
-        collection = (services["globus_publish"].get("collection_id")
-                      or services["globus_publish"].get("collection_name")
-                      or CONFIG["DEFAULT_PUBLISH_COLLECTION"])
-        try:
-            fin_res = utils.globus_publish_data(publish_client, mdf_transfer_client,
-                                                dataset, collection,
-                                                data_ep, data_path, data_loc)
-        except Exception as e:
-            utils.update_status(source_id, "ingest_publish", "R", text=repr(e),
-                                except_on_fail=True)
+    # Move files to data_destinations
+    if sub_conf.get("data_destinations"):
+        utils.update_status(source_id, "ingest_backup", "P", except_on_fail=True)
+        backup_res = utils.backup_data(mdf_transfer_client,
+                                       storage_loc=sub_conf["canon_destination"],
+                                       backup_locs=sub_conf["data_destinations"])
+        if not all([val is True for val in backup_res.values()]):
+            err_msg = "; ".join(["'{}' failed: {}".format(k, v) for k, v in backup_res.items()
+                                 if v is not True])
+            utils.update_status(source_id, "ingest_backup", "F", text=err_msg, except_on_fail=True)
         else:
-            stat_link = CONFIG["PUBLISH_LINK"].format(fin_res["id"])
-            utils.update_status(source_id, "ingest_publish", "L",
-                                text=fin_res["dc.description.provenance"], link=stat_link,
-                                except_on_fail=True)
-            service_res["globus_publish"] = stat_link
+            utils.update_status(source_id, "ingest_backup", "S", except_on_fail=True)
+    else:
+        utils.update_status(source_id, "ingest_backup", "N", except_on_fail=True)
+
+    # MDF Publish
+    if sub_conf["services"].get("mdf_publish"):
+        publish_conf = sub_conf["services"]["mdf_publish"]
+
+        # Data already moved to canon dest as a requirement of success so far
+
+        # Mint DOI
+        try:
+            # Create DOI and add to dataset DC
+            dataset["dc"]["identifier"] = {
+                "identifier": utils.make_dc_doi(test=publish_conf["doi_test"]),
+                "identifierType": "DOI"
+            }
+            # Add publication dates and publisher
+            dataset["dc"]["publisher"] = "Materials Data Facility"
+            dataset["dc"]["publicationYear"] = datetime.now().year
+            if not dataset["dc"].get("dates"):
+                dataset["dc"]["dates"] = []
+            dataset["dc"]["dates"].append({
+                "date": str(datetime.now().date()),
+                "dateType": "Accepted"
+            })
+            landing_page = CONFIG["DATASET_LANDING_PAGE"].format(source_id)
+            mdf_publish_res = utils.datacite_mint_doi(dataset["dc"], test=publish_conf["doi_test"],
+                                                      url=landing_page)
+        except Exception as e:
+            logger.error("DOI minting exception: {}".format(repr(e)))
+            utils.update_status(source_id, "ingest_publish", "F",
+                                text="DOI minting failed", except_on_fail=True)
+            return
+        else:
+            if not mdf_publish_res["success"]:
+                logger.error("DOI minting failed: {}".format(mdf_publish_res["error"]))
+                utils.update_status(source_id, "ingest_publish", "F",
+                                    text="Unable to mint DOI for publication", except_on_fail=True)
+                return
+
+        utils.update_status(source_id, "ingest_publish", "L",
+                            text=("Dataset published though MDF Publish with DOI '{}'"
+                                  .format(dataset["dc"]["identifier"]["identifier"])),
+                            link=landing_page, except_on_fail=True)
+        service_res["mdf_publish"] = landing_page
+
     else:
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
 
-    # Citrine
-    if services.get("citrine"):
+    # Citrine (skip if not converted)
+    if sub_conf["services"].get("citrine") and not sub_conf.get("no_convert"):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Get old Citrine dataset version, if exists
-        scan_res = utils.scan_status(fields=["source_id", "citrine_id"],
-                                     filters=[("source_name", "==", source_info["source_name"]),
-                                              ("citrine_id", "!=", None)])
+        scan_res = utils.scan_table(table_name="status", fields=["source_id", "citrine_id"],
+                                    filters=[("source_name", "==", source_info["source_name"]),
+                                             ("citrine_id", "!=", None)])
         if not scan_res["success"]:
             logger.error("Status scan failed: {}".format(scan_res["error"]))
         old_cit_subs = scan_res.get("results", [])
@@ -650,9 +590,9 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
             # Check for PIFs to ingest
             cit_path = os.path.join(service_data, "citrine")
             if len(os.listdir(cit_path)) > 0:
-                cit_res = utils.citrine_upload(cit_path, CONFIG["CITRINATION_API_KEY"], dataset,
-                                               old_citrine_id,
-                                               public=services["citrine"].get("public", True))
+                cit_res = utils.citrine_upload(
+                                cit_path, CONFIG["CITRINATION_API_KEY"], dataset, old_citrine_id,
+                                public=sub_conf["services"]["citrine"].get("public", True))
             else:
                 cit_res = {
                     "success": False,
@@ -661,7 +601,7 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
                     "failure_count": 0
                 }
         except Exception as e:
-            utils.update_status(source_id, "ingest_citrine", "R", text=repr(e),
+            utils.update_status(source_id, "ingest_citrine", "R", text=str(e),
                                 except_on_fail=True)
         else:
             if not cit_res["success"]:
@@ -692,10 +632,11 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
         utils.update_status(source_id, "ingest_citrine", "N", except_on_fail=True)
 
     # MRR
-    if services.get("mrr"):
+    if sub_conf["services"].get("mrr"):
         utils.update_status(source_id, "ingest_mrr", "P", except_on_fail=True)
         try:
-            if isinstance(services["mrr"], dict) and services["mrr"].get("test"):
+            if (isinstance(sub_conf["services"]["mrr"], dict)
+                    and sub_conf["services"]["mrr"].get("test")):
                 mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
             else:
                 mrr_title = dataset["dc"]["titles"][0]["title"]
@@ -748,8 +689,8 @@ def ingest_driver(submission_type, feedstock_location, source_id, services, data
     utils.update_status(source_id, "ingest_cleanup", "P", except_on_fail=True)
 
     dataset["services"] = service_res
-    ds_update = update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                                    updated_entry=dataset, overwrite=False)
+    ds_update = utils.update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
+                                          updated_entry=dataset, overwrite=False)
     if not ds_update["success"]:
         utils.update_status(source_id, "ingest_cleanup", "F",
                             text=ds_update.get("error", "Unable to update dataset"),

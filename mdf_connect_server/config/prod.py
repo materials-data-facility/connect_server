@@ -7,8 +7,6 @@ PROD = {
 
     "FORM_URL": "https://connect.materialsdatafacility.org/",
 
-    "DEFAULT_TEST_FLAG": False,
-
     "TRANSFER_DEADLINE": 24 * 60 * 60,  # 1 day, in seconds
 
     "INGEST_URL": "https://api.materialsdatafacility.org/ingest",
@@ -26,6 +24,10 @@ PROD = {
 
     "DEFAULT_CLEANUP": True,
 
+    "DEFAULT_DOI_TEST": False,
+    "NUM_DOI_CHARS": 4,  # Characters per section
+    "NUM_DOI_SECTIONS": 2,
+
     "DEFAULT_PUBLISH_COLLECTION": 21,
     "TEST_PUBLISH_COLLECTION": 35,
 
@@ -36,5 +38,6 @@ PROD = {
     "SQS_QUEUE": "mdfc_prod.fifo",
     "SQS_GROUP_ID": "mdf_connect_prod",
 
-    "DYNAMO_TABLE": "prod-status-alpha-1"
+    "DYNAMO_STATUS_TABLE": "prod-status-alpha-1",
+    "DYNAMO_CURATION_TABLE": "prod-curation-alpha-1"
 }

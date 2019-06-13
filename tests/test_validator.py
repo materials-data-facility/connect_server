@@ -1,3 +1,4 @@
+from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import Validator
 import pytest
 
@@ -51,7 +52,7 @@ def test_validator():
             "source_id": "foo_bar_dataset_v1",
             "acl": ["public"],
             "version": 1,
-            "repositories": ["MDF"]
+            "organizations": ["MDF"]
         },
         "mrr": {
             "dataOrigin": ["experimental"]
@@ -205,7 +206,7 @@ def test_validator():
             'source_id': 'foo_bar_dataset_v1',
             'acl': ['public'],
             'version': 1,
-            'repositories': ['MDF'],
+            'organizations': ['MDF'],
             'scroll_id': 0,
             'resource_type': 'dataset'
         },
@@ -225,7 +226,7 @@ def test_validator():
             'scroll_id': 1,
             'resource_type': 'record',
             'version': 1,
-            'repositories': ['MDF']
+            'organizations': ['MDF']
         },
         'files': [{
             'data_type': 'example',
@@ -240,7 +241,7 @@ def test_validator():
             'scroll_id': 3,
             'resource_type': 'record',
             'version': 1,
-            'repositories': ['MDF']
+            'organizations': ['MDF']
         },
         'files': [{
             'data_type': 'example',
@@ -287,7 +288,7 @@ def test_validator():
         }
     }]
 
-    val = Validator()
+    val = Validator(schema_path=CONFIG["SCHEMA_PATH"])
     assert val.status() == "Dataset not started."
     assert val.add_record({}) == {
                             "success": False,
@@ -323,7 +324,7 @@ def test_validator():
 
     bad_res = val.add_record(bad_record)
     assert bad_res["success"] is False
-    assert "Invalid metadata" in bad_res["error"]
+    assert "Invalid record metadata" in bad_res["error"]
 
     gr2_add_res = val.add_record(good_record2)
     assert gr2_add_res["success"], gr2_add_res["error"]
@@ -346,4 +347,4 @@ def test_validator():
 
     bad_res = val.start_dataset(bad_dataset)
     assert bad_res["success"] is False
-    assert "Invalid metadata" in bad_res["error"]
+    assert "Invalid dataset metadata" in bad_res["error"]

@@ -5,6 +5,7 @@ DEFAULT = {
     "LOCAL_PATH": os.path.expanduser("~/data/"),
     "FEEDSTOCK_PATH": os.path.expanduser("~/feedstock/"),
     "SERVICE_DATA": os.path.expanduser("~/integrations/"),
+    "CURATION_DATA": os.path.expanduser("~/curation/"),
 
     "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
 
@@ -13,7 +14,6 @@ DEFAULT = {
 
     "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
-    "SEARCH_SUBJECT_PATTERN": "https://materialsdatafacility.org/data/{}/{}",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
@@ -24,25 +24,14 @@ DEFAULT = {
                             " restart. Please resubmit your dataset. We apologize for the"
                             " inconvenience."),
 
+    "NUM_CURATION_RECORDS": 3,
+
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
 
-    "PUBLISH_COLLECTIONS": {
-        "21": {
-            "name": "MDF Open",
-            "group": "1c562600-1083-11e6-846d-22000ab80e73"
-        },
-        "35": {
-            "name": "MDF Test",
-            "group": "115fb604-a2cb-11e7-a5d0-22000b500e8d"
-        },
-        "55": {
-            "name": "NUCAPT",
-            "group": "7ac7bef4-ba8e-11e7-9f15-22000b93c8ac"
-        }
-    },
-    "PUBLISH_LINK": "https://publish.globus.org/jspui/handle/ITEM/{}",
+    "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}",
+    "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}.{}",
 
     "CITRINATION_LINK": "https://citrination.com/datasets/{cit_ds_id}/",
 
@@ -58,8 +47,7 @@ DEFAULT = {
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
-    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a",
-    "INGEST_GROUP_ID": "3ce2c53e-3752-11e8-891c-0e00fd09bf20"
+    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
 }
 with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
     DEFAULT["MRR_TEMPLATE"] = f.read()

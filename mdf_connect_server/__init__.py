@@ -2,7 +2,8 @@ import os
 
 from mdf_toolbox import dict_merge
 
-from mdf_connect_server.config import CONVERSION, DEFAULT, DEV, KEYS, PROD
+from mdf_connect_server.config import (DEFAULT, DEV, GLOBUS_HTTP_HOSTS,
+                                       GROUPINGS, KEYS, ORGANIZATIONS, PROD)
 
 
 CONFIG = {}
@@ -17,7 +18,9 @@ elif server == "development":
 else:
     raise EnvironmentError("FLASK_ENV not correctly set! FLASK_ENV must be 'production'"
                            " or 'development', even for processing only.")
-CONFIG = dict_merge(CONVERSION, CONFIG)
+CONFIG["GLOBUS_HTTP_HOSTS"] = GLOBUS_HTTP_HOSTS
+CONFIG["GROUPING_RULES"] = GROUPINGS
+CONFIG["ORGANIZATIONS"] = ORGANIZATIONS
 # Add credentials
 CONFIG["GLOBUS_CREDS"] = {
     "app_name": "MDF Open Connect",
@@ -25,7 +28,7 @@ CONFIG["GLOBUS_CREDS"] = {
     "client_secret": CONFIG["API_CLIENT_SECRET"]
 }
 
-from mdf_connect_server.utils import utils  # noqa: E402,F401
+# from mdf_connect_server.utils import utils  # noqa: E402,F401
 # NOTE: flake8 complains about import not at top and import unused; this is fine
 
 # Make required dirs

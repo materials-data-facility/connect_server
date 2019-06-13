@@ -1,9 +1,10 @@
 from copy import deepcopy
-from datetime import date
 import json
 import logging
 import os
+import random
 import re
+import string
 import subprocess
 import time
 import urllib
@@ -41,9 +42,12 @@ DMO_CLIENT = boto3.resource('dynamodb',
                             aws_access_key_id=CONFIG["AWS_KEY"],
                             aws_secret_access_key=CONFIG["AWS_SECRET"],
                             region_name="us-east-1")
-DMO_TABLE = CONFIG["DYNAMO_TABLE"]
+DMO_TABLES = {
+    "status": CONFIG["DYNAMO_STATUS_TABLE"],
+    "curation": CONFIG["DYNAMO_CURATION_TABLE"]
+}
 DMO_SCHEMA = {
-    "TableName": DMO_TABLE,
+    # "TableName": DMO_TABLE,
     "AttributeDefinitions": [{
         "AttributeName": "source_id",
         "AttributeType": "S"
@@ -58,25 +62,21 @@ DMO_SCHEMA = {
     }
 }
 STATUS_STEPS = (
-    ("convert_start", "Conversion initialization"),
-    ("convert_download", "Conversion data download"),
+    ("sub_start", "Submission initialization"),
+    ("data_download", "Connect data download"),
+    ("data_transfer", "Primary data transfer"),
     ("converting", "Data conversion"),
-    ("convert_ingest", "Ingestion preparation"),
-    ("ingest_start", "Ingestion initialization"),
-    ("ingest_download", "Ingestion data download"),
-    ("ingest_integration", "Integration data download"),
-    ("ingest_search", "Globus Search ingestion"),
-    ("ingest_publish", "Globus Publish publication"),
+    ("curation", "Dataset curation"),
+    ("ingest_search", "MDF Search ingestion"),
+    ("ingest_backup", "Data transfer to secondary destinations"),
+    ("ingest_publish", "MDF Publish publication"),
     ("ingest_citrine", "Citrine upload"),
     ("ingest_mrr", "Materials Resource Registration"),
     ("ingest_cleanup", "Post-processing cleanup")
 )
-# This is the start of ingest steps in STATUS_STEPS
-# In other words, the ingest steps are STATUS_STEPS[INGEST_MARK:]
-# and the convert steps are STATUS_STEPS[:INGEST_MARK]
-INGEST_MARK = 4
 
-# Status codes indicating some form of not-failure
+# Status codes indicating some form of not-failure,
+# defined as "the step is over, and processing is continuing"
 SUCCESS_CODES = [
     "S",
     "M",
@@ -86,38 +86,20 @@ SUCCESS_CODES = [
     "N"
 ]
 
-# Global save locations for whitelists
-CONVERT_GROUP = {
-    # Globus Groups UUID
-    "group_id": CONFIG["CONVERT_GROUP_ID"],
-    # Group member IDs
-    "whitelist": [],
-    # UNIX timestamp of last update
-    "updated": 0,
-    # Refresh frequency (in seconds)
-    #   X days * 24 hours/day * 60 minutes/hour * 60 seconds/minute
-    "frequency": 1 * 60 * 60  # 1 hour
-}
-INGEST_GROUP = {
-    "group_id": CONFIG["INGEST_GROUP_ID"],
-    "whitelist": [],
-    "updated": 0,
-    "frequency": 1 * 24 * 60 * 60  # 1 day
-}
-ADMIN_GROUP = {
-    "group_id": CONFIG["ADMIN_GROUP_ID"],
-    "whitelist": [],
-    "updated": 0,
-    "frequency": 1 * 24 * 60 * 60  # 1 day
-}
 
+def authenticate_token(token, groups, require_all=False):
+    """Authenticate a token.
+    Arguments:
+        token (str): The token to authenticate with.
+        groups (str or list of str): The Globus Group UUIDs to require the user belong to.
+                The special value "public" is also allowed to always pass this check.
+        require_all (bool): When True, the user must be in all groups to succeed the
+                group check.
+                When False, the user must be in at least one group to succeed.
+                Default False.
 
-def authenticate_token(token, auth_level):
-    """Auth a token
-    Levels:
-        convert
-        ingest
-        admin
+    Returns:
+        dict: Token and user info.
     """
     if not token:
         return {
@@ -158,166 +140,198 @@ def authenticate_token(token, auth_level):
             "error": "Not authorized to MDF Connect scope",
             "error_code": 401
         }
-    # Finally, verify user is in appropriate group
+    # Finally, verify user is in appropriate group(s)
+    if isinstance(groups, str):
+        groups = [groups]
+
+    # Groups setup
+    groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
+    groups_auth["services"] = ["groups"]
     try:
-        whitelist = fetch_whitelist(auth_level)
-        if len(whitelist) == 0:
-            raise ValueError("Whitelist empty")
+        nexus = mdf_toolbox.confidential_login(groups_auth)["groups"]
     except Exception as e:
-        logger.warning("Whitelist generation failed:", e)
+        logger.error("NexusClient creation error: {}".format(repr(e)))
         return {
             "success": False,
-            "error": "Unable to fetch Group memberships.",
+            "error": "Unable to connect to Globus Groups",
             "error_code": 500
         }
-    if not any([uid in whitelist for uid in auth_res["identities_set"]]):
-        logger.info("User not in whitelist:", auth_res["username"])
+
+    # Globus Groups does not take UUIDs, only usernames, but Globus Auth uses UUIDs
+    # for identity-aware applications. Therefore, for Connect to be identity-aware,
+    # we must convert the UUIDs into usernames.
+    # However, the GlobusID "username" is not the email-like address, just the prefix.
+    user_usernames = set([iden["username"].replace("@globusid.org", "")
+                          for iden in auth_client.get_identities(
+                                                    ids=auth_res["identities_set"])["identities"]])
+    auth_succeeded = False
+    missing_groups = []  # Used for require_all compliance
+    group_roles = []
+    for grp in groups:
+        # public always succeeds
+        if grp.lower() == "public":
+            group_roles.append("member")
+            auth_succeeded = True
+        else:
+            # Translate convert and admin groups
+            if grp.lower() == "convert":
+                grp = CONFIG["CONVERT_GROUP_ID"]
+            elif grp.lower() == "admin":
+                grp = CONFIG["ADMIN_GROUP_ID"]
+            # Group membership checks - each identity with each group
+            for user_identifier in user_usernames:
+                try:
+                    member_info = nexus.get_group_membership(grp, user_identifier)
+                    assert member_info["status"] == "active"
+                    group_roles.append(member_info["role"])
+                # Not in group or not active
+                except (globus_sdk.GlobusAPIError, AssertionError):
+                    # Log failed groups
+                    missing_groups.append(grp)
+                # Error getting membership
+                except Exception as e:
+                    logger.error("NexusClient fetch error: {}".format(repr(e)))
+                    return {
+                        "success": False,
+                        "error": "Unable to connect to Globus Groups",
+                        "error_code": 500
+                    }
+                else:
+                    auth_succeeded = True
+    # If must be in all groups, fail out if any groups missing
+    if require_all and missing_groups:
+        logger.debug("Auth rejected: require_all set, user '{}' not in '{}'"
+                     .format(user_usernames, missing_groups))
         return {
             "success": False,
-            "error": "You cannot access this service or collection",
+            "error": "You cannot access this service or organization",
             "error_code": 403
         }
+    if not auth_succeeded:
+        logger.debug("Auth rejected: User '{}' not in any group: '{}'"
+                     .format(user_usernames, groups))
+        return {
+            "success": False,
+            "error": "You cannot access this service or organization",
+            "error_code": 403
+        }
+
+    # Admin membership check (allowed to fail)
+    is_admin = False
+    for user_identifier in user_usernames:
+        try:
+            admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
+            assert admin_info["status"] == "active"
+        # Username is not active admin, which is fine
+        except (globus_sdk.GlobusAPIError, AssertionError):
+            pass
+        # Error getting membership
+        except Exception as e:
+            logger.error("NexusClient admin fetch error: {}".format(repr(e)))
+            return {
+                "success": False,
+                "error": "Unable to connect to Globus Groups",
+                "error_code": 500
+            }
+        # Successful check, is admin
+        else:
+            is_admin = True
 
     return {
         "success": True,
         "token_info": auth_res,
         "user_id": auth_res["sub"],
-        "username": auth_res["username"],
+        "username": user_identifier,
         "name": auth_res["name"] or "Not given",
         "email": auth_res["email"] or "Not given",
-        "identities_set": auth_res["identities_set"]
+        "identities_set": auth_res["identities_set"],
+        "group_roles": group_roles,
+        "is_admin": is_admin
     }
 
 
-def fetch_whitelist(auth_level):
-    # auth_level values:
-    # admin, convert, ingest, [Group ID]
-    whitelist = []
-    groups_auth = {
-        "app_name": "MDF Open Connect",
-        "client_id": CONFIG["API_CLIENT_ID"],
-        "client_secret": CONFIG["API_CLIENT_SECRET"],
-        "services": ["groups"]
-    }
-    # Always add admin list
-    # Check for staleness
-    global ADMIN_GROUP
-    if int(time.time()) - ADMIN_GROUP["updated"] > ADMIN_GROUP["frequency"]:
-        # If NexusClient has not been created yet, create it
-        if type(groups_auth) is dict:
-            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-        # Get all the members
-        member_list = groups_auth.get_group_memberships(ADMIN_GROUP["group_id"])["members"]
-        # Whitelist is all IDs in the group that are active
-        ADMIN_GROUP["whitelist"] = [member["identity_id"]
-                                    for member in member_list
-                                    if member["status"] == "active"]
-        # Update timestamp
-        ADMIN_GROUP["updated"] = int(time.time())
-    whitelist.extend(ADMIN_GROUP["whitelist"])
-    # Add either convert or ingest whitelists
-    if auth_level == "convert":
-        global CONVERT_GROUP
-        if int(time.time()) - CONVERT_GROUP["updated"] > CONVERT_GROUP["frequency"]:
-            # If NexusClient has not been created yet, create it
-            if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-            # Get all the members
-            member_list = groups_auth.get_group_memberships(CONVERT_GROUP["group_id"])["members"]
-            # Whitelist is all IDs in the group that are active
-            CONVERT_GROUP["whitelist"] = [member["identity_id"]
-                                          for member in member_list
-                                          if member["status"] == "active"]
-            # Update timestamp
-            CONVERT_GROUP["updated"] = int(time.time())
-        whitelist.extend(CONVERT_GROUP["whitelist"])
-    elif auth_level == "ingest":
-        global INGEST_GROUP
-        if int(time.time()) - INGEST_GROUP["updated"] > INGEST_GROUP["frequency"]:
-            # If NexusClient has not been created yet, create it
-            if type(groups_auth) is dict:
-                groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-            # Get all the members
-            member_list = groups_auth.get_group_memberships(INGEST_GROUP["group_id"])["members"]
-            # Whitelist is all IDs in the group that are active
-            INGEST_GROUP["whitelist"] = [member["identity_id"]
-                                         for member in member_list
-                                         if member["status"] == "active"]
-            # Update timestamp
-            INGEST_GROUP["updated"] = int(time.time())
-        whitelist.extend(INGEST_GROUP["whitelist"])
-    elif auth_level == "admin":
-        # Already handled admins
-        pass
-    else:
-        # Assume auth_level is Group ID
-        # If NexusClient has not been created yet, create it
-        if type(groups_auth) is dict:
-            groups_auth = mdf_toolbox.confidential_login(groups_auth)["groups"]
-        # Get all the members
-        try:
-            member_list = groups_auth.get_group_memberships(auth_level)["members"]
-        except Exception:
-            pass
-        else:
-            whitelist.extend([member["identity_id"]
-                              for member in member_list
-                              if member["status"] == "active"])
-    return whitelist
-
-
-def make_source_id(title, test=False, index=None):
+def make_source_id(title, author, test=False, index=None):
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
+    # Stopwords to delete from the source_name
+    # Not using NTLK to avoid an entire package dependency for one minor feature,
+    # and the NLTK stopwords are unlikely to be in a dataset title ("your", "that'll", etc.)
     delete_words = [
-        "and",
-        "or",
-        "the",
         "a",
         "an",
-        "of"
+        "and",
+        "as",
+        "data",
+        "dataset",
+        "for",
+        "from",
+        "in",
+        "of",
+        "or",
+        "study",
+        "test",  # Clears test flag from new source_id
+        "that",
+        "the",
+        "this",
+        "to",
+        "very",
+        "with"
     ]
-    title = title.strip().lower()
-    # Remove unimportant words
-    for dw in delete_words:
-        # Replace words that are by themselves
-        # e.g. do not replace "and" in "random", do replace in "materials and design"
-        title = title.replace(" "+dw+" ", " ")
-        # Same for underscore separation
-        title = title.replace("_"+dw+"_", "_")
-        # Replace words at the start and end of the title
-        if title.startswith(dw+" "):
-            title = title[len(dw+" "):]
-        if title.endswith(" "+dw):
-            title = title[:-len(" "+dw)]
-    # Replace spaces with underscores, remove leading/trailing underscores
-    title = title.replace(" ", "_").strip("_")
-    # Clear double underscores
-    while title.find("__") != -1:
-        title = title.replace("__", "_")
-    # Filter out special characters
-    if not title.isalnum():
-        source_id = ""
-        for char in title:
-            # If is alnum, or non-duplicate underscore, add to source_id
-            if char.isalnum() or (char == "_" and not source_id.endswith("_")):
-                source_id += char
+    # Remove any existing version number from title
+    title = split_source_id(title)["source_name"]
+
+    # Tokenize title and author
+    # Valid token separators are space and underscore
+    # Discard empty tokens
+    title_tokens = [t for t in title.strip().replace("_", " ").split() if t]
+    author_tokens = [t for t in author.strip().replace("_", " ").split() if t]
+
+    # Clean title tokens
+    title_clean = []
+    for token in title_tokens:
+        # Clean token is lowercase and alphanumeric
+        # TODO: After Py3.7 upgrade, use .isascii()
+        clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        if clean_token and clean_token not in delete_words:
+            title_clean.append(clean_token)
+
+    # Clean author tokens, merge into one word
+    author_word = ""
+    for token in author_tokens:
+        clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        author_word += clean_token
+
+    # Remove author_word from title, if exists (e.g. from previous make_source_id())
+    while author_word in title_clean:
+        title_clean.remove(author_word)
+
+    # Select words from title for source_name
+    # Use up to the first two words + last word
+    if len(title_clean) >= 1:
+        word1 = title_clean[0]
     else:
-        source_id = title
+        # Must have at least one word
+        raise ValueError("Title '{}' invalid: Must have at least one word that is not "
+                         "the author name".format(title))
+    if len(title_clean) >= 2:
+        word2 = title_clean[1]
+    else:
+        word2 = ""
+    if len(title_clean) >= 3:
+        word3 = title_clean[-1]
+    else:
+        word3 = ""
+
+    # Assemble source_name
+    # Strip trailing underscores from missing words
+    source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
+
     # Add test flag if necessary
     if test:
-        # If test flag already applied, don't re-apply
-        if source_id.startswith("test"):
-            # Just add back initial underscore
-            source_id = "_" + source_id
-        # Otherwise, apply test flag
-        else:
-            source_id = "_test_" + source_id
+        source_name = "_test_" + source_name
 
     # Determine version number to add
-    # Remove any existing version number
-    source_name = split_source_id(source_id)["source_name"]
     # Get last Search version
     search_client = mdf_toolbox.confidential_login(
                         mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
@@ -340,8 +354,8 @@ def make_source_id(title, test=False, index=None):
         raise ValueError("Dataset entry in Search has error")
 
     # Get old submission information
-    scan_res = scan_status(fields=["source_id", "user_id"],
-                           filters=[("source_id", "^", source_name)])
+    scan_res = scan_table(table_name="status", fields=["source_id", "user_id"],
+                          filters=[("source_id", "^", source_name)])
     if not scan_res["success"]:
         logger.error("Unable to scan status database for '{}': '{}'"
                      .format(source_name, scan_res["error"]))
@@ -364,10 +378,10 @@ def make_source_id(title, test=False, index=None):
     # Old > new is an error
     else:
         logger.error("Old Search version '{}' > new '{}': {}"
-                     .format(old_search_version, search_version, source_id))
+                     .format(old_search_version, search_version, source_name))
         raise ValueError("Dataset entry in Search has error")
 
-    source_id = "{}_v{}-{}".format(source_name, search_version, sub_version)
+    source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
 
     return {
         "source_id": source_id,
@@ -381,9 +395,10 @@ def make_source_id(title, test=False, index=None):
 def split_source_id(source_id):
     """Retrieve the source_name and version information from a source_id.
     Not complex logic, but easier to have in one location.
-    Standard form: {source_name}_v{search_version}-{submission_version}
-    Legacy form: {source_name}_v{legacy_version}
-        The legacy version is both the search version and submission version.
+    Standard form: {source_name}_v{search_version}.{submission_version}
+    Legacy dash form: {source_name}_v{search_version}-{submission_version}
+    Legacy merged form: {source_name}_v{legacy_version}
+        The legacy merged form version is both the search version and submission version.
 
     Arguments:
     source_id (str): The source_id to split. If this is not a valid-form source_id,
@@ -400,7 +415,8 @@ def split_source_id(source_id):
     """
     # Check if source_id is valid
     # TODO: Remove legacy-form support
-    if not (re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
+    if not (re.search("_v[0-9]+\\.[0-9]+$", source_id)
+            or re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
         return {
             "success": False,
             "source_name": source_id,
@@ -411,17 +427,21 @@ def split_source_id(source_id):
 
     source_name, versions = source_id.rsplit("_v", 1)
     # TODO: Remove legacy-form support
-    v_info = versions.split("-", 1)
+    v_info = versions.split(".", 1)
     if len(v_info) == 2:
         search_version, submission_version = v_info
     else:
-        search_version = v_info[0]
-        submission_version = v_info[0]
+        v_info = versions.split("-", 1)
+        if len(v_info) == 2:
+            search_version, submission_version = v_info
+        else:
+            search_version = v_info[0]
+            submission_version = v_info[0]
 
     return {
         "success": True,
         "source_name": source_name,
-        "source_id": "{}_v{}-{}".format(source_name, search_version, submission_version),
+        "source_id": "{}_v{}.{}".format(source_name, search_version, submission_version),
         "search_version": int(search_version),
         "submission_version": int(submission_version)
     }
@@ -482,14 +502,97 @@ def clean_start():
     return
 
 
-def download_data(transfer_client, data_loc, local_ep, local_path,
+def fetch_org_rules(org_names, user_rules=None):
+    """Fetch organization rules and metadata.
+
+    Arguments:
+        org_names (str or list of str): Org name or alias to fetch rules for.
+        user_rules (dict): User-supplied rules to add, if desired. Default None.
+
+    Returns:
+        tuple: (list: All org canonical_names, dict: All appropriate rules)
+    """
+    # Normalize name: Remove special characters (including whitespace) and capitalization
+    # Function for convenience, but not generalizable/useful for other cases
+    def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
+
+    # Cache list of all organization aliases to match against
+    # Transform into tuple (normalized_aliases, org_rules) for convenience
+    all_clean_orgs = []
+    for org in CONFIG["ORGANIZATIONS"]:
+        aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
+                                                       + [org["canonical_name"]])]
+        all_clean_orgs.append((aliases, deepcopy(org)))
+
+    if isinstance(org_names, list):
+        orgs_to_fetch = org_names
+    else:
+        orgs_to_fetch = [org_names]
+    rules = {}
+    all_names = []
+    # Fetch org rules and parent rules
+    while len(orgs_to_fetch) > 0:
+        # Process sub 0 always, so orgs processed in order
+        # New org matches on canonical_name or any alias
+        new_org_data = [org for aliases, org in all_clean_orgs
+                        if normalize_name(orgs_to_fetch[0]) in aliases]
+        if len(new_org_data) < 1:
+            raise ValueError("Organization '{}' not registered in MDF Connect (from '{}')"
+                             .format(orgs_to_fetch[0], org_names))
+        elif len(new_org_data) > 1:
+            raise ValueError("Multiple organizations found with name '{}' (from '{}')"
+                             .format(orgs_to_fetch[0], org_names))
+        orgs_to_fetch.pop(0)
+        new_org_data = new_org_data[0]
+
+        # Check that org rules not already fetched
+        if new_org_data["canonical_name"] in all_names:
+            continue
+        else:
+            all_names.append(new_org_data["canonical_name"])
+
+        # Add all (unprocessed) parents to fetch list
+        orgs_to_fetch.extend([parent for parent in new_org_data.get("parent_organizations", [])
+                              if parent not in all_names])
+
+        # Merge new rules with old
+        # Strip out unneeded info
+        new_org_data.pop("canonical_name", None)
+        new_org_data.pop("aliases", None)
+        new_org_data.pop("description", None)
+        new_org_data.pop("homepage", None)
+        new_org_data.pop("parent_organizations", None)
+        # Save correct curation state
+        if rules.get("curation", False) or new_org_data.get("curation", False):
+            curation = True
+        else:
+            curation = False
+        # Merge new rules into old rules
+        rules = mdf_toolbox.dict_merge(rules, new_org_data, append_lists=True)
+        # Ensure curation set if needed
+        if curation:
+            rules["curation"] = curation
+
+    # Merge in user-set rules (with lower priority than any org-set rules)
+    if user_rules:
+        rules = mdf_toolbox.dict_merge(rules, user_rules)
+        # If user set curation, set curation
+        # Otherwise user preference is overridden by org preference
+        if user_rules.get("curation", False):
+            rules["curation"] = True
+
+    return (all_names, rules)
+
+
+def download_data(transfer_client, source_loc, local_ep, local_path,
                   admin_client=None, user_id=None):
     """Download data from a remote host to the configured machine.
+    (Many sources to one destination)
 
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
                                       Technically unnecessary for non-Globus data locations.
-    data_loc (list of str): The location(s) of the data.
+    source_loc (list of str): The location(s) of the data.
     local_ep (str): The local machine's endpoint ID.
     local_path (str): The path to the local storage location.
     admin_client (TransferClient): An authenticated TransferClient with Access Manager
@@ -506,7 +609,6 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
     if ((admin_client is not None or user_id is not None)
             and not (admin_client is not None and user_id is not None)):
         raise ValueError("admin_client and user_id must both be supplied if one is supplied")
-    tc = None  # Correct TransferClient
     filename = None
     # If the local_path is a file and not a directory, use the directory
     if local_path[-1] != "/":
@@ -515,79 +617,20 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
         local_path = os.path.dirname(local_path) + "/"
 
     os.makedirs(local_path, exist_ok=True)
-    if not isinstance(data_loc, list):
-        data_loc = [data_loc]
+    if not isinstance(source_loc, list):
+        source_loc = [source_loc]
 
     # Download data locally
-    for location in data_loc:
+    for raw_loc in source_loc:
+        location = normalize_globus_uri(raw_loc)
         loc_info = urllib.parse.urlparse(location)
-
-        # Special case pre-processing
-        # Globus Web App link into globus:// form
-        if (location.startswith("https://www.globus.org/app/transfer")
-                or location.startswith("https://app.globus.org/file-manager")):
-            data_info = urllib.parse.unquote(loc_info.query)
-            # EP ID is in origin or dest
-            ep_start = data_info.find("origin_id=")
-            if ep_start < 0:
-                ep_start = data_info.find("destination_id=")
-                if ep_start < 0:
-                    raise ValueError("Invalid Globus Transfer UI link")
-                else:
-                    ep_start += len("destination_id=")
-            else:
-                ep_start += len("origin_id=")
-            ep_end = data_info.find("&", ep_start)
-            if ep_end < 0:
-                ep_end = len(data_info)
-            ep_id = data_info[ep_start:ep_end]
-
-            # Same for path
-            path_start = data_info.find("origin_path=")
-            if path_start < 0:
-                path_start = data_info.find("destination_path=")
-                if path_start < 0:
-                    raise ValueError("Invalid Globus Transfer UI link")
-                else:
-                    path_start += len("destination_path=")
-            else:
-                path_start += len("origin_path=")
-            path_end = data_info.find("&", path_start)
-            if path_end < 0:
-                path_end = len(data_info)
-            path = data_info[path_start:path_end]
-
-            # Make new location
-            location = "globus://{}{}".format(ep_id, path)
-            loc_info = urllib.parse.urlparse(location)
-            # Use user's TransferClient
-            tc = transfer_client
-
-        # Google Drive protocol into globus:// form
-        elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
-            # Correct form is "google:///path/file.dat"
-            # (three slashes - two for scheme end, one for path start)
-            # But if a user uses two slashes, the netloc will incorrectly be the top dir
-            # (netloc="path", path="/file.dat")
-            # Otherwise netloc is nothing
-            if loc_info.netloc:
-                gpath = "/" + loc_info.netloc + loc_info.path
-            else:
-                gpath = loc_info.path
-            # Don't use os.path.join because gpath starts with /
-            # GDRIVE_ROOT does not end in / to make compatible
-            location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"],
-                                                CONFIG["GDRIVE_ROOT"], gpath)
-            loc_info = urllib.parse.urlparse(location)
-            # Use admin's TransferClient if present
-            tc = admin_client or transfer_client
-
-        else:
-            # Use default (user's) TransferClient
-            tc = transfer_client
-
         # Globus Transfer
         if loc_info.scheme == "globus":
+            # Use admin_client for GDrive Transfers
+            # User doesn't need permissions on MDF GDrive, we have those
+            # For all other cases use user's TC
+            tc = admin_client if (loc_info.netloc == CONFIG["GDRIVE_EP"]
+                                  and admin_client is not None) else transfer_client
             if filename:
                 transfer_path = os.path.join(local_path, filename)
             else:
@@ -711,110 +754,295 @@ def download_data(transfer_client, data_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, local_ep, local_path, backup_ep, backup_path):
-    """Back up data to a remote endpoint.
+def backup_data(transfer_client, storage_loc, backup_locs):
+    """Back up data to remote endpoints.
+    (One source to many destinations)
+
+    Note:
+        An endpoint of "False" will disable the backup for that location, or all
+        backups if the storage endpoint is "False". When disabled in this way,
+        the results will return a success and the event will be logged.
 
     Arguments:
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
-    local_ep (str): The local machine's endpoint ID.
-    local_path (str): The path to the local storage location.
-    backup_ep (str): The backup machine's endpoint ID.
-    backup_path (str): The path to the backup storage location.
+    storage_loc (str): A globus:// uri to the current data location.
+    backup_locs (list of str): The backup locations.
 
     Returns:
-    dict: success (bool): True on success, False on failure.
+    dict: [backup_loc] (True or str): True on a successful backup to this backup location,
+            a str error message on failure.
     """
-    filename = None
-    # If the local_path is a file and not a directory, use the directory
-    if local_path[-1] != "/":
-        # Save the filename for later
-        filename = os.path.basename(local_path)
-        local_path = os.path.dirname(local_path) + "/"
+    if isinstance(backup_locs, str):
+        backup_locs = [backup_locs]
+    results = {}
+    norm_store = normalize_globus_uri(storage_loc)
+    storage_info = urllib.parse.urlparse(norm_store)
 
-    transfer = mdf_toolbox.custom_transfer(
-                    transfer_client, local_ep, backup_ep,
-                    [(local_path + (filename if filename else ""), backup_path)],
-                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-    for event in transfer:
-        if not event["success"]:
-            logger.debug(event)
-    if not event["success"]:
-        raise ValueError("{}: {}".format(event.get("code", "No code found"),
-                                         event.get("description", "No description found")))
+    # Storage must be Globus endpoint
+    if not storage_info.scheme == "globus":
+        error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
+                 "directly published from or backed up from.".format(norm_store, storage_loc))
+        return {
+            "all_locations": error
+        }
+    # No backups if storage EP is False
+    elif storage_info.netloc == "False":
+        logger.warning("All backups skipped from storage: '{}'".format(norm_store))
+        for backup in backup_locs:
+            results[backup] = True
+        return results
 
-    return {
-        "success": event["success"]
-    }
-
-
-def globus_publish_data(publish_client, transfer_client, metadata, collection,
-                        data_ep=None, data_path=None, data_loc=None):
-    if not data_loc:
-        if not data_ep or not data_path:
-            raise ValueError("Invalid call to globus_publish_data()")
-        data_loc = []
-    if data_ep and data_path:
-        data_loc.append("globus://{}{}".format(data_ep, data_path))
-    # Format collection
-    collection_id = publish_collection_lookup(publish_client, collection)
-    # Submit metadata
-    pub_md = get_publish_metadata(metadata)
-    md_result = publish_client.push_metadata(collection_id, pub_md)
-    pub_endpoint = md_result['globus.shared_endpoint.name']
-    pub_path = os.path.join(md_result['globus.shared_endpoint.path'], "data") + "/"
-    submission_id = md_result["id"]
-    # Transfer data
-    for loc in data_loc:
-        loc = loc.replace("globus://", "")
-        ep, path = loc.split("/", 1)
-        path = "/" + path + ("/" if not path.endswith("/") else "")
+    for backup in backup_locs:
+        norm_backup = normalize_globus_uri(backup)
+        backup_info = urllib.parse.urlparse(norm_backup)
+        # No backup if location EP is False
+        if backup_info.netloc == "False":
+            logger.warning("Backup location skipped: '{}'".format(norm_backup))
+            results[backup] = True
+            continue
         transfer = mdf_toolbox.custom_transfer(
-                        transfer_client, ep, pub_endpoint, [(path, pub_path)],
+                        transfer_client, storage_info.netloc, backup_info.netloc,
+                        [(storage_info.path, backup_info.path)],
+                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
                         inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
         for event in transfer:
-            pass
-        if not event["success"]:
-            raise ValueError("{}: {}".format(event.get("code", "No code found"),
-                                             event.get("description", "No description found")))
-    # Complete submission
-    fin_res = publish_client.complete_submission(submission_id)
+            if not event["success"]:
+                logger.debug(event)
 
-    return fin_res.data
-
-
-def publish_collection_lookup(publish_client, collection):
-    valid_cols = publish_client.list_collections().data
-    try:
-        collection_id = int(collection)
-    except ValueError:
-        collection_id = 0
-        for coll in valid_cols:
-            if collection.replace(" ", "").lower() == coll["name"].replace(" ", "").lower():
-                if collection_id:
-                    raise ValueError("Collection name '{}' has multiple matches"
-                                     .format(collection))
-                collection_id = coll["id"]
-    if not any([col["id"] == collection_id for col in valid_cols]):
-        raise ValueError("Collection not found")
-
-    return collection_id
+        results[backup] = (event["success"]
+                           or "{}: {}".format(event.get("code", "No code found"),
+                                              event.get("description", "No description found")))
+    return results
 
 
-def get_publish_metadata(metadata):
-    dc_metadata = metadata.get("dc", {})
-    # TODO: Find full Publish schema for translation
-    # Required fields
-    pub_metadata = {
-        "dc.title": ", ".join([title.get("title", "")
-                               for title in dc_metadata.get("titles", [])]),
-        "dc.date.issued": str(date.today().year),
-        "dc.publisher": "Materials Data Facility",
-        "dc.contributor.author": [author.get("creatorName", "")
-                                  for author in dc_metadata.get("creators", [])],
-        "accept_license": True
+def normalize_globus_uri(location):
+    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
+    For Google Drive URIs, the file(s) must be shared with
+    materialsdatafacility@gmail.com.
+    If the URI is not a Globus Web App link or Google Drive URI,
+    it is returned unchanged.
+
+    Arguments:
+        location (str): One URI to normalize.
+
+    Returns:
+        str: The normalized URI, or the original URI if no normalization was possible.
+    """
+    loc_info = urllib.parse.urlparse(location)
+    # Globus Web App link into globus:// form
+    if (location.startswith("https://www.globus.org/app/transfer")
+            or location.startswith("https://app.globus.org/file-manager")):
+        data_info = urllib.parse.unquote(loc_info.query)
+        # EP ID is in origin or dest
+        ep_start = data_info.find("origin_id=")
+        if ep_start < 0:
+            ep_start = data_info.find("destination_id=")
+            if ep_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                ep_start += len("destination_id=")
+        else:
+            ep_start += len("origin_id=")
+        ep_end = data_info.find("&", ep_start)
+        if ep_end < 0:
+            ep_end = len(data_info)
+        ep_id = data_info[ep_start:ep_end]
+
+        # Same for path
+        path_start = data_info.find("origin_path=")
+        if path_start < 0:
+            path_start = data_info.find("destination_path=")
+            if path_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                path_start += len("destination_path=")
+        else:
+            path_start += len("origin_path=")
+        path_end = data_info.find("&", path_start)
+        if path_end < 0:
+            path_end = len(data_info)
+        path = data_info[path_start:path_end]
+
+        # Make new location
+        new_location = "globus://{}{}".format(ep_id, path)
+
+    # Google Drive protocol into globus:// form
+    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+        # Correct form is "google:///path/file.dat"
+        # (three slashes - two for scheme end, one for path start)
+        # But if a user uses two slashes, the netloc will incorrectly be the top dir
+        # (netloc="path", path="/file.dat")
+        # Otherwise netloc is nothing (which is correct)
+        if loc_info.netloc:
+            gpath = "/" + loc_info.netloc + loc_info.path
+        else:
+            gpath = loc_info.path
+        # Don't use os.path.join because gpath starts with /
+        # GDRIVE_ROOT does not end in / to make compatible
+        new_location = "globus://{}{}{}".format(CONFIG["GDRIVE_EP"], CONFIG["GDRIVE_ROOT"], gpath)
+
+    # Default - do nothing
+    else:
+        new_location = location
+
+    return new_location
+
+
+def make_globus_app_link(globus_uri):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri))
+    globus_link = CONFIG["TRANSFER_WEB_APP_LINK"] \
+        .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
+    return globus_link
+
+
+def lookup_http_host(globus_uri):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(str(globus_uri)))
+    return CONFIG["GLOBUS_HTTP_HOSTS"].get(globus_uri_info.netloc or globus_uri_info.path, None)
+
+
+def get_dc_creds(test):
+    if test:
+        return CONFIG["DATACITE_CREDS"]["TEST"]
+    else:
+        return CONFIG["DATACITE_CREDS"]["NONTEST"]
+
+
+def make_dc_doi(test):
+    creds = get_dc_creds(test)
+    doi_unique = False
+    while not doi_unique:
+        # Create new DOI by appending random characters to prefix
+        new_doi = creds["DC_PREFIX"]
+        for i in range(CONFIG["NUM_DOI_SECTIONS"]):
+            new_doi += "".join(random.choices(string.ascii_lowercase + string.digits,
+                                              k=CONFIG["NUM_DOI_CHARS"]))
+            new_doi += "-"
+        new_doi = new_doi.strip("-")
+
+        # Check that new_doi is unique, not used previously
+        # NOTE: Technically there is a non-zero chance that two identical IDs are generated
+        #       before either submit to DataCite.
+        #       However, the probability is low enough that we do not mitigate this
+        #       condition. Should it occur, the later submission will fail.
+        doi_fetch = requests.get(creds["DC_URL"]+new_doi)
+        if doi_fetch.status_code == 404:
+            doi_unique = True
+    return new_doi
+
+
+def translate_dc_schema(dc_md, doi=None, url=None):
+    """Translate Datacite Schema to Datacite DOI Schema (slightly different)."""
+    doi_data = deepcopy(dc_md)
+
+    # url
+    if url:
+        doi_data["url"] = url
+        doi_data["landingPage"] = url
+
+    # identifiers
+    if doi_data.get("identifier"):
+        doi_data["doi"] = doi_data["identifier"]["identifier"]
+        doi_data["identifiers"] = [doi_data.pop("identifier")]
+    elif doi:
+        doi_data["doi"] = doi
+        doi_data["identifiers"] = [{
+            "identifier": doi,
+            "identifierType": "DOI"
+        }]
+
+    # creators
+    if doi_data.get("creators"):
+        new_creators = []
+        for creator in doi_data["creators"]:
+            if creator.get("creatorName"):
+                creator["name"] = creator.pop("creatorName")
+            if creator.get("affiliations"):
+                creator["affiliation"] = creator.pop("affiliations")
+            new_creators.append(creator)
+        doi_data["creators"] = new_creators
+
+    # contributors
+    if doi_data.get("contributors"):
+        new_contributors = []
+        for contributor in doi_data["contributors"]:
+            if contributor.get("contributorName"):
+                contributor["name"] = contributor.pop("creatorName")
+            if contributor.get("affiliations"):
+                contributor["affiliation"] = contributor.pop("affiliations")
+            new_contributors.append(contributor)
+        doi_data["contributors"] = new_contributors
+
+    # types
+    if doi_data.get("resourceType"):
+        doi_data["types"] = doi_data.pop("resourceType")
+
+    # alternateIdentifiers (does not exist)
+    if doi_data.get("alternateIdentifiers"):
+        doi_data.pop("alternateIdentifiers")
+
+    doi_md = {
+        "data": {
+            "type": "dois",
+            "attributes": doi_data
+        }
     }
-    return pub_metadata
+
+    return doi_md
+
+
+def datacite_mint_doi(dc_md, test, url=None, doi=None):
+    if not doi and not dc_md.get("identifier") and not dc_md.get("identifiers"):
+        doi = make_dc_doi(test)
+
+    doi_md = translate_dc_schema(dc_md, doi=doi, url=url)
+    creds = get_dc_creds(test)
+    res = requests.post(creds["DC_URL"], auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
+                        json=doi_md)
+    try:
+        res_json = res.json()
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "error": "DOI minting failed",
+            "details": res.content
+        }
+
+    if res.status_code >= 300:
+        return {
+            "success": False,
+            "error": "; ".join([err["title"] for err in res_json["errors"]])
+        }
+    else:
+        return {
+            "success": True,
+            "datacite": res_json["data"]
+        }
+
+
+def datacite_update_doi(doi, updates, test, url=None):
+    update_md = translate_dc_schema(updates, doi=doi, url=url)
+    creds = get_dc_creds(test)
+    res = requests.put(creds["DC_URL"]+doi, auth=(creds["DC_USERNAME"], creds["DC_PASSWORD"]),
+                       json=update_md)
+    try:
+        res_json = res.json()
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "error": "DOI update failed",
+            "details": res.content
+        }
+
+    if res.status_code >= 300:
+        return {
+            "success": False,
+            "error": "; ".join([err["title"] for err in res_json["errors"]])
+        }
+    else:
+        return {
+            "success": True,
+            "datacite": res_json["data"]
+        }
 
 
 def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
@@ -906,7 +1134,7 @@ def cancel_submission(source_id, wait=True):
     """
     logger.debug("Attempting to cancel {}".format(source_id))
     # Check if submission can be cancelled
-    stat_res = read_status(source_id)
+    stat_res = read_table("status", source_id)
     if not stat_res["success"]:
         stat_res["stopped"] = False
         return stat_res
@@ -952,7 +1180,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         try:
-            while read_status(source_id)["status"]["active"]:
+            while read_table("status", source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
@@ -963,7 +1191,7 @@ def cancel_submission(source_id, wait=True):
             complete_submission(source_id)
 
     # Change status code to reflect cancellation
-    old_status_code = read_status(source_id)["status"]["code"]
+    old_status_code = read_table("status", source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
                                      .replace("T", "X").replace("P", "X")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
@@ -995,7 +1223,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     error (str): The error message. Only exists if success is False.
     """
     # Check that status active is True
-    if not read_status(source_id).get("status", {}).get("active", False):
+    if not read_table("status", source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -1005,7 +1233,8 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     if cleanup:
         cleanup_paths = [
             os.path.join(CONFIG["LOCAL_PATH"], source_id) + "/",
-            os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/"
+            os.path.join(CONFIG["SERVICE_DATA"], source_id) + "/",
+            os.path.join(CONFIG["CURATION_DATA"], source_id) + ".json"
         ]
         for cleanup in cleanup_paths:
             if os.path.exists(cleanup):
@@ -1026,6 +1255,8 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
             else:
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
         logger.debug("{}: File cleanup finished".format(source_id))
+    # Delete curation entry if exists
+    delete_from_table("curation", source_id)
     # Update status to inactive
     update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
@@ -1103,15 +1334,57 @@ def local_admin_delete(path):
         }
 
 
-def validate_status(status, code_mode=None):
+def expand_refs(schema, base_path=CONFIG["SCHEMA_PATH"], definitions=None):
+    if definitions is None:
+        definitions = {}
+
+    if not isinstance(schema, dict):
+        return schema  # No-op on non-dict
+    # Save schema's definitions
+    # Could results in duplicate definitions, which has no effect
+    if schema.get("definitions"):
+        definitions = mdf_toolbox.dict_merge(schema["definitions"], definitions)
+        definitions = expand_refs(definitions, base_path, definitions)
+    while "$ref" in json.dumps(schema):
+        new_schema = {}
+        for key, val in schema.items():
+            if key == "$ref":
+                # $ref is supposed to take precedence, and effectively overwrite
+                # other keys present, so we can make new_schema exactly the $ref value
+                filename, intra_path = val.split("#")
+                intra_parts = [x for x in intra_path.split("/") if x]
+                # Filename ref refers to external file - load and add in
+                if filename:
+                    with open(os.path.join(base_path, filename)) as schema_file:
+                        ref_schema = json.load(schema_file)
+                    if ref_schema.get("definitions"):
+                        definitions = mdf_toolbox.dict_merge(ref_schema["definitions"],
+                                                             definitions)
+                        definitions = expand_refs(definitions, base_path, definitions)
+                    for path_part in intra_parts:
+                        ref_schema = ref_schema[path_part]
+                    # new_schema[intra_parts[-1]] = ref_schema
+                    new_schema = ref_schema
+                # Other refs should be in definitions block
+                else:
+                    if intra_parts[0] != "definitions" or len(intra_parts) != 2:
+                        raise ValueError("Invalid/complex $ref: {}".format(intra_parts))
+                    # new_schema[intra_parts[-1]] = definitions.get(intra_parts[1], "NONE")
+                    new_schema = definitions.get(intra_parts[1], None)
+                    if new_schema is None:
+                        raise ValueError("Definition missing: {}".format(intra_parts))
+            else:
+                new_schema[key] = expand_refs(val, base_path, definitions)
+        schema = new_schema
+    return schema
+
+
+def validate_status(status, new_status=False):
     """Validate a submission status.
 
     Arguments:
     status (dict): The status to validate.
-    code_mode (str): The mode to check the status code, or None to skip code check.
-                        "start": No steps have started or finished.
-                        "handoff": All convert steps have finished (except the ingest handoff)
-                                   and no ingest steps have started or finished.
+    new_status (bool): Is this status a new status?
 
     Returns:
     dict:
@@ -1137,24 +1410,14 @@ def validate_status(status, code_mode=None):
     code = status["code"]
     try:
         assert len(code) == len(STATUS_STEPS)
-        if code_mode == "convert_start":
+        if new_status:
             # Nothing started or finished
             assert code == "z" * len(code)
-        elif code_mode == "ingest_start":
-            # Convert steps skipped, other steps not started
-            assert code[:INGEST_MARK] == "N" * len(code[:INGEST_MARK])
-            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
-        elif code_mode == "handoff":
-            # convert finished until handoff
-            assert all([c in SUCCESS_CODES for c in code[:INGEST_MARK-1]])
-            # convert handoff to ingest in progress
-            assert code[INGEST_MARK-1] == "P"
-            # ingest not started
-            assert code[INGEST_MARK:] == "z" * len(code[INGEST_MARK:])
     except AssertionError:
         return {
             "success": False,
-            "error": "Invalid status code '{}' for mode {}".format(code, code_mode)
+            "error": ("Invalid status code '{}' for {} status"
+                      .format(code, "new" if new_status else "old"))
         }
     else:
         return {
@@ -1162,28 +1425,29 @@ def validate_status(status, code_mode=None):
         }
 
 
-def read_status(source_id):
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+def read_table(table_name, source_id):
+    tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
-    status_res = table.get_item(Key={"source_id": source_id}, ConsistentRead=True).get("Item")
-    if not status_res:
+    entry = table.get_item(Key={"source_id": source_id}, ConsistentRead=True).get("Item")
+    if not entry:
         return {
             "success": False,
-            "error": "ID {} not found in status database".format(source_id)
+            "error": "ID {} not found in {} database".format(source_id, table_name)
             }
     return {
         "success": True,
-        "status": status_res
+        "status": entry
         }
 
 
-def scan_status(fields=None, filters=None):
-    """Scan the status database.
+def scan_table(table_name, fields=None, filters=None):
+    """Scan the status or curation databases..
 
     Arguments:
+    table_name (str): The Dynamo table to scan.
     fields (list of str): The fields from the results to return.
                           Default None, to return all fields.
     filters (list of tuples): The filters to apply. Format: (field, operator, value)
@@ -1210,8 +1474,8 @@ def scan_status(fields=None, filters=None):
         results (list of dict): The status entries returned.
         error (str): If success is False, the error that occurred.
     """
-    # Get Dynamo table
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    # Get Dynamo status table
+    tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1338,7 +1602,7 @@ def scan_status(fields=None, filters=None):
 
 
 def create_status(status):
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1349,20 +1613,15 @@ def create_status(status):
     status["cancelled"] = False
     status["pid"] = os.getpid()
     status["extensions"] = []
-    status["converted"] = False
+    status["hibernating"] = False
+    status["code"] = "z" * len(STATUS_STEPS)
 
-    if status.get("submission_code") == "C":
-        status["code"] = "z" * len(STATUS_STEPS)
-    elif status.get("submission_code") == "I":
-        status["code"] = (("N" * len(STATUS_STEPS[:INGEST_MARK]))
-                          + ("z" * len(STATUS_STEPS[INGEST_MARK:])))
-
-    status_valid = validate_status(status, "start")
+    status_valid = validate_status(status, new_status=True)
     if not status_valid["success"]:
         return status_valid
 
     # Check that status does not already exist
-    if read_status(status["source_id"])["success"]:
+    if read_table("status", status["source_id"])["success"]:
         return {
             "success": False,
             "error": "ID {} already exists in database".format(status["source_id"])
@@ -1399,14 +1658,29 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    # Clean text and link (if present)
+    if text:
+        # This could be done with a complex regex and replace, but .replace() is simpler
+        # and more robust - r'\\\\' only catches multiples of two backslashes,
+        # while r'\\' catches nothing, according to basic testing.
+        # So replacing all the reasonable escape sequences with spaces, deleting all backslashes,
+        # and condensing the spaces is sufficient.
+        # Removing newlines is okay in this particular case (simple status messages).
+        text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ").replace("\\", "")
+        while "  " in text:
+            text = text.replace("  ", " ")
+    if link:
+        link = urllib.parse.quote(link, safe="/:")
+
+    # Get status table
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_status(source_id)
+    old_status = read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1417,6 +1691,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         step_index = int(step) - 1
     except ValueError:
         step_index = None
+        # TODO: Since deprecating /ingest, is the following still true?
         # Why yes, this would be easier if STATUS_STEPS was a dict
         # But we need slicing for translate_status
         # Or else we're duplicating the info and making maintenance hard
@@ -1494,14 +1769,14 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table(DMO_CLIENT, DMO_TABLE)
+    tbl_res = get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_status(source_id)
+    old_status = read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1509,7 +1784,7 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
     status = old_status["status"]
 
     # Overwrite old status
-    status = mdf_toolbox.dict_merge(deepcopy(modifications), status)
+    status = mdf_toolbox.dict_merge(modifications, status)
 
     status_valid = validate_status(status)
     if not status_valid["success"]:
@@ -1538,7 +1813,6 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
 def translate_status(status):
     # {
     # source_id: str,
-    # submission_code: "C" or "I"
     # code: str, based on char position
     # messages: list of str, in order generated
     # errors: list of str, in order of failures
@@ -1548,19 +1822,10 @@ def translate_status(status):
     # }
     full_code = list(status["code"])
     messages = status["messages"]
-    sub_type = status["submission_code"]
     steps = [st[1] for st in STATUS_STEPS]
-    if sub_type == 'C':
-        subm = "convert"
-    elif sub_type == 'I':
-        subm = "ingest"
-    else:
-        steps = []
-        subm = "unknown submission type '{}'".format(sub_type)
 
-    usr_msg = ("Status of {}{} submission {} ({})\n"
+    usr_msg = ("Status of {}submission {} ({})\n"
                "Submitted by {} at {}\n\n").format("TEST " if status["test"] else "",
-                                                   subm,
                                                    status["source_id"],
                                                    status["title"],
                                                    status["submitter"],
@@ -1677,8 +1942,77 @@ def translate_status(status):
         }
 
 
-def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCHEMA):
-    tbl_res = get_dmo_table(client, table_name)
+def create_curation_task(task):
+    tbl_res = get_dmo_table("curation")
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Check that task does not already exist
+    if read_table("curation", task["source_id"])["success"]:
+        return {
+            "success": False,
+            "error": "ID {} already exists in database".format(task["source_id"])
+        }
+    try:
+        table.put_item(Item=task, ConditionExpression=Attr("source_id").not_exists())
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        logger.info("Curation task for {}: Created".format(task["source_id"]))
+        return {
+            "success": True,
+            "curation_task": task
+        }
+
+
+def delete_from_table(table_name, source_id):
+    tbl_res = get_dmo_table(table_name)
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Check that entry exists
+    if not read_table(table_name, source_id)["success"]:
+        return {
+            "success": False,
+            "error": "ID {} does not exist in database".format(source_id)
+        }
+    try:
+        table.delete_item(Key={"source_id": source_id})
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+
+    # Verify entry deleted
+    if read_table(table_name, source_id)["success"]:
+        return {
+            "success": False,
+            "error": "Entry not deleted from database"
+        }
+
+    return {
+        "success": True
+    }
+
+
+def initialize_dmo_table(table_name, client=DMO_CLIENT):
+    try:
+        table_key = DMO_TABLES[table_name]
+    except KeyError:
+        return {
+            "success": False,
+            "error": "Invalid table '{}'".format(table_name)
+        }
+    schema = deepcopy(DMO_SCHEMA)
+    schema["TableName"] = table_key
+
+    tbl_res = get_dmo_table(table_name, client)
     # Table should not be active already
     if tbl_res["success"]:
         return {
@@ -1703,7 +2037,7 @@ def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCH
             "error": repr(e)
             }
 
-    tbl_res2 = get_dmo_table(client, table_name)
+    tbl_res2 = get_dmo_table(table_name, client)
     if not tbl_res2["success"]:
         return {
             "success": False,
@@ -1716,9 +2050,16 @@ def initialize_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE, schema=DMO_SCH
             }
 
 
-def get_dmo_table(client=DMO_CLIENT, table_name=DMO_TABLE):
+def get_dmo_table(table_name, client=DMO_CLIENT):
     try:
-        table = client.Table(table_name)
+        table_key = DMO_TABLES[table_name]
+    except KeyError:
+        return {
+            "success": False,
+            "error": "Invalid table '{}'".format(table_name)
+        }
+    try:
+        table = client.Table(table_key)
         dmo_status = table.table_status
         if dmo_status != "ACTIVE":
             raise ValueError("Table not active")
