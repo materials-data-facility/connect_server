@@ -302,10 +302,7 @@ def test_validator():
     res = list(val.get_finished_dataset())
     assert len(res) == 2
     # Must remove dynamic data before comparison
-    assert res[0]["mdf"].pop("mdf_id")
     assert res[0]["mdf"].pop("ingest_date")
-    assert res[1]["mdf"].pop("mdf_id")
-    assert res[1]["mdf"].pop("parent_id")
     assert res[1]["mdf"].pop("ingest_date")
     assert res == correct1
     assert val.status() == "Dataset fully read out."
@@ -331,13 +328,8 @@ def test_validator():
     res = list(val.get_finished_dataset())
     assert len(res) == 3
     # Must remove dynamic data before comparison
-    assert res[0]["mdf"].pop("mdf_id")
     assert res[0]["mdf"].pop("ingest_date")
-    assert res[1]["mdf"].pop("mdf_id")
-    assert res[1]["mdf"].pop("parent_id")
     assert res[1]["mdf"].pop("ingest_date")
-    assert res[2]["mdf"].pop("mdf_id")
-    assert res[2]["mdf"].pop("parent_id")
     assert res[2]["mdf"].pop("ingest_date")
     assert res == correct2
 

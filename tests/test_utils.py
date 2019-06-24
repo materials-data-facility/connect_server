@@ -13,7 +13,7 @@ def test_make_source_id():
     }
     assert utils.make_source_id("Foo and Bar:,; a V123 !@#$ Stuff with dataset", "Smith",
                                 test=False) == correct1
-    assert utils.make_source_id("foo_bar_v123_stuff_v1", "Smith!", test=False) == correct1
+    assert utils.make_source_id("foo_bar_v123_stuff", "Smith!", test=False) == correct1
     assert utils.make_source_id("foo_bar_v123_stuff_v1.1", "  smith   ", test=False) == correct1
 
     # Test usage
@@ -26,8 +26,8 @@ def test_make_source_id():
     }
     assert utils.make_source_id("Foo and V123:,; a Bar !@#$ Thing", "Fox-Hound",
                                 test=True) == correct2
-    assert utils.make_source_id("foo_v123_bar_thing_v1", "Fox Hound", test=True) == correct2
-    assert utils.make_source_id("foo_v123_bar_thing_v1-1", "Fox-!-Hound", test=True) == correct2
+    assert utils.make_source_id("foo_v123_bar_thing", "Fox Hound", test=True) == correct2
+    assert utils.make_source_id("foo_v123_bar_thing_v1.1", "Fox-!-Hound", test=True) == correct2
 
     # Low-token-count usage
     correct3 = {
@@ -40,7 +40,7 @@ def test_make_source_id():
     assert utils.make_source_id("Small! A dataset data with THE data!!", "Very",
                                 test=False) == correct3
     assert utils.make_source_id("very_small_v1.1", "V Ery", test=False) == correct3
-    assert utils.make_source_id("very_small_v1", "$V $E RY", test=False) == correct3
+    assert utils.make_source_id("very_small", "$V $E RY", test=False) == correct3
 
     # Double usage should not mutate
     assert utils.make_source_id(correct1["source_id"], "SMITH", test=False) == correct1
@@ -97,38 +97,6 @@ def test_split_source_id():
         "source_id": "just_v3.4_this",
         "search_version": 0,
         "submission_version": 0
-    }
-
-    # TODO: Remove legacy-form support
-    # Legacy-dash form
-    assert utils.split_source_id("_test_foo_bar_study_v1-1") == {
-        "success": True,
-        "source_name": "_test_foo_bar_study",
-        "source_id": "_test_foo_bar_study_v1.1",
-        "search_version": 1,
-        "submission_version": 1
-    }
-    assert utils.split_source_id("study_v8_engines_v2-8") == {
-        "success": True,
-        "source_name": "study_v8_engines",
-        "source_id": "study_v8_engines_v2.8",
-        "search_version": 2,
-        "submission_version": 8
-    }
-    # Legacy-merge form
-    assert utils.split_source_id("_test_old_oqmd_v13") == {
-        "success": True,
-        "source_name": "_test_old_oqmd",
-        "source_id": "_test_old_oqmd_v13.13",
-        "search_version": 13,
-        "submission_version": 13
-    }
-    assert utils.split_source_id("ser_v1_ng_stuff_v2") == {
-        "success": True,
-        "source_name": "ser_v1_ng_stuff",
-        "source_id": "ser_v1_ng_stuff_v2.2",
-        "search_version": 2,
-        "submission_version": 2
     }
 
 

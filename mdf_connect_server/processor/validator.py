@@ -3,7 +3,6 @@ import json
 import os
 from tempfile import TemporaryFile
 
-from bson import ObjectId
 import jsonschema
 
 

@@ -396,9 +396,6 @@ def split_source_id(source_id):
     """Retrieve the source_name and version information from a source_id.
     Not complex logic, but easier to have in one location.
     Standard form: {source_name}_v{search_version}.{submission_version}
-    Legacy dash form: {source_name}_v{search_version}-{submission_version}
-    Legacy merged form: {source_name}_v{legacy_version}
-        The legacy merged form version is both the search version and submission version.
 
     Arguments:
     source_id (str): The source_id to split. If this is not a valid-form source_id,
@@ -414,9 +411,7 @@ def split_source_id(source_id):
         submission_version (int): The Connect version from the source_id.
     """
     # Check if source_id is valid
-    # TODO: Remove legacy-form support
-    if not (re.search("_v[0-9]+\\.[0-9]+$", source_id)
-            or re.search("_v[0-9]+-[0-9]+$", source_id) or re.search("_v[0-9]+$", source_id)):
+    if not re.search("_v[0-9]+\\.[0-9]+$", source_id):
         return {
             "success": False,
             "source_name": source_id,
@@ -426,17 +421,8 @@ def split_source_id(source_id):
         }
 
     source_name, versions = source_id.rsplit("_v", 1)
-    # TODO: Remove legacy-form support
     v_info = versions.split(".", 1)
-    if len(v_info) == 2:
-        search_version, submission_version = v_info
-    else:
-        v_info = versions.split("-", 1)
-        if len(v_info) == 2:
-            search_version, submission_version = v_info
-        else:
-            search_version = v_info[0]
-            submission_version = v_info[0]
+    search_version, submission_version = v_info
 
     return {
         "success": True,
