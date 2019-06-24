@@ -122,11 +122,11 @@ def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
             entry = json.loads(str_entry)
             # Add gmeta-formatted entry to batch
             acl = entry["mdf"].pop("acl")
-            # Identifier is source_id for datasets, source_id + mdf_id for records
+            # Identifier is source_id for datasets, source_id + scroll_id for records
             if entry["mdf"]["resource_type"] == "dataset":
                 iden = entry["mdf"]["source_id"]
             else:
-                iden = entry["mdf"]["source_id"] + "." + entry["mdf"]["mdf_id"]
+                iden = entry["mdf"]["source_id"] + "." + entry["mdf"]["scroll_id"]
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size
@@ -244,11 +244,12 @@ def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=
 
     if not subject:
         try:
-            # Identifier is source_id for datasets, source_id + mdf_id for records
+            # Identifier is source_id for datasets, source_id + scroll_id for records
             if updated_entry["mdf"]["resource_type"] == "dataset":
                 subject = updated_entry["mdf"]["source_id"]
             else:
-                subject = updated_entry["mdf"]["source_id"] + "." + updated_entry["mdf"]["mdf_id"]
+                subject = (updated_entry["mdf"]["source_id"]
+                           + "." + updated_entry["mdf"]["scroll_id"])
         except KeyError as e:
             return {
                 "success": False,
