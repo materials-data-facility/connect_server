@@ -126,7 +126,7 @@ def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
             if entry["mdf"]["resource_type"] == "dataset":
                 iden = entry["mdf"]["source_id"]
             else:
-                iden = entry["mdf"]["source_id"] + "." + entry["mdf"]["scroll_id"]
+                iden = entry["mdf"]["source_id"] + "." + str(entry["mdf"]["scroll_id"])
             batch.append(mdf_toolbox.format_gmeta(entry, acl=acl, identifier=iden))
 
             # If batch is appropriate size
@@ -249,7 +249,7 @@ def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=
                 subject = updated_entry["mdf"]["source_id"]
             else:
                 subject = (updated_entry["mdf"]["source_id"]
-                           + "." + updated_entry["mdf"]["scroll_id"])
+                           + "." + str(updated_entry["mdf"]["scroll_id"]))
         except KeyError as e:
             return {
                 "success": False,

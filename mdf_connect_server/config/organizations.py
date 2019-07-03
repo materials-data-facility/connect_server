@@ -82,7 +82,6 @@ ORGANIZATIONS = [{
         "public"
     ],
     "parent_organizations": [
-        "U.S. Department of Energy"
     ]
 }, {
     # Center for PRISMS
@@ -101,7 +100,6 @@ ORGANIZATIONS = [{
         "public"
     ],
     "parent_organizations": [
-        "U.S. Department of Energy"
     ]
 }, {
     # HTEM
@@ -163,7 +161,6 @@ ORGANIZATIONS = [{
         "public"
     ],
     "parent_organizations": [
-        "U.S. Department of Commerce"
     ]
 }, {
     # National Renewable Energy Laboratory
@@ -179,7 +176,6 @@ ORGANIZATIONS = [{
         "public"
     ],
     "parent_organizations": [
-        "U.S. Department of Energy"
     ]
 }, {
     # National Science Foundation
@@ -214,31 +210,5 @@ ORGANIZATIONS = [{
     ],
     "parent_organizations": [
         "National Institute of Standards and Technology"
-    ]
-}, {
-    # U.S. Department of Commerce
-    "canonical_name": "U.S. Department of Commerce",
-    "description": ("The Department of Commerce promotes job creation and economic "
-                    "growth by ensuring fair and reciprocal trade, providing the data "
-                    "necessary to support commerce and constitutional democracy, and "
-                    "fostering innovation by setting standards and conducting foundational "
-                    "research and development."),
-    "homepage": "https://www.commerce.gov/",
-    "permission_groups": [
-        "public"
-    ]
-}, {
-    # U.S. Department of Energy
-    "canonical_name": "U.S. Department of Energy",
-    "aliases": [
-        "DOE"
-    ],
-    "description": ("The mission of the Energy Department is to ensure America's "
-                    "security and prosperity by addressing its energy, environmental "
-                    "and nuclear challenges through transformative science and "
-                    "technology solutions."),
-    "homepage": "https://www.energy.gov/",
-    "permission_groups": [
-        "public"
     ]
 }]
