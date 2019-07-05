@@ -214,6 +214,132 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
     return
 
 
+def mass_update_search(index, entries=None, subjects=None, convert_func=None,
+                       acl=None, overwrite=False):
+    """Update multiple entries in Search.
+
+    Note:
+        source_id, source_name, and scroll_id must not be updated.
+
+    Note:
+        If subjects is supplied, this function will fetch the existing entries
+        and update them, so convert_func is required.
+        If entries is supplied, convert_func will be run if present.
+        It is an error to provide both entries and subjects.
+
+    Arguments:
+        index (str): The Search index to ingest into.
+        entries (list of dict): The un-updated versions of the entries to update.
+                This argument should be None if providing subjects.
+                Default None.
+        subjects (list of str): The list of subjects to update.
+                This argument should be None if providing entries.
+                Default None.
+        convert_func (function): The conversion/translation function accepting
+            an un-updated entry and returning the updated entry.
+            Default None, for no translation.
+        acl (list of strings): The list of Globus UUIDs allowed to access this entry.
+                Default None, if the acl is in the updated_entry.
+        overwrite (bool): If True, will overwrite old entries (fields not present in
+                the updates entry will be lost).
+                If False, will merge the updated_entry with the old entry.
+                Default False.
+    """
+    # Validate arguments
+    if entries is not None and subjects is not None:
+        return {
+            "success": False,
+            "error": "You cannot provide both entries and subjects."
+        }
+    elif subjects is not None and convert_func is None:
+        return {
+            "success": False,
+            "error": "You must provide a convert_func when supplying subjects."
+        }
+    # Setup
+    ingest_client = mdf_toolbox.confidential_login(
+                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
+                                               {"services": ["search_ingest"]}))["search_ingest"]
+    index = mdf_toolbox.translate_index(index)
+    if isinstance(subjects, str):
+        subjects = [subjects]
+    if isinstance(entries, dict):
+        entries = [entries]
+
+    # Subjects - fetch from Search
+    if subjects:
+        entries = []
+        for subject in subjects:
+            try:
+                entries.append(ingest_client.get_entry(index, subject)["content"][0])
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": "Unable to fetch subjects: {}".format(repr(e))
+                }
+
+    # Translate all entries if function supplied
+    updated_entries = ([convert_func(entry) for entry in entries]
+                       if convert_func else entries)
+
+    for updated_entry in updated_entries:
+        # Get subject (redundant for subject-provided calls but a useful double-check)
+        try:
+            # Identifier is source_id for datasets, source_id + scroll_id for records
+            if updated_entry["mdf"]["resource_type"] == "dataset":
+                subject = updated_entry["mdf"]["source_id"]
+            else:
+                subject = (updated_entry["mdf"]["source_id"]
+                           + "." + str(updated_entry["mdf"]["scroll_id"]))
+        except KeyError as e:
+            return {
+                "success": False,
+                "error": "Unable to derive subject from entry without key " + str(e)
+            }
+        # Get ACL
+        if acl:
+            entry_acl = acl
+        else:
+            try:
+                entry_acl = updated_entry["mdf"].pop("acl")
+            except KeyError as e:
+                return {
+                    "success": False,
+                    "error": "Unable to derive acl from entry without key " + str(e)
+                }
+        # Get old entry (should always exist; this is an update)
+        # Serves a check against changing source_id or scroll_id for subject-provided calls
+        try:
+            old_entry = ingest_client.get_entry(index, subject)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": repr(e)
+            }
+        if not overwrite:
+            updated_entry = mdf_toolbox.dict_merge(updated_entry, old_entry["content"][0])
+
+        try:
+            gmeta_update = mdf_toolbox.format_gmeta(updated_entry, entry_acl, subject)
+            update_res = ingest_client.update_entry(index, gmeta_update)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": repr(e)
+            }
+        if not update_res["success"] or update_res["num_documents_ingested"] != 1:
+            return {
+                "success": False,
+                "error": ("Update returned '{}', "
+                          "{} entries were updated.").format(update_res["success"],
+                                                             update_res["num_documents_ingested"])
+            }
+    return {
+        "success": True,
+        "entries": updated_entries
+    }
+
+
 def update_search_entry(index, updated_entry, subject=None, acl=None, overwrite=False):
     """Update an entry in Search.
     Arguments:
