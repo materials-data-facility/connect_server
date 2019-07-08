@@ -502,10 +502,14 @@ def fetch_org_rules(org_names, user_rules=None):
     # Function for convenience, but not generalizable/useful for other cases
     def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
 
+    # Fetch list of organizations
+    with open(os.path.join(CONFIG["AUX_DATA_PATH"], "organizations.json")) as f:
+        organizations = json.load(f)
+
     # Cache list of all organization aliases to match against
     # Transform into tuple (normalized_aliases, org_rules) for convenience
     all_clean_orgs = []
-    for org in CONFIG["ORGANIZATIONS"]:
+    for org in organizations:
         aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
                                                        + [org["canonical_name"]])]
         all_clean_orgs.append((aliases, deepcopy(org)))

@@ -3,7 +3,7 @@ import os
 from mdf_toolbox import dict_merge
 
 from mdf_connect_server.config import (DEFAULT, DEV, GLOBUS_HTTP_HOSTS,
-                                       GROUPINGS, KEYS, ORGANIZATIONS, PROD)
+                                       GROUPINGS, KEYS, PROD)
 
 
 CONFIG = {}
@@ -20,7 +20,6 @@ else:
                            " or 'development', even for processing only.")
 CONFIG["GLOBUS_HTTP_HOSTS"] = GLOBUS_HTTP_HOSTS
 CONFIG["GROUPING_RULES"] = GROUPINGS
-CONFIG["ORGANIZATIONS"] = ORGANIZATIONS
 # Add credentials
 CONFIG["GLOBUS_CREDS"] = {
     "app_name": "MDF Open Connect",
