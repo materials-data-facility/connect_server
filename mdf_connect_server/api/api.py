@@ -703,6 +703,7 @@ def get_schema(schema_type=None):
     """
     if schema_type is None:
         schema_type = "list"
+    schema_type = schema_type.strip().lower()
 
     # Get list of all schema names
     if schema_type == "list":
@@ -754,7 +755,7 @@ def get_schema(schema_type=None):
     # Get single named schema
     else:
         # Sanitize schema_type into filename-appropriate format
-        schema_name = schema_type.replace(".json", "").strip().replace(" ", "_").lower()
+        schema_name = schema_type.replace(".json", "").replace(" ", "_")
         try:
             with open(os.path.join(CONFIG["SCHEMA_PATH"],
                                    "{}.json".format(schema_name))) as schema_file:
@@ -776,4 +777,76 @@ def get_schema(schema_type=None):
             return (jsonify({
                 "success": True,
                 "schema": schema
+            }), 200)
+
+
+@app.route("/organizations", methods=["GET"])
+@app.route("/organizations/<organization>", methods=["GET"])
+def get_organization(organization=None):
+    """Return selected organization information.
+    Valid argument values:
+        - Named orgs (canonical or alias)
+        - "list" or None, which returns a list of orgs
+        - "all", which returns data on every org in MDF
+    """
+    # Normalize name: Remove special characters (including whitespace) and capitalization
+    # Function for convenience, but not generalizable/useful for other cases
+    def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
+
+    if organization is None:
+        organization = "list"
+    org_type = normalize_name(organization)
+
+    # Read org file
+    try:
+        with open(os.path.join(CONFIG["AUX_DATA_PATH"], "organizations.json")) as f:
+            organizations = json.load(f)
+    except Exception as e:
+        logger.error("Unable to read organization list: {}".format(repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": "Unable to access organizations at this time."
+        }), 500)
+
+    # Get list of all orgs
+    if org_type == "list":
+        org_list = [org["canonical_name"] for org in organizations]
+        return (jsonify({
+            "success": True,
+            "organization_list": org_list
+        }), 200)
+    # Get all orgs
+    elif org_type == "all":
+        return (jsonify({
+            "success": True,
+            "all_organizations": organizations
+        }), 200)
+    # Get specific org
+    else:
+        specific_org = []
+        for org in organizations:
+            aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
+                                                           + [org["canonical_name"]])]
+            if org_type in aliases:
+                specific_org.append(org)
+        # None found
+        if len(specific_org) < 1:
+            return (jsonify({
+                "success": False,
+                "error": "Organization '{}' (from '{}') not found".format(org_type, organization)
+            }), 404)
+        elif len(specific_org) == 1:
+            return (jsonify({
+                "success": True,
+                "organization": specific_org[0]
+            }), 200)
+        # Must be exactly one specific org, else is error
+        # Should never happen
+        elif len(specific_org) > 1:
+            logger.critical("More than one org matches '{}':\n{}".format(org_type, specific_org))
+            return (jsonify({
+                "success": True,
+                "error": ("Multiple organizations match '{}' (from '{}'). Both are included. "
+                          "Please notify MDF about this error.".format(org_type, organization)),
+                "organization": specific_org
             }), 200)
