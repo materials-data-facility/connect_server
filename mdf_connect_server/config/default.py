@@ -8,6 +8,8 @@ DEFAULT = {
     "CURATION_DATA": os.path.expanduser("~/curation/"),
 
     "SCHEMA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas", "schemas")),
+    "AUX_DATA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas",
+                                                  "connect_aux_data")),
 
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds

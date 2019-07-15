@@ -3,7 +3,6 @@ import json
 import os
 from tempfile import TemporaryFile
 
-from bson import ObjectId
 import jsonschema
 
 
@@ -74,16 +73,10 @@ class Validator:
         # TODO
 
         # BLOCK: mdf
-        # mdf_id
-        ds_md["mdf"]["mdf_id"] = str(ObjectId())
-
         # scroll_id
         self.__scroll_id = 0
         ds_md["mdf"]["scroll_id"] = self.__scroll_id
         self.__scroll_id += 1
-
-        # parent_id
-        # Not Implemented
 
         # ingest_date
         ds_md["mdf"]["ingest_date"] = self.__ingest_date
@@ -256,15 +249,9 @@ class Validator:
         # source_name
         rc_md["mdf"]["source_name"] = self.__dataset["mdf"]["source_name"]
 
-        # mdf_id
-        rc_md["mdf"]["mdf_id"] = str(ObjectId())
-
         # scroll_id
         rc_md["mdf"]["scroll_id"] = self.__scroll_id
         self.__scroll_id += 1
-
-        # parent_id
-        rc_md["mdf"]["parent_id"] = self.__dataset["mdf"]["mdf_id"]
 
         # ingest_date
         rc_md["mdf"]["ingest_date"] = self.__ingest_date

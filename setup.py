@@ -26,7 +26,6 @@ setup(
         "Pillow>=5.1.0",
         # "pycalphad>=0.7",  # Must be conda installed
         "pymatgen>=2018.1.13",
-        "pymongo>=3.6.1",  # For bson.ObjectId
         "pypif>=2.1.0",
         "pypif-sdk>=2.2.1",
         "python-magic>=0.4.15",
