@@ -927,7 +927,6 @@ def translate_dc_schema(dc_md, doi=None, url=None):
     # url
     if url:
         doi_data["url"] = url
-        doi_data["landingPage"] = url
 
     # identifiers
     if doi_data.get("identifier"):
@@ -970,6 +969,7 @@ def translate_dc_schema(dc_md, doi=None, url=None):
     if doi_data.get("alternateIdentifiers"):
         doi_data.pop("alternateIdentifiers")
 
+    doi_data["event"] = "publish"
     doi_md = {
         "data": {
             "type": "dois",
@@ -1005,6 +1005,8 @@ def datacite_mint_doi(dc_md, test, url=None, doi=None):
     else:
         return {
             "success": True,
+            # "datacite_full": res_json,
+            # "dataset": doi_md,
             "datacite": res_json["data"]
         }
 
