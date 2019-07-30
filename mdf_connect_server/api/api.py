@@ -283,6 +283,8 @@ def accept_submission():
     # If Publishing, canonical data location is Publish location
     elif sub_conf["services"].get("mdf_publish"):
         sub_conf["canon_destination"] = sub_conf["services"]["mdf_publish"]["publication_location"]
+        if not sub_conf["canon_destination"].strip("/").endswith(source_id):
+            sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"], source_id)
     # Otherwise (not Publishing), canon destination is backup (Petrel)
     else:
         sub_conf["canon_destination"] = ("globus://{}{}/"
@@ -291,6 +293,14 @@ def accept_submission():
     # Remove canon dest from data_destinations (canon dest transferred to separately)
     if sub_conf["canon_destination"] in sub_conf["data_destinations"]:
         sub_conf["data_destinations"].remove(sub_conf["canon_destination"])
+    # Transfer into source_id dir
+    final_dests = []
+    for dest in sub_conf["data_destinations"]:
+        if dest.strip("/").endswith(source_id):
+            final_dests.append(dest)
+        else:
+            final_dests.append(os.path.join(dest, source_id))
+    sub_conf["data_destinations"] = final_dests
 
     # Add canon dest to metadata
     metadata["data"] = {
