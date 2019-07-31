@@ -454,7 +454,8 @@ def parse_image(group, params=None):
                 "image": {
                     "shape": [
                         im.height,
-                        im.width
+                        im.width,
+                        len(im.getbands())
                     ]
                 }
             })
