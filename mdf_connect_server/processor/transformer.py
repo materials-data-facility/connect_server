@@ -453,8 +453,8 @@ def parse_image(group, params=None):
             records.append({
                 "image": {
                     "shape": [
-                        im.width,
-                        im.height
+                        im.height,
+                        im.width
                     ]
                 }
             })
@@ -551,8 +551,20 @@ def parse_electron_microscopy(group, params=None):
 
             # Image metadata
             try:
-                image["shape"] = list(raw_data["ImageList"]["TagGroup0"]
-                                              ["ImageData"]["Dimensions"].values())
+                shape = []
+                base_shape = list(raw_data["ImageList"]["TagGroup0"]
+                                          ["ImageData"]["Dimensions"].values())
+                # Reverse X and Y order to match MDF schema (y, x, z, ..., channels)
+                if len(base_shape) >= 2:
+                    shape.append(base_shape[1])
+                    shape.append(base_shape[0])
+                    shape.extend(base_shape[2:])
+                # If 1 dimension, don't need to swap
+                elif len(base_shape) > 0:
+                    shape = base_shape
+
+                if shape:
+                    image["shape"] = shape
             except KeyError:
                 pass
 
