@@ -42,6 +42,21 @@ def test_make_source_id():
     assert utils.make_source_id("very_small_v1.1", "V Ery", test=False) == correct3
     assert utils.make_source_id("very_small", "$V $E RY", test=False) == correct3
 
+    # Without author prepended (useful for when source_name supplied by user)
+    correct4 = {
+        "source_id": "theory_everything_v1.1",
+        "source_name": "theory_everything",
+        "search_version": 1,
+        "submission_version": 1,
+        "user_id_list": set()
+    }
+    assert utils.make_source_id("A Theory Of Everything", "Issac Erwin Einstein",
+                                test=False, add_author=False) == correct4
+    assert utils.make_source_id("_Theory_Everything", "Issac Erwin Einstein",
+                                test=False, add_author=False) == correct4
+    assert utils.make_source_id("theory_everything_v1.1", "Marie DeGrasse Nye",
+                                test=False, add_author=False) == correct4
+
     # Double usage should not mutate
     assert utils.make_source_id(correct1["source_id"], "SMITH", test=False) == correct1
     assert utils.make_source_id(correct1["source_name"], "  Smith", test=False) == correct1
@@ -49,6 +64,10 @@ def test_make_source_id():
     assert utils.make_source_id(correct2["source_name"], "FOXHound", test=True) == correct2
     assert utils.make_source_id(correct3["source_id"], "Very", test=False) == correct3
     assert utils.make_source_id(correct3["source_name"], "V. Ery", test=False) == correct3
+    assert utils.make_source_id(correct4["source_id"], "Grace Tesla Hawking",
+                                test=False, add_author=False) == correct4
+    assert utils.make_source_id(correct4["source_name"], "Kermit Witha Mustache",
+                                test=False, add_author=False) == correct4
 
     # TODO: Set/find known static source_id in StatusDB
     # With previous versions
