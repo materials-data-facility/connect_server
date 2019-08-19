@@ -498,7 +498,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                  os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
                                                               source_id + "_final.json"))
         feed_backup_res = utils.backup_data(mdf_transfer_client, source_feed_loc,
-                                            backup_feed_loc)
+                                            backup_feed_loc, acl=None)
         if feed_backup_res[backup_feed_loc]["success"] is not True:
             utils.update_status(source_id, "ingest_search", "R",
                                 text=("Feedstock backup failed: {}"

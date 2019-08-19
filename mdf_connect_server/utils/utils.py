@@ -760,6 +760,9 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
     backup_locs (list of str): The backup locations.
     acl (list of str): The ACL to set on the backup location. Default None, to not set ACL.
 
+    Warning: ACL setting not supported for non-directory Transfers. Globus Transfer cannot
+            set ACLs on individual files, only on directories.
+
     Returns:
     dict: [backup_loc] (dict)
             success (bool): True on a successful backup to this backup location,
@@ -819,7 +822,12 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
             }
             continue
         # Set backup ACL if requested
-        if acl is not None:
+        # Warn in log if impossible to set backup
+        # TODO: Better handle file-level ACL rejection
+        if acl is not None and not backup_info.path.endswith("/"):
+            logger.warning("Backup path {} is a file; cannot set ACL {}"
+                           .format(backup_info.path, acl))
+        elif acl is not None:
             acl_res = []
             for identity in acl:
                 # Set ACL appropriately for request
@@ -856,9 +864,10 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
                         # Only stores last error, all errors here should be about the same
                         error = ("Unable to set ACL on endpoint '{}': {}"
                                  .format(backup_info.netloc, str(e)))
-                    if not res.get("code") == "Created":
-                        error = ("Unable to set ACL on endpoint '{}': {}"
-                                 .format(backup_info.netloc, res.get("code")))
+                    else:
+                        if not res.get("code") == "Created":
+                            error = ("Unable to set ACL on endpoint '{}': {}"
+                                     .format(backup_info.netloc, res.get("code")))
         else:
             acl_res = None
 

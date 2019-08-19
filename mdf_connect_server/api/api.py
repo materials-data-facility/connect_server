@@ -145,10 +145,10 @@ def accept_submission():
         # or submitter
         author_name = metadata["dc"]["creators"][0].get(
                             "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
-        existing_source_name = metadata.get("mdf", {}).get("source_name")
+        existing_source_name = metadata.get("mdf", {}).get("source_name", None)
         source_id_info = utils.make_source_id(existing_source_name or sub_title,
                                               author_name, test=sub_conf["test"],
-                                              add_author=bool(existing_source_name))
+                                              add_author=(not bool(existing_source_name)))
     except Exception as e:
         return (jsonify({
             "success": False,
