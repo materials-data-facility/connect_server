@@ -832,22 +832,39 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
                         "permissions": "r"
                     }]
                 else:
-                    # TODO: Is it possible to determine a Globus UUID type?
-                    #       Generalize and add to Toolbox if so.
-                    #       Assume for now it isn't possible; add both Group and Identity
-                    acl_rules = [{
-                        "DATA_TYPE": "access",
-                        "principal_type": "identity",
-                        "principal": identity,
-                        "path": backup_info.path,
-                        "permissions": "r"
-                    }, {
-                        "DATA_TYPE": "access",
-                        "principal_type": "group",
-                        "principal": identity,
-                        "path": backup_info.path,
-                        "permissions": "r"
-                    }]
+                    # If URN provided, we only need one rule
+                    if identity.startswith("urn:"):
+                        if identity.startswith("urn:globus:auth:identity:"):
+                            principal = "identity"
+                        elif identity.startswith("urn:globus:groups:id:"):
+                            principal = "group"
+                        else:
+                            # TODO: How to handle unknown URN?
+                            principal = "identity"
+                        acl_rules = [{
+                            "DATA_TYPE": "access",
+                            "principal_type": principal,
+                            "principal": identity.split(":")[-1],
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }]
+                    else:
+                        # TODO: Is it possible to determine a bare Globus UUID's type?
+                        #       Generalize and add to Toolbox if so.
+                        #       Assume for now it isn't possible; add both Group and Identity
+                        acl_rules = [{
+                            "DATA_TYPE": "access",
+                            "principal_type": "identity",
+                            "principal": identity,
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }, {
+                            "DATA_TYPE": "access",
+                            "principal_type": "group",
+                            "principal": identity,
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }]
                 for rule in acl_rules:
                     try:
                         res = transfer_client.add_endpoint_acl_rule(backup_info.netloc, rule).data
