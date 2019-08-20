@@ -286,15 +286,14 @@ def accept_submission():
         sub_conf["canon_destination"] = utils.normalize_globus_uri(
                                                     sub_conf["services"]["mdf_publish"]
                                                             ["publication_location"])
-        if not sub_conf["canon_destination"].strip("/").endswith(source_id):
-            sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
-                                                         source_id + "/")
+        # Transfer into source_id dir
+        sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
+                                                     source_id + "/")
     # Otherwise (not Publishing), canon destination is backup (Petrel)
     else:
         sub_conf["canon_destination"] = ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
-                                                 os.path.join(CONFIG["BACKUP_PATH"],
-                                                              source_id + "/")))
+                                                 os.path.join(CONFIG["BACKUP_PATH"], source_id)))
     # Remove canon dest from data_destinations (canon dest transferred to separately)
     if sub_conf["canon_destination"] in sub_conf["data_destinations"]:
         sub_conf["data_destinations"].remove(sub_conf["canon_destination"])
@@ -302,10 +301,7 @@ def accept_submission():
     final_dests = []
     for dest in sub_conf["data_destinations"]:
         norm_dest = utils.normalize_globus_uri(dest)
-        if norm_dest.strip("/").endswith(source_id):
-            final_dests.append(norm_dest)
-        else:
-            final_dests.append(os.path.join(norm_dest, source_id + "/"))
+        final_dests.append(os.path.join(norm_dest, source_id + "/"))
     sub_conf["data_destinations"] = final_dests
 
     # Add canon dest to metadata
