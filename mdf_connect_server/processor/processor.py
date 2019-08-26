@@ -467,6 +467,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "feedstock_file": feedstock_file,
             "source_id": source_id,
             "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
+            "delete_existing": True,
             "batch_size": CONFIG["SEARCH_BATCH_SIZE"]
         }
         search_res = utils.search_ingest(**search_args)
