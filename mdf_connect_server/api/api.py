@@ -145,10 +145,10 @@ def accept_submission():
         # or submitter
         author_name = metadata["dc"]["creators"][0].get(
                             "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
-        existing_source_name = metadata.get("mdf", {}).get("source_name")
+        existing_source_name = metadata.get("mdf", {}).get("source_name", None)
         source_id_info = utils.make_source_id(existing_source_name or sub_title,
                                               author_name, test=sub_conf["test"],
-                                              add_author=bool(existing_source_name))
+                                              add_author=(not bool(existing_source_name)))
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -283,9 +283,12 @@ def accept_submission():
         }), 400)
     # If Publishing, canonical data location is Publish location
     elif sub_conf["services"].get("mdf_publish"):
-        sub_conf["canon_destination"] = sub_conf["services"]["mdf_publish"]["publication_location"]
-        if not sub_conf["canon_destination"].strip("/").endswith(source_id):
-            sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"], source_id)
+        sub_conf["canon_destination"] = utils.normalize_globus_uri(
+                                                    sub_conf["services"]["mdf_publish"]
+                                                            ["publication_location"])
+        # Transfer into source_id dir
+        sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
+                                                     source_id + "/")
     # Otherwise (not Publishing), canon destination is backup (Petrel)
     else:
         sub_conf["canon_destination"] = ("globus://{}{}/"
@@ -297,10 +300,8 @@ def accept_submission():
     # Transfer into source_id dir
     final_dests = []
     for dest in sub_conf["data_destinations"]:
-        if dest.strip("/").endswith(source_id):
-            final_dests.append(dest)
-        else:
-            final_dests.append(os.path.join(dest, source_id))
+        norm_dest = utils.normalize_globus_uri(dest)
+        final_dests.append(os.path.join(norm_dest, source_id + "/"))
     sub_conf["data_destinations"] = final_dests
 
     # Add canon dest to metadata
