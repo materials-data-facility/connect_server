@@ -242,10 +242,11 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 logger.debug("Data transfer: '{}' to '{}'".format(data_source,
                                                                   sub_conf["canon_destination"]))
                 backup_res = utils.backup_data(mdf_transfer_client, data_source,
-                                               sub_conf["canon_destination"])
-                if not backup_res[sub_conf["canon_destination"]]:
-                    err_text = ("Transfer from '{}' failed: {}"
-                                .format(data_source, backup_res[sub_conf["canon_destination"]]))
+                                               sub_conf["canon_destination"], acl=sub_conf["acl"])
+                if not backup_res[sub_conf["canon_destination"]]["success"]:
+                    err_text = ("Transfer from '{}' to primary/canon destination '{}' failed: {}"
+                                .format(data_source, sub_conf["canon_destination"],
+                                        backup_res[sub_conf["canon_destination"]]["error"]))
                     utils.update_status(source_id, "data_transfer", "F", text=err_text,
                                         except_on_fail=True)
                     return
@@ -399,6 +400,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                              .format(state_data["source_id"], source_id))
                 utils.update_status(source_id, "curation", "F",
                                     text="Submission corrupted", except_on_fail=True)
+                return
             # Load state variables back
             sub_conf = state_data["sub_conf"]
             dataset = state_data["dataset"]
@@ -465,6 +467,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "feedstock_file": feedstock_file,
             "source_id": source_id,
             "index": search_config.get("index", CONFIG["INGEST_INDEX"]),
+            "delete_existing": True,
             "batch_size": CONFIG["SEARCH_BATCH_SIZE"]
         }
         search_res = utils.search_ingest(**search_args)
@@ -496,11 +499,11 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                  os.path.join(CONFIG["BACKUP_FEEDSTOCK"],
                                                               source_id + "_final.json"))
         feed_backup_res = utils.backup_data(mdf_transfer_client, source_feed_loc,
-                                            backup_feed_loc)
-        if feed_backup_res[backup_feed_loc] is not True:
+                                            backup_feed_loc, acl=None)
+        if not feed_backup_res[backup_feed_loc]["success"]:
             utils.update_status(source_id, "ingest_search", "R",
                                 text=("Feedstock backup failed: {}"
-                                      .format(feed_backup_res[backup_feed_loc])),
+                                      .format(feed_backup_res[backup_feed_loc]["error"])),
                                 except_on_fail=True)
         else:
             utils.update_status(source_id, "ingest_search", "S", except_on_fail=True)
@@ -512,11 +515,19 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
         utils.update_status(source_id, "ingest_backup", "P", except_on_fail=True)
         backup_res = utils.backup_data(mdf_transfer_client,
                                        storage_loc=sub_conf["canon_destination"],
-                                       backup_locs=sub_conf["data_destinations"])
-        if not all([val is True for val in backup_res.values()]):
-            err_msg = "; ".join(["'{}' failed: {}".format(k, v) for k, v in backup_res.items()
-                                 if v is not True])
+                                       backup_locs=sub_conf["data_destinations"],
+                                       acl=sub_conf["acl"])
+        # On any complete failure, fail submission
+        if not all([val["success"] is True for val in backup_res.values()]):
+            err_msg = "; ".join(["'{}' failed: {}".format(k, v["error"])
+                                 for k, v in backup_res.items() if v["success"] is not True])
             utils.update_status(source_id, "ingest_backup", "F", text=err_msg, except_on_fail=True)
+            return
+        # On an error with a successful Transfer, notify user but continue
+        elif not all([val["error"] == "" for val in backup_res.values()]):
+            err_msg = "; ".join(["on '{}': {}".format(k, v["error"])
+                                 for k, v in backup_res.items() if v["error"]])
+            utils.update_status(source_id, "ingest_backup", "R", text=err_msg, except_on_fail=True)
         else:
             utils.update_status(source_id, "ingest_backup", "S", except_on_fail=True)
     else:
@@ -671,7 +682,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 except json.JSONDecodeError:
                     raise ValueError("Invalid MRR response: {}".format(mrr_res_raw.content))
             except Exception as e:
-                utils.update_status(source_id, "ingest_mrr", "F",
+                utils.update_status(source_id, "ingest_mrr", "R",
                                     text="Unable to submit MRR entry:"+repr(e),
                                     except_on_fail=True)
             else:
@@ -689,8 +700,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     utils.update_status(source_id, "ingest_cleanup", "P", except_on_fail=True)
 
     dataset["services"] = service_res
-    ds_update = utils.update_search_entry(index=search_config.get("index", CONFIG["INGEST_INDEX"]),
-                                          updated_entry=dataset, overwrite=False)
+    ds_update = utils.update_search_entries(search_config.get("index", CONFIG["INGEST_INDEX"]),
+                                            entries=[dataset], overwrite=False)
     if not ds_update["success"]:
         utils.update_status(source_id, "ingest_cleanup", "F",
                             text=ds_update.get("error", "Unable to update dataset"),

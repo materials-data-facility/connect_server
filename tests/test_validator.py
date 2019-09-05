@@ -125,9 +125,7 @@ def test_validator():
             "magnification": -5
         },
         "image": {
-            "width": 99,
-            "height": 101,
-            "megapixels": 0.00001
+            "shape": [99, 101]
         },
         "custom": {
             "is_okay": "True"
@@ -279,9 +277,7 @@ def test_validator():
             'magnification': -5
         },
         'image': {
-            'width': 99,
-            'height': 101,
-            'megapixels': 0.00001
+            "shape": [99, 101]
         },
         'custom': {
             'is_okay': "True"

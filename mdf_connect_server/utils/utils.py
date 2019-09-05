@@ -250,7 +250,7 @@ def authenticate_token(token, groups, require_all=False):
     }
 
 
-def make_source_id(title, author, test=False, index=None):
+def make_source_id(title, author, test=False, index=None, add_author=True):
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
@@ -298,9 +298,10 @@ def make_source_id(title, author, test=False, index=None):
 
     # Clean author tokens, merge into one word
     author_word = ""
-    for token in author_tokens:
-        clean_token = "".join([char for char in token.lower() if char.isalnum()])
-        author_word += clean_token
+    if add_author:
+        for token in author_tokens:
+            clean_token = "".join([char for char in token.lower() if char.isalnum()])
+            author_word += clean_token
 
     # Remove author_word from title, if exists (e.g. from previous make_source_id())
     while author_word in title_clean:
@@ -744,7 +745,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, storage_loc, backup_locs):
+def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
     """Back up data to remote endpoints.
     (One source to many destinations)
 
@@ -757,13 +758,33 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     transfer_client (TransferClient): An authenticated TransferClient with access to the data.
     storage_loc (str): A globus:// uri to the current data location.
     backup_locs (list of str): The backup locations.
+    acl (list of str): The ACL to set on the backup location. Default None, to not set ACL.
+
+    Warning: ACL setting not supported for non-directory Transfers. Globus Transfer cannot
+            set ACLs on individual files, only on directories.
 
     Returns:
-    dict: [backup_loc] (True or str): True on a successful backup to this backup location,
-            a str error message on failure.
+    dict: [backup_loc] (dict)
+            success (bool): True on a successful backup to this backup location,
+                    False otherwise.
+            error (str): The error encountered. May be empty, if no errors were encountered.
+                    Must have some value if success is False.
+
+    Example return value (transfer to EP abc123):
+    {
+        "abc123": {
+            "success": True,
+            "error": "Unable to set ACL on endpoint 'abc123'"
+        }
+    }
     """
     if isinstance(backup_locs, str):
         backup_locs = [backup_locs]
+    if isinstance(acl, str):
+        acl = [acl]
+    # "public" permission allows any other identities anyway
+    if acl is not None and "public" in acl:
+        acl = ["public"]
     results = {}
     norm_store = normalize_globus_uri(storage_loc)
     storage_info = urllib.parse.urlparse(norm_store)
@@ -771,25 +792,102 @@ def backup_data(transfer_client, storage_loc, backup_locs):
     # Storage must be Globus endpoint
     if not storage_info.scheme == "globus":
         error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
-                 "directly published from or backed up from.".format(norm_store, storage_loc))
+                 "directly published from or backed up from".format(norm_store, storage_loc))
         return {
-            "all_locations": error
+            "all_locations": {
+                "success": False,
+                "error": error
+            }
         }
     # No backups if storage EP is False
     elif storage_info.netloc == "False":
         logger.warning("All backups skipped from storage: '{}'".format(norm_store))
         for backup in backup_locs:
-            results[backup] = True
+            results[backup] = {
+                "success": True,
+                "error": "All backups skipped from storage: '{}'".format(norm_store)
+            }
         return results
 
     for backup in backup_locs:
+        error = ""
         norm_backup = normalize_globus_uri(backup)
         backup_info = urllib.parse.urlparse(norm_backup)
         # No backup if location EP is False
         if backup_info.netloc == "False":
             logger.warning("Backup location skipped: '{}'".format(norm_backup))
-            results[backup] = True
+            results[backup] = {
+                "success": True,
+                "error": "Backup location skipped: '{}'".format(norm_backup)
+            }
             continue
+        # Set backup ACL if requested
+        # Warn in log if impossible to set backup
+        # TODO: Better handle file-level ACL rejection
+        if acl is not None and not backup_info.path.endswith("/"):
+            logger.warning("Backup path {} is a file; cannot set ACL {}"
+                           .format(backup_info.path, acl))
+        elif acl is not None:
+            acl_res = []
+            for identity in acl:
+                # Set ACL appropriately for request
+                if identity == "public":
+                    acl_rules = [{
+                        "DATA_TYPE": "access",
+                        "principal_type": "anonymous",
+                        "principal": "",
+                        "path": backup_info.path,
+                        "permissions": "r"
+                    }]
+                else:
+                    # If URN provided, we only need one rule
+                    if identity.startswith("urn:"):
+                        if identity.startswith("urn:globus:auth:identity:"):
+                            principal = "identity"
+                        elif identity.startswith("urn:globus:groups:id:"):
+                            principal = "group"
+                        else:
+                            # TODO: How to handle unknown URN?
+                            principal = "identity"
+                        acl_rules = [{
+                            "DATA_TYPE": "access",
+                            "principal_type": principal,
+                            "principal": identity.split(":")[-1],
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }]
+                    else:
+                        # TODO: Is it possible to determine a bare Globus UUID's type?
+                        #       Generalize and add to Toolbox if so.
+                        #       Assume for now it isn't possible; add both Group and Identity
+                        acl_rules = [{
+                            "DATA_TYPE": "access",
+                            "principal_type": "identity",
+                            "principal": identity,
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }, {
+                            "DATA_TYPE": "access",
+                            "principal_type": "group",
+                            "principal": identity,
+                            "path": backup_info.path,
+                            "permissions": "r"
+                        }]
+                for rule in acl_rules:
+                    try:
+                        res = transfer_client.add_endpoint_acl_rule(backup_info.netloc, rule).data
+                        acl_res.append(res)
+                    except Exception as e:
+                        # Only stores last error, all errors here should be about the same
+                        error = ("Unable to set ACL on endpoint '{}': {}"
+                                 .format(backup_info.netloc, str(e)))
+                    else:
+                        if not res.get("code") == "Created":
+                            error = ("Unable to set ACL on endpoint '{}': {}"
+                                     .format(backup_info.netloc, res.get("code")))
+        else:
+            acl_res = None
+
         transfer = mdf_toolbox.custom_transfer(
                         transfer_client, storage_info.netloc, backup_info.netloc,
                         [(storage_info.path, backup_info.path)],
@@ -799,9 +897,38 @@ def backup_data(transfer_client, storage_loc, backup_locs):
             if not event["success"]:
                 logger.debug(event)
 
-        results[backup] = (event["success"]
-                           or "{}: {}".format(event.get("code", "No code found"),
-                                              event.get("description", "No description found")))
+        if not event["success"]:
+            # Remove ACL, if set, because transfer failed
+            if acl_res is not None:
+                for acl_set in acl_res:
+                    try:
+                        acl_del = transfer_client.delete_endpoint_acl_rule(
+                                                    backup_info.netloc, acl_set["access_id"])
+                        if not acl_del.get("code") == "Deleted":
+                            raise ValueError("ACL rule not deleted: '{}'"
+                                             .format(acl_del.get("code")))
+                    # Deletion failure not showstopper here
+                    # Worst-case, invalid path has ACL set on destination EP
+                    except Exception:
+                        # If ACL creation failed, deletion failure is expected
+                        # But if there was not an error, notify user about deletion error
+                        if not error:
+                            error = "Failed to delete ACL after failed Transfer"
+            # If previous non-fatal error occurred, add after primary error message
+            # Ex. "Code X: Permission denied, additionally failed to delete ACL"
+            if error:
+                error = "{}: {}\n{}".format(event.get("code", "No code found"),
+                                            event.get("description", "No description found"),
+                                            error)
+            else:
+                error = "{}: {}\n{}".format(event.get("code", "No code found"),
+                                            event.get("description", "No description found"))
+
+        results[backup] = {
+            "success": event["success"],
+            "error": error
+        }
+
     return results
 
 

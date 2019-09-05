@@ -25,6 +25,7 @@ def generate_stats(raw=False, return_all=False, many_cutoff=100):
     dataset_list = mdf.match_resource_types("dataset").search()
 
     all_datasets = []
+    num_records = 0
     zero_records = []
     one_record = []
     multiple_records = []
@@ -37,6 +38,7 @@ def generate_stats(raw=False, return_all=False, many_cutoff=100):
                           .search(limit=0, info=True)[1]["total_query_matches"]
 
         all_datasets.append((source_id, record_count))
+        num_records += record_count
         if record_count == 0:
             zero_records.append(source_id)
         elif record_count == 1:
@@ -49,6 +51,7 @@ def generate_stats(raw=False, return_all=False, many_cutoff=100):
     if raw:
         returnable = {}
         returnable["all_datasets_count"] = len(all_datasets)
+        returnable["all_records_count"] = num_records
         returnable["zero_records_count"] = len(zero_records)
         returnable["one_record_count"] = len(one_record)
         returnable["multiple_records_count"] = len(multiple_records)
@@ -68,8 +71,11 @@ def generate_stats(raw=False, return_all=False, many_cutoff=100):
         print("MDF Search Statistics")
         print("---------------------")
         print("Total datasets:", len(all_datasets))
+        print("Total records:", num_records)
         print("Datasets with zero records:", len(zero_records))
         print("Datasets with any records: ", len(one_record) + len(multiple_records))
+        print("{}% of datasets have records"
+              .format(int((len(one_record) + len(multiple_records)) / len(all_datasets) * 100)))
         print()
         print("Datasets with exactly one record:   ", len(one_record))
         print("Datasets with more than one record: ", len(multiple_records))
