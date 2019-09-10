@@ -33,6 +33,18 @@ logger.addHandler(logfile_handler)
 logger.info("\n\n==========Connect API started==========\n")
 
 
+'''
+@app.before_request
+def disable_connect():
+    """For use when Connect is up but unable to process submissions."""
+    return (jsonify({
+        "success": False,
+        "error": ("MDF Connect is currently unavailable due to backend maintenance. "
+                  # "We expect service to be restored by Tuesday, September 10th. "
+                  "We apologize for the inconvenience.")
+    }), 503)
+'''
+
 # Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
 @app.route('/submit', methods=["GET"])
