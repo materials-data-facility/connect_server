@@ -1082,7 +1082,7 @@ def translate_dc_schema(dc_md, doi=None, url=None):
         new_contributors = []
         for contributor in doi_data["contributors"]:
             if contributor.get("contributorName"):
-                contributor["name"] = contributor.pop("creatorName")
+                contributor["name"] = contributor.pop("contributorName")
             if contributor.get("affiliations"):
                 contributor["affiliation"] = contributor.pop("affiliations")
             new_contributors.append(contributor)
