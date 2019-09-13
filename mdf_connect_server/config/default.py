@@ -16,6 +16,7 @@ DEFAULT = {
 
     "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
+    "TRANSFORMER_ERROR_FILE": "parser_errors.log",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 

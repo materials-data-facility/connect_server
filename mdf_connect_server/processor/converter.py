@@ -101,7 +101,7 @@ def convert(root_path, convert_params):
             # If one record fails, entire feedstock fails
             # So if a failure occurs, terminate all transformers and return
             if not rc_res["success"]:
-                logger.debug("{}: Record error - terminating transformers".format(source_id))
+                logger.info("{}: Record error - terminating transformers".format(source_id))
                 # TODO: Use t.kill() (Py3.7-only)?
                 [t.terminate() for t in transformers]
                 [t.join() for t in transformers]

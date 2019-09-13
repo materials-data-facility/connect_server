@@ -21,8 +21,7 @@ logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
-                                      style='{',
-                                      datefmt="%Y-%m-%d %H:%M:%S")
+                                      style='{', datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
 logfile_handler = logging.FileHandler(CONFIG["PROCESS_LOG_FILE"], mode='a')
 logfile_handler.setFormatter(logfile_formatter)
