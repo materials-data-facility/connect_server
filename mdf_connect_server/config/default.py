@@ -29,6 +29,8 @@ DEFAULT = {
 
     "NUM_CURATION_RECORDS": 3,
 
+    "SCHEMA_NULLS": ["url"],  # Just url from files
+
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds

@@ -9,7 +9,8 @@ def test_validator():
             'creators': [{
                 'creatorName': 'Footon, Bartholomew',
                 'familyName': 'Footon',
-                'givenName': 'Bartholomew'
+                'givenName': 'Bartholomew',
+                'affiliations': None
             }],
             'publicationYear': '2018',
             'publisher': 'Materials Data Facility',
@@ -27,8 +28,7 @@ def test_validator():
             "acl": ["public"]
         },
         "custom": {
-            "foo": "bar",
-            "failing_tests": None
+            "foo": "bar"
         }
     }
     good_dataset2 = {
@@ -79,9 +79,6 @@ def test_validator():
             "filename": "foo.bar"
         }],
         "material": {
-        },
-        "calphad": {
-            "phases": None
         }
     }
     good_record2 = {
@@ -126,13 +123,14 @@ def test_validator():
             "acquisition_mode": "on",
             "beam_energy": 9998,
             "detector": "lost",
-            "magnification": -5
+            "magnification": -5,
+            "spot_size": None
         },
         "image": {
             "shape": [99, 101]
         },
         "custom": {
-            "is_okay": "True"
+            "is_okay": "True",
         }
     }
     bad_record = {

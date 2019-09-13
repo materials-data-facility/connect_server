@@ -22,8 +22,9 @@ def _remove_nulls(data, skip=None):
             if new_val is not None:
                 new_list.append(new_val)
         return new_list
-    elif hasattr(data, "__len__") and len(data) <= 0:
-        return None
+    # Could delete required but empty blocks - services, etc.
+    # elif hasattr(data, "__len__") and len(data) <= 0:
+    #    return None
     else:
         return data
 
@@ -46,8 +47,6 @@ class Validator:
         self.__scroll_id = None
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
         self.__indexed_files = []
-        self.__project_blocks = None
-        self.__required_fields = None
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
         self.__schema_dir = schema_path
 
@@ -73,10 +72,11 @@ class Validator:
         self.__finished = False
         self.__source_info = source_info or {}
 
-        if validation_info:
-            self.__project_blocks = validation_info.get("project_blocks", None)
-            self.__required_fields = validation_info.get("required_fields", None)
-            self.__allowed_nulls = validation_info.get("allowed_nulls", None)
+        if validation_info is None:
+            validation_info = {}
+        self.__project_blocks = validation_info.get("project_blocks", None)
+        self.__required_fields = validation_info.get("required_fields", None)
+        self.__allowed_nulls = validation_info.get("allowed_nulls", None)
 
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:

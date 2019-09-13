@@ -266,7 +266,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                    CONFIG["GROUPING_RULES"]),
             "validation_info": {
                 "project_blocks": sub_conf.get("project_blocks", []),
-                "required_fields": sub_conf.get("required_fields", [])
+                "required_fields": sub_conf.get("required_fields", []),
+                "allowed_nulls": CONFIG["SCHEMA_NULLS"]
             }
         }
 
