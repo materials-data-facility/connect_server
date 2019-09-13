@@ -45,6 +45,7 @@ def disable_connect():
     }), 503)
 '''
 
+
 # Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
 @app.route('/submit', methods=["GET"])

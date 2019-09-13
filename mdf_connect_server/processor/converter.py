@@ -102,7 +102,7 @@ def convert(root_path, convert_params):
             # So if a failure occurs, terminate all transformers and return
             if not rc_res["success"]:
                 logger.info("{}: Record error - terminating transformers".format(source_id))
-                # TODO: Use t.kill() (Py3.7-only)?
+                # TODO: Use t.kill() (Py3.7-only)
                 [t.terminate() for t in transformers]
                 [t.join() for t in transformers]
                 logger.debug("{}: Transformers terminated".format(source_id))

@@ -27,7 +27,8 @@ def test_validator():
             "acl": ["public"]
         },
         "custom": {
-            "foo": "bar"
+            "foo": "bar",
+            "failing_tests": None
         }
     }
     good_dataset2 = {
@@ -78,6 +79,9 @@ def test_validator():
             "filename": "foo.bar"
         }],
         "material": {
+        },
+        "calphad": {
+            "phases": None
         }
     }
     good_record2 = {

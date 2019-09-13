@@ -6,6 +6,28 @@ from tempfile import TemporaryFile
 import jsonschema
 
 
+def _remove_nulls(data, skip=None):
+    """Remove all null/None/empty values from a dict or list, except those listed in skip."""
+    if isinstance(data, dict):
+        new_dict = {}
+        for key, val in data.items():
+            new_val = _remove_nulls(val, skip=skip)
+            if new_val is not None or (skip is not None and key in skip):
+                new_dict[key] = new_val
+        return new_dict
+    elif isinstance(data, list):
+        new_list = []
+        for val in data:
+            new_val = _remove_nulls(val, skip=skip)
+            if new_val is not None:
+                new_list.append(new_val)
+        return new_list
+    elif hasattr(data, "__len__") and len(data) <= 0:
+        return None
+    else:
+        return data
+
+
 class Validator:
     """Validates MDF feedstock.
 
@@ -54,6 +76,7 @@ class Validator:
         if validation_info:
             self.__project_blocks = validation_info.get("project_blocks", None)
             self.__required_fields = validation_info.get("required_fields", None)
+            self.__allowed_nulls = validation_info.get("allowed_nulls", None)
 
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
@@ -126,6 +149,9 @@ class Validator:
                 "error": "Invalid dataset JSON: {}".format(str(e)),
                 "details": repr(e)
             }
+
+        # Remove null/None values
+        ds_md = _remove_nulls(ds_md, self.__allowed_nulls)
 
         # Validate against schema
         try:
@@ -323,6 +349,9 @@ class Validator:
                 "error": "Invalid record JSON: {}".format(str(e)),
                 "details": repr(e)
                 }
+
+        # Remove null/None values
+        rc_md = _remove_nulls(rc_md, self.__allowed_nulls)
 
         # Validate against schema
         try:
