@@ -21,8 +21,7 @@ logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 # Set up formatters
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
-                                      style='{',
-                                      datefmt="%Y-%m-%d %H:%M:%S")
+                                      style='{', datefmt="%Y-%m-%d %H:%M:%S")
 # Set up handlers
 logfile_handler = logging.FileHandler(CONFIG["PROCESS_LOG_FILE"], mode='a')
 logfile_handler.setFormatter(logfile_formatter)
@@ -267,7 +266,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                    CONFIG["GROUPING_RULES"]),
             "validation_info": {
                 "project_blocks": sub_conf.get("project_blocks", []),
-                "required_fields": sub_conf.get("required_fields", [])
+                "required_fields": sub_conf.get("required_fields", []),
+                "allowed_nulls": CONFIG["SCHEMA_NULLS"]
             }
         }
 

@@ -45,6 +45,7 @@ def disable_connect():
     }), 503)
 '''
 
+
 # Redirect root requests and GETs to the web form
 @app.route('/', methods=["GET", "POST"])
 @app.route('/submit', methods=["GET"])
@@ -207,8 +208,15 @@ def accept_submission():
 
     # Get organization rules to apply
     if metadata["mdf"].get("organizations"):
-        metadata["mdf"]["organizations"], sub_conf = \
-            utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
+        try:
+            metadata["mdf"]["organizations"], sub_conf = \
+                utils.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
+        except ValueError as e:
+            logger.info("Invalid organizations: {}".format(metadata["mdf"]["organizations"]))
+            return (jsonify({
+                "success": False,
+                "error": str(e)
+            }), 400)
     # Check that user is in appropriate org group(s), if applicable
     if sub_conf.get("permission_groups"):
         for group_uuid in sub_conf["permission_groups"]:

@@ -37,10 +37,20 @@ from pypif_sdk.interop.datacite import add_datacite as add_dc  # noqa: E402
 import xmltodict  # noqa: E402
 import yaml  # noqa: E402
 
+from mdf_connect_server import CONFIG  # noqa: E402
+
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
 
+# Create new logger (transformers are multi-process)
 logger = logging.getLogger(__name__)
+logger.setLevel(CONFIG["LOG_LEVEL"])
+logger.propagate = False
+logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
+                                      style='{', datefmt="%Y-%m-%d %H:%M:%S")
+logfile_handler = logging.FileHandler(CONFIG["TRANSFORMER_ERROR_FILE"], mode='a')
+logfile_handler.setFormatter(logfile_formatter)
+logger.addHandler(logfile_handler)
 
 # Log debug messages for all parser events. Extremely spammy.
 SUPER_DEBUG = False

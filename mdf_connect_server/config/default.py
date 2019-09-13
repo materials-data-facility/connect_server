@@ -16,6 +16,7 @@ DEFAULT = {
 
     "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
+    "TRANSFORMER_ERROR_FILE": "parser_errors.log",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
@@ -27,6 +28,8 @@ DEFAULT = {
                             " inconvenience."),
 
     "NUM_CURATION_RECORDS": 3,
+
+    "SCHEMA_NULLS": ["url"],  # Just url from files
 
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
