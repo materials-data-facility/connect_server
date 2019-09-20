@@ -250,7 +250,7 @@ def authenticate_token(token, groups, require_all=False):
     }
 
 
-def make_source_id(title, author, test=False, index=None, add_author=True):
+def make_source_id(title, author, test=False, index=None, sanitize_only=False):
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
@@ -298,10 +298,9 @@ def make_source_id(title, author, test=False, index=None, add_author=True):
 
     # Clean author tokens, merge into one word
     author_word = ""
-    if add_author:
-        for token in author_tokens:
-            clean_token = "".join([char for char in token.lower() if char.isalnum()])
-            author_word += clean_token
+    for token in author_tokens:
+        clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        author_word += clean_token
 
     # Remove author_word from title, if exists (e.g. from previous make_source_id())
     while author_word in title_clean:
@@ -326,7 +325,10 @@ def make_source_id(title, author, test=False, index=None, add_author=True):
 
     # Assemble source_name
     # Strip trailing underscores from missing words
-    source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
+    if sanitize_only:
+        source_name = "_".join(title_clean).strip("_")
+    else:
+        source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
 
     # Add test flag if necessary
     if test:

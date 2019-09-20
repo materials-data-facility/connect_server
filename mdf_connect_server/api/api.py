@@ -7,6 +7,7 @@ from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
 import globus_sdk
 import jsonschema
+import mdf_toolbox
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server import utils
@@ -99,6 +100,31 @@ def accept_submission():
             "error": "{}, submission must be valid JSON".format(repr(e))
         }), 400)
 
+    # If this is an incremental update, fetch the original submission
+    if metadata.get("incremental_update"):
+        # source_name and title cannot be updated
+        metadata.get("mdf", {}).pop("source_name", None)
+        metadata.get("dc", {}).pop("titles", None)
+        # update must be True
+        if not metadata.get("update"):
+            return (jsonify({
+                "success": False,
+                "error": ("You must be updating a submission (set update=True) "
+                          "when incrementally updating.")
+            }), 400)
+        # Fetch and merge original submission
+        prev_sub = utils.read_table("status", metadata["incremental_update"])
+        if not prev_sub["success"]:
+            return (jsonify({
+                "success": False,
+                "error": "Submission '{}' not found, or not available"
+            }), 404)
+        prev_sub = prev_sub["status"]["original_submission"]
+        new_sub = mdf_toolbox.dict_merge(metadata, prev_sub)
+        # TODO: Are there any other validity checks necessary here?
+        md_copy = new_sub
+        metadata = new_sub
+
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
     if not metadata.get("dc") or not isinstance(metadata["dc"], dict):
@@ -161,7 +187,7 @@ def accept_submission():
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
         source_id_info = utils.make_source_id(existing_source_name or sub_title,
                                               author_name, test=sub_conf["test"],
-                                              add_author=(not bool(existing_source_name)))
+                                              sanitize_only=bool(existing_source_name))
     except Exception as e:
         return (jsonify({
             "success": False,
