@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 import json
 import logging
@@ -80,7 +81,7 @@ def accept_submission():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
-    md_copy = request.get_json(force=True, silent=True)
+    md_copy = deepcopy(metadata)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -117,13 +118,14 @@ def accept_submission():
         if not prev_sub["success"]:
             return (jsonify({
                 "success": False,
-                "error": "Submission '{}' not found, or not available"
+                "error": ("Submission '{}' not found, or not available"
+                          .format(metadata["incremental_update"]))
             }), 404)
-        prev_sub = prev_sub["status"]["original_submission"]
+        prev_sub = json.loads(prev_sub["status"]["original_submission"])
         new_sub = mdf_toolbox.dict_merge(metadata, prev_sub)
         # TODO: Are there any other validity checks necessary here?
-        md_copy = new_sub
         metadata = new_sub
+        md_copy = deepcopy(metadata)
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
