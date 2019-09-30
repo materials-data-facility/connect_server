@@ -243,6 +243,18 @@ def accept_submission():
                 "success": False,
                 "error": str(e)
             }), 400)
+        # Pull out DC fields from org metadata
+        # rightsList (license)
+        if sub_conf.get("rightsList"):
+            if not metadata["dc"].get("rightsList"):
+                metadata["dc"]["rightsList"] = []
+            metadata["dc"]["rightsList"] += sub_conf.pop("rightsList")
+        # fundingReferences
+        if sub_conf.get("fundingReferences"):
+            if not metadata["dc"].get("fundingReferences"):
+                metadata["dc"]["fundingReferences"] = []
+            metadata["dc"]["fundingReferences"] += sub_conf.pop("fundingReferences")
+
     # Check that user is in appropriate org group(s), if applicable
     if sub_conf.get("permission_groups"):
         for group_uuid in sub_conf["permission_groups"]:
