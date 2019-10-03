@@ -1455,51 +1455,6 @@ def local_admin_delete(path):
         }
 
 
-def expand_refs(schema, base_path=CONFIG["SCHEMA_PATH"], definitions=None):
-    if definitions is None:
-        definitions = {}
-
-    if not isinstance(schema, dict):
-        return schema  # No-op on non-dict
-    # Save schema's definitions
-    # Could results in duplicate definitions, which has no effect
-    if schema.get("definitions"):
-        definitions = mdf_toolbox.dict_merge(schema["definitions"], definitions)
-        definitions = expand_refs(definitions, base_path, definitions)
-    while "$ref" in json.dumps(schema):
-        new_schema = {}
-        for key, val in schema.items():
-            if key == "$ref":
-                # $ref is supposed to take precedence, and effectively overwrite
-                # other keys present, so we can make new_schema exactly the $ref value
-                filename, intra_path = val.split("#")
-                intra_parts = [x for x in intra_path.split("/") if x]
-                # Filename ref refers to external file - load and add in
-                if filename:
-                    with open(os.path.join(base_path, filename)) as schema_file:
-                        ref_schema = json.load(schema_file)
-                    if ref_schema.get("definitions"):
-                        definitions = mdf_toolbox.dict_merge(ref_schema["definitions"],
-                                                             definitions)
-                        definitions = expand_refs(definitions, base_path, definitions)
-                    for path_part in intra_parts:
-                        ref_schema = ref_schema[path_part]
-                    # new_schema[intra_parts[-1]] = ref_schema
-                    new_schema = ref_schema
-                # Other refs should be in definitions block
-                else:
-                    if intra_parts[0] != "definitions" or len(intra_parts) != 2:
-                        raise ValueError("Invalid/complex $ref: {}".format(intra_parts))
-                    # new_schema[intra_parts[-1]] = definitions.get(intra_parts[1], "NONE")
-                    new_schema = definitions.get(intra_parts[1], None)
-                    if new_schema is None:
-                        raise ValueError("Definition missing: {}".format(intra_parts))
-            else:
-                new_schema[key] = expand_refs(val, base_path, definitions)
-        schema = new_schema
-    return schema
-
-
 def validate_status(status, new_status=False):
     """Validate a submission status.
 

@@ -369,6 +369,8 @@ def accept_submission():
         "endpoint_path": sub_conf["canon_destination"],
         "link": utils.make_globus_app_link(sub_conf["canon_destination"])
     }
+    if metadata.get("external_uri"):
+        metadata["data"]["external_uri"] == metadata.pop("external_uri")
 
     status_info = {
         "source_id": source_id,
@@ -811,7 +813,8 @@ def get_schema(schema_type=None):
                 with open(os.path.join(CONFIG["SCHEMA_PATH"],
                                        "{}.json".format(schema_name))) as schema_file:
                     raw_schema = json.load(schema_file)
-                all_schemas[schema_name] = utils.expand_refs(raw_schema)
+                all_schemas[schema_name] = mdf_toolbox.expand_jsonschema(raw_schema,
+                                                                         CONFIG["SCHEMA_PATH"])
         except Exception as e:
             logger.error("While fetching all schemas: {}".format(repr(e)))
             return (jsonify({
@@ -832,7 +835,7 @@ def get_schema(schema_type=None):
             with open(os.path.join(CONFIG["SCHEMA_PATH"],
                                    "{}.json".format(schema_name))) as schema_file:
                 raw_schema = json.load(schema_file)
-            schema = utils.expand_refs(raw_schema)
+            schema = mdf_toolbox.expand_jsonschema(raw_schema, CONFIG["SCHEMA_PATH"])
         except FileNotFoundError:
             return (jsonify({
                 "success": False,
