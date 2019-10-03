@@ -515,7 +515,7 @@ def fetch_org_rules(org_names, user_rules=None):
     for org in organizations:
         aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
                                                        + [org["canonical_name"]])]
-        all_clean_orgs.append((aliases, deepcopy(org)))
+        all_clean_orgs.append((aliases, org))
 
     if isinstance(org_names, list):
         orgs_to_fetch = org_names
@@ -527,16 +527,16 @@ def fetch_org_rules(org_names, user_rules=None):
     while len(orgs_to_fetch) > 0:
         # Process sub 0 always, so orgs processed in order
         # New org matches on canonical_name or any alias
+        fetch_org = orgs_to_fetch.pop(0)
         new_org_data = [org for aliases, org in all_clean_orgs
-                        if normalize_name(orgs_to_fetch[0]) in aliases]
+                        if normalize_name(fetch_org) in aliases]
         if len(new_org_data) < 1:
             raise ValueError("Organization '{}' not registered in MDF Connect (from '{}')"
-                             .format(orgs_to_fetch[0], org_names))
+                             .format(fetch_org, org_names))
         elif len(new_org_data) > 1:
             raise ValueError("Multiple organizations found with name '{}' (from '{}')"
-                             .format(orgs_to_fetch[0], org_names))
-        orgs_to_fetch.pop(0)
-        new_org_data = new_org_data[0]
+                             .format(fetch_org, org_names))
+        new_org_data = deepcopy(new_org_data[0])
 
         # Check that org rules not already fetched
         if new_org_data["canonical_name"] in all_names:
