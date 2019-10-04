@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 import json
 import logging
@@ -7,6 +8,7 @@ from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
 import globus_sdk
 import jsonschema
+import mdf_toolbox
 
 from mdf_connect_server import CONFIG
 from mdf_connect_server import utils
@@ -79,7 +81,7 @@ def accept_submission():
     identities = auth_res["identities_set"]
 
     metadata = request.get_json(force=True, silent=True)
-    md_copy = request.get_json(force=True, silent=True)
+    md_copy = deepcopy(metadata)
     if not metadata:
         return (jsonify({
             "success": False,
@@ -98,6 +100,32 @@ def accept_submission():
             "success": False,
             "error": "{}, submission must be valid JSON".format(repr(e))
         }), 400)
+
+    # If this is an incremental update, fetch the original submission
+    if metadata.get("incremental_update"):
+        # source_name and title cannot be updated
+        metadata.get("mdf", {}).pop("source_name", None)
+        metadata.get("dc", {}).pop("titles", None)
+        # update must be True
+        if not metadata.get("update"):
+            return (jsonify({
+                "success": False,
+                "error": ("You must be updating a submission (set update=True) "
+                          "when incrementally updating.")
+            }), 400)
+        # Fetch and merge original submission
+        prev_sub = utils.read_table("status", metadata["incremental_update"])
+        if not prev_sub["success"]:
+            return (jsonify({
+                "success": False,
+                "error": ("Submission '{}' not found, or not available"
+                          .format(metadata["incremental_update"]))
+            }), 404)
+        prev_sub = json.loads(prev_sub["status"]["original_submission"])
+        new_sub = mdf_toolbox.dict_merge(metadata, prev_sub)
+        # TODO: Are there any other validity checks necessary here?
+        metadata = new_sub
+        md_copy = deepcopy(metadata)
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
@@ -161,7 +189,7 @@ def accept_submission():
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
         source_id_info = utils.make_source_id(existing_source_name or sub_title,
                                               author_name, test=sub_conf["test"],
-                                              add_author=(not bool(existing_source_name)))
+                                              sanitize_only=bool(existing_source_name))
     except Exception as e:
         return (jsonify({
             "success": False,
@@ -217,6 +245,18 @@ def accept_submission():
                 "success": False,
                 "error": str(e)
             }), 400)
+        # Pull out DC fields from org metadata
+        # rightsList (license)
+        if sub_conf.get("rightsList"):
+            if not metadata["dc"].get("rightsList"):
+                metadata["dc"]["rightsList"] = []
+            metadata["dc"]["rightsList"] += sub_conf.pop("rightsList")
+        # fundingReferences
+        if sub_conf.get("fundingReferences"):
+            if not metadata["dc"].get("fundingReferences"):
+                metadata["dc"]["fundingReferences"] = []
+            metadata["dc"]["fundingReferences"] += sub_conf.pop("fundingReferences")
+
     # Check that user is in appropriate org group(s), if applicable
     if sub_conf.get("permission_groups"):
         for group_uuid in sub_conf["permission_groups"]:
@@ -329,6 +369,8 @@ def accept_submission():
         "endpoint_path": sub_conf["canon_destination"],
         "link": utils.make_globus_app_link(sub_conf["canon_destination"])
     }
+    if metadata.get("external_uri"):
+        metadata["data"]["external_uri"] = metadata.pop("external_uri")
 
     status_info = {
         "source_id": source_id,
@@ -771,7 +813,8 @@ def get_schema(schema_type=None):
                 with open(os.path.join(CONFIG["SCHEMA_PATH"],
                                        "{}.json".format(schema_name))) as schema_file:
                     raw_schema = json.load(schema_file)
-                all_schemas[schema_name] = utils.expand_refs(raw_schema)
+                all_schemas[schema_name] = mdf_toolbox.expand_jsonschema(raw_schema,
+                                                                         CONFIG["SCHEMA_PATH"])
         except Exception as e:
             logger.error("While fetching all schemas: {}".format(repr(e)))
             return (jsonify({
@@ -792,7 +835,7 @@ def get_schema(schema_type=None):
             with open(os.path.join(CONFIG["SCHEMA_PATH"],
                                    "{}.json".format(schema_name))) as schema_file:
                 raw_schema = json.load(schema_file)
-            schema = utils.expand_refs(raw_schema)
+            schema = mdf_toolbox.expand_jsonschema(raw_schema, CONFIG["SCHEMA_PATH"])
         except FileNotFoundError:
             return (jsonify({
                 "success": False,
