@@ -370,7 +370,7 @@ def accept_submission():
         "link": utils.make_globus_app_link(sub_conf["canon_destination"])
     }
     if metadata.get("external_uri"):
-        metadata["data"]["external_uri"] == metadata.pop("external_uri")
+        metadata["data"]["external_uri"] = metadata.pop("external_uri")
 
     status_info = {
         "source_id": source_id,
