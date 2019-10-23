@@ -22,7 +22,6 @@ CONFIG["GLOBUS_HTTP_HOSTS"] = GLOBUS_HTTP_HOSTS
 CONFIG["GROUPING_RULES"] = GROUPINGS
 # Add credentials
 CONFIG["GLOBUS_CREDS"] = {
-    "app_name": "MDF Open Connect",
     "client_id": CONFIG["API_CLIENT_ID"],
     "client_secret": CONFIG["API_CLIENT_SECRET"]
 }

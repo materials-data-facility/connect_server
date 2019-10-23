@@ -148,7 +148,7 @@ def authenticate_token(token, groups, require_all=False):
     groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
     groups_auth["services"] = ["groups"]
     try:
-        nexus = mdf_toolbox.confidential_login(groups_auth)["groups"]
+        nexus = mdf_toolbox.confidential_login(**groups_auth)["groups"]
     except Exception as e:
         logger.error("NexusClient creation error: {}".format(repr(e)))
         return {
@@ -336,9 +336,8 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
 
     # Determine version number to add
     # Get last Search version
-    search_client = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["search"]}))["search"]
+    search_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search"]})
+    search_client = mdf_toolbox.confidential_login(**search_creds)["search"]
     old_q = {
         "q": "mdf.source_name:{} AND mdf.resource_type:dataset".format(source_name),
         "advanced": True,
@@ -441,9 +440,8 @@ def clean_start():
     """
     logger.debug("Cleaning Connect state")
     # Auth to get Transfer client
-    transfer_client = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["transfer"]}))["transfer"]
+    transfer_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["transfer"]})
+    transfer_client = mdf_toolbox.confidential_login(**transfer_creds)["transfer"]
     logger.debug("Cancelling active Transfer tasks")
     # List all Transfers active on endpoint
     all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,

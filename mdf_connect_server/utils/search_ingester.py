@@ -38,9 +38,8 @@ def search_ingest(feedstock_file, index, delete_existing, source_id=None, batch_
             errors (list): The errors encountered.
             details (str): If success is False, details about the major error, if available.
     """
-    ingest_client = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["search_ingest"]}))["search_ingest"]
+    ingest_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search_ingest"]})
+    ingest_client = mdf_toolbox.confidential_login(**ingest_creds)["search_ingest"]
     index = mdf_toolbox.translate_index(index)
 
     if delete_existing:
@@ -163,9 +162,8 @@ def populate_queue(ingest_queue, feedstock_file, batch_size, source_id):
 
 def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
     """Submit entry ingests to Globus Search."""
-    ingest_client = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["search_ingest"]}))["search_ingest"]
+    ingest_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search_ingest"]})
+    ingest_client = mdf_toolbox.confidential_login(**ingest_creds)["search_ingest"]
     while True:
         # Try getting an ingest from the queue
         try:
@@ -279,9 +277,8 @@ def update_search_entries(index, entries, acl=None, overwrite=False):
     # If not overwriting, merge with existing entries
     if not overwrite:
         new_entries = []
-        search_client = mdf_toolbox.confidential_login(
-                            mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                                   {"services": ["search"]}))["search"]
+        search_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search"]})
+        search_client = mdf_toolbox.confidential_login(**search_creds)["search"]
         for entry in entries:
             try:
                 # Identifier is source_id for datasets, source_id + scroll_id for records
@@ -363,9 +360,8 @@ def update_search_subjects(index, subjects, convert_func, acl, overwrite=False):
 
     # Fetch the existing entries and run the convert_func on them
     new_entries = []
-    search_client = mdf_toolbox.confidential_login(
-                        mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
-                                               {"services": ["search"]}))["search"]
+    search_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search"]})
+    search_client = mdf_toolbox.confidential_login(**search_creds)["search"]
     for subject in subjects:
         try:
             # Will raise SearchAPIError (404) if not found
