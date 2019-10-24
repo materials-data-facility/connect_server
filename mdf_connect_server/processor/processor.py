@@ -138,7 +138,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                                                CONFIG["API_CLIENT_SECRET"])
         mdf_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"],
                                            {"services": ["transfer"]})
-        mdf_clients = mdf_toolbox.confidential_login(mdf_creds)
+        mdf_clients = mdf_toolbox.confidential_login(**mdf_creds)
         mdf_transfer_client = mdf_clients["transfer"]
 
         # User auth
