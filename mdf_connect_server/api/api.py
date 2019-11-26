@@ -39,11 +39,13 @@ logger.info("\n\n==========Connect API started==========\n")
 @app.before_request
 def disable_connect():
     """For use when Connect is up but unable to process submissions."""
+    # expected_back = "by Tuesday, September 10th"
+    expected_back = "soon"
     return (jsonify({
         "success": False,
         "error": ("MDF Connect is currently unavailable due to backend maintenance. "
-                  # "We expect service to be restored by Tuesday, September 10th. "
-                  "We apologize for the inconvenience.")
+                  "We expect service to be restored {}."
+                  "We apologize for the inconvenience.").format(expected_back)
     }), 503)
 '''
 
@@ -172,6 +174,7 @@ def accept_submission():
         "test": metadata.pop("test", False),
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
+        "dataset_acl": metadata.get("dataset_acl", []),
         "index": metadata.pop("index", {}),
         "services": metadata.pop("services", {}),
         "conversion_config": metadata.pop("conversion_config", {}),
@@ -271,8 +274,6 @@ def accept_submission():
             if not group_res["success"]:
                 error_code = group_res.pop("error_code")
                 return (jsonify(group_res), error_code)
-        # Also allow permission group members to see submission
-        sub_conf["acl"].extend(sub_conf["permission_groups"])
 
     # If ACL includes "public", no other entries needed
     if "public" in sub_conf["acl"]:
@@ -282,7 +283,12 @@ def accept_submission():
         sub_conf["acl"].append(CONFIG["ADMIN_GROUP_ID"])
         sub_conf["acl"] = list(set(sub_conf["acl"]))
     # Set correct ACL in metadata
-    metadata["mdf"]["acl"] = sub_conf["acl"]
+    if "public" in sub_conf["dataset_acl"] or "public" in sub_conf["acl"]:
+        sub_conf["dataset_acl"] = ["public"]
+    else:
+        sub_conf["dataset_acl"] = list(set(sub_conf["dataset_acl"] + sub_conf["acl"]))
+
+    metadata["mdf"]["acl"] = sub_conf["dataset_acl"]
 
     # Set defaults for services if parameters not set or test flag overrides
     # Test defaults
@@ -453,7 +459,7 @@ def get_status(source_id):
     # If actually not found
     if (not raw_status["success"]
         # or dataset not public
-        or (raw_status["status"]["acl"] != ["public"]
+        or ("public" not in raw_status["status"]["acl"]
             # and user was not submitter
             and raw_status["status"]["user_id"] not in auth_res["identities_set"]
             # and user is not in ACL
@@ -513,17 +519,6 @@ def get_user_submissions(user_id=None):
     scan_res = utils.scan_table(table_name="status", filters=filters)
     if not scan_res["success"]:
         return (jsonify(scan_res), 500)
-
-    # TODO: Is it an error for there to be no submissions?
-    # A bad user_id would cause that (error), but a new user would also get it (not an error)
-    '''
-    # Error message if no submissions
-    if len(scan_res["results"]) == 0:
-        return (jsonify({
-            "success": False,
-            "error": "No submissions available"
-            }), 404)
-    '''
 
     return (jsonify({
         "success": True,

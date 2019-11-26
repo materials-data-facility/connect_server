@@ -270,7 +270,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "validation_info": {
                 "project_blocks": sub_conf.get("project_blocks", []),
                 "required_fields": sub_conf.get("required_fields", []),
-                "allowed_nulls": CONFIG["SCHEMA_NULLS"]
+                "allowed_nulls": CONFIG["SCHEMA_NULLS"],
+                "base_acl": sub_conf["acl"]
             }
         }
 
