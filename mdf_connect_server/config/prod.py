@@ -23,6 +23,7 @@ PROD = {
     "GDRIVE_EP": "728a8a88-605b-4605-8afd-396f087eb3fc",
 
     "DEFAULT_CLEANUP": True,
+    "FINAL_CLEANUP": True,
 
     "DEFAULT_DOI_TEST": False,
     "NUM_DOI_CHARS": 4,  # Characters per section
