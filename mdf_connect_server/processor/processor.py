@@ -244,7 +244,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                     backup_res = utils.backup_data(mdf_transfer_client, data_source,
                                                    sub_conf["canon_destination"],
                                                    acl=sub_conf["acl"])
-                    if not backup_res[sub_conf["canon_destination"]]["success"]:
+                    if backup_res.get("all_locations", {}).get("success", None) is False:
+                        raise ValueError(backup_res["all_locations"]["error"])
+                    elif not backup_res[sub_conf["canon_destination"]]["success"]:
                         raise ValueError(backup_res[sub_conf["canon_destination"]]["error"])
                 except Exception as e:
                     err_text = ("Transfer from '{}' to primary/canon destination '{}' failed: {}"
