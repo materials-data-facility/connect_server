@@ -77,6 +77,7 @@ class Validator:
         self.__project_blocks = validation_info.get("project_blocks", None)
         self.__required_fields = validation_info.get("required_fields", None)
         self.__allowed_nulls = validation_info.get("allowed_nulls", None)
+        self.__base_acl = validation_info.get("base_acl", None)
 
         # Load schema
         with open(os.path.join(self.__schema_dir, "dataset.json")) as schema_file:
@@ -117,7 +118,7 @@ class Validator:
 
         # acl
         if not ds_md["mdf"].get("acl"):
-            ds_md["mdf"]["acl"] = ["public"]
+            ds_md["mdf"]["acl"] = self.__base_acl or ["public"]
 
         # version
         if not ds_md["mdf"].get("version"):
@@ -290,7 +291,7 @@ class Validator:
 
         # acl
         if not rc_md["mdf"].get("acl"):
-            rc_md["mdf"]["acl"] = self.__dataset["mdf"]["acl"]
+            rc_md["mdf"]["acl"] = self.__base_acl or self.__dataset["mdf"]["acl"]
 
         # organizations
         if self.__dataset["mdf"].get("organizations"):

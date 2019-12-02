@@ -24,6 +24,7 @@ DEV = {
     "GDRIVE_EP": "6ab13202-7c99-4e44-b0ff-04b8fbd77c97",
 
     "DEFAULT_CLEANUP": True,
+    "FINAL_CLEANUP": True,
 
     "DEFAULT_DOI_TEST": True,
     "NUM_DOI_CHARS": 2,  # Characters per section
