@@ -174,7 +174,7 @@ def accept_submission():
         "test": metadata.pop("test", False),
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
-        "dataset_acl": metadata.get("dataset_acl", []),
+        "dataset_acl": metadata.pop("dataset_acl", []),
         "index": metadata.pop("index", {}),
         "services": metadata.pop("services", {}),
         "conversion_config": metadata.pop("conversion_config", {}),
