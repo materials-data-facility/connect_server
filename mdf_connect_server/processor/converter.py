@@ -42,6 +42,7 @@ def convert(root_path, convert_params):
 
     # Process dataset entry (to fail validation early if dataset entry is invalid)
     full_dataset = convert_params["dataset"]
+    '''
     # Fetch custom block descriptors, cast values to str
     new_custom = {}
     # custom block descriptors
@@ -60,6 +61,7 @@ def convert(root_path, convert_params):
             new_custom[key+"_desc"] = str(val)
     if new_custom:
         full_dataset["custom"] = new_custom
+    '''
 
     # Validate dataset
     ds_res = vald.start_dataset(full_dataset, source_info,

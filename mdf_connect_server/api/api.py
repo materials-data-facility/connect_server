@@ -237,6 +237,23 @@ def accept_submission():
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = source_id_info["search_version"]
 
+    # Fetch custom block descriptors, cast values to str, turn _description => _desc
+    new_custom = {}
+    for key, val in metadata.pop("custom", {}).items():
+        if key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key] = str(val)
+    for key, val in metadata.pop("custom_desc", {}).items():
+        if key.endswith("_desc"):
+            new_custom[key] = str(val)
+        elif key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key+"_desc"] = str(val)
+    if new_custom:
+        metadata["custom"] = new_custom
+
     # Get organization rules to apply
     if metadata["mdf"].get("organizations"):
         try:
