@@ -724,7 +724,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # Cleanup
     try:
-        fin_res = utils.complete_submission(source_id, cleanup=True)
+        fin_res = utils.complete_submission(source_id, cleanup=CONFIG["FINAL_CLEANUP"])
     except Exception as e:
         utils.update_status(source_id, "ingest_cleanup", "F", text=repr(e), except_on_fail=True)
         return
