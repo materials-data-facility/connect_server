@@ -7,7 +7,7 @@ from queue import Empty
 
 import mdf_toolbox
 
-from mdf_connect_server import CONFIG, utils
+from mdf_connect_server import CONFIG
 from mdf_connect_server.processor import transform, Validator
 
 
@@ -37,7 +37,6 @@ def convert(root_path, convert_params):
         extensions (list of str): If success is True, all unique file extensions in the dataset.
     """
     source_id = convert_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
-    source_info = utils.split_source_id(source_id)
     vald = Validator(schema_path=CONFIG["SCHEMA_PATH"])
 
     # Process dataset entry (to fail validation early if dataset entry is invalid)
@@ -64,8 +63,7 @@ def convert(root_path, convert_params):
     '''
 
     # Validate dataset
-    ds_res = vald.start_dataset(full_dataset, source_info,
-                                convert_params.get("validation_info", None))
+    ds_res = vald.start_dataset(full_dataset, convert_params.get("validation_info", None))
     if not ds_res["success"]:
         return ds_res
 

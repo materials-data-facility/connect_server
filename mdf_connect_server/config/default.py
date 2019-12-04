@@ -49,6 +49,13 @@ DEFAULT = {
     "API_SCOPE_ID": "mdf_dataset_submission",
     "TRANSFER_SCOPE": "urn:globus:auth:scope:transfer.api.globus.org:all",
 
+    # Regexes for detecting Globus Web App links
+    "GLOBUS_LINK_FORMS": [
+        "^https:\/\/www\.globus\.org\/app\/transfer",   # noqa: W605 (invalid escape char '\/')
+        "^https:\/\/app\.globus\.org\/file-manager",    # noqa: W605
+        "^https:\/\/app\.globus\.org\/transfer"         # noqa: W605
+    ],
+
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",

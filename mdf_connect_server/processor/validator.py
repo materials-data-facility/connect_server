@@ -42,7 +42,6 @@ class Validator:
     """
     def __init__(self, schema_path):
         self.__dataset = None  # Serves as initialized flag
-        self.__source_info = None
         self.__tempfile = None
         self.__scroll_id = None
         self.__ingest_date = datetime.utcnow().isoformat("T") + "Z"
@@ -50,12 +49,11 @@ class Validator:
         self.__finished = None  # Flag - has user called get_finished_dataset() for this dataset?
         self.__schema_dir = schema_path
 
-    def start_dataset(self, ds_md, source_info=None, validation_info=None):
+    def start_dataset(self, ds_md, validation_info=None):
         """Validate a dataset against the MDF schema.
 
         Arguments:
         ds_md (dict): The dataset metadata to validate.
-        source_info (dict): source_id information.
         validation_info (dict): Additional validation configuration.
 
         Returns:
@@ -70,7 +68,6 @@ class Validator:
                 "error": "Dataset validation already in progress."
                 }
         self.__finished = False
-        self.__source_info = source_info or {}
 
         if validation_info is None:
             validation_info = {}
@@ -108,13 +105,8 @@ class Validator:
         # resource_type
         ds_md["mdf"]["resource_type"] = "dataset"
 
-        # source_name
-        if not ds_md["mdf"].get("source_name"):
-            ds_md["mdf"]["source_name"] = self.__source_info.get("source_name")
-
-        # source_id
-        if not ds_md["mdf"].get("source_id"):
-            ds_md["mdf"]["source_id"] = self.__source_info.get("source_id")
+        # mdf-block fields source_id and source_name must already be set
+        # (should be the case in correct preprocessing of submission)
 
         # acl
         if not ds_md["mdf"].get("acl"):

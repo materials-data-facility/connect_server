@@ -947,8 +947,7 @@ def normalize_globus_uri(location):
     """
     loc_info = urllib.parse.urlparse(location)
     # Globus Web App link into globus:// form
-    if (location.startswith("https://www.globus.org/app/transfer")
-            or location.startswith("https://app.globus.org/file-manager")):
+    if any([re.search(pattern, location) for pattern in CONFIG["GLOBUS_LINK_FORMS"]]):
         data_info = urllib.parse.unquote(loc_info.query)
         # EP ID is in origin or dest
         ep_start = data_info.find("origin_id=")
