@@ -51,9 +51,11 @@ DEFAULT = {
 
     # Regexes for detecting Globus Web App links
     "GLOBUS_LINK_FORMS": [
-        "^https:\/\/www\.globus\.org\/app\/transfer",   # noqa: W605 (invalid escape char '\/')
-        "^https:\/\/app\.globus\.org\/file-manager",    # noqa: W605
-        "^https:\/\/app\.globus\.org\/transfer"         # noqa: W605
+        "^https:\/\/www\.globus\.org\/app\/transfer",  # noqa: W605 (invalid escape char '\/')
+        "^https:\/\/app\.globus\.org\/file-manager",  # noqa: W605
+        "^https:\/\/app\.globus\.org\/transfer",  # noqa: W605
+        "^https:\/\/.*globus.*(?=.*origin_id)(?=.*origin_path)",  # noqa: W605
+        "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
     ],
 
     "GDRIVE_ROOT": "/Shared With Me",
