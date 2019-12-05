@@ -303,7 +303,7 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         author_word += clean_token
 
     # Remove author_word from title, if exists (e.g. from previous make_source_id())
-    while author_word in title_clean:
+    while author_word in title_clean and not sanitize_only:
         title_clean.remove(author_word)
 
     # Select words from title for source_name

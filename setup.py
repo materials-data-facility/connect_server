@@ -17,7 +17,7 @@ setup(
         "flask>=1.0.2",
         "globus-sdk>=1.7.0",
         "gunicorn>=19.9.0",
-        "hyperspy>=1.4.1",
+        # "hyperspy>=1.4.1",  # Must be conda installed
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.5.0",
         "numpy>=1.16.0",
