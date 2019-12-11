@@ -104,6 +104,7 @@ def convert(root_path, convert_params):
                 logger.info("{}: Record error - terminating transformers".format(source_id))
                 # TODO: Use t.kill() (Py3.7-only)
                 [t.terminate() for t in transformers]
+                # [t.kill() for t in transformers]
                 [t.join() for t in transformers]
                 logger.debug("{}: Transformers terminated".format(source_id))
 

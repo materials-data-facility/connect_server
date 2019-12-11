@@ -293,6 +293,7 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         # Clean token is lowercase and alphanumeric
         # TODO: After Py3.7 upgrade, use .isascii()
         clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        # and char.isascii()])
         if clean_token and clean_token not in delete_words:
             title_clean.append(clean_token)
 
@@ -300,6 +301,7 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
     author_word = ""
     for token in author_tokens:
         clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        # and char.isascii()])
         author_word += clean_token
 
     # Remove author_word from title, if exists (e.g. from previous make_source_id())
@@ -313,7 +315,8 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
     else:
         # Must have at least one word
         raise ValueError("Title '{}' invalid: Must have at least one word that is not "
-                         "the author name".format(title))
+                         "the author name (the following words do not count: '{}')"
+                         .format(title, delete_words))
     if len(title_clean) >= 2:
         word2 = title_clean[1]
     else:
