@@ -295,10 +295,47 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     """
 
 
-def create_sub_log(sub_log):
+def create_sub_log(source_id, original_submission):
     """Create a submission log entry in the submission database."""
     # TODO (XTH)
     raise NotImplementedError
+    # Get table
+    tbl_res = get_dmo_table("status")
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+
+    # Create fresh sub log entry
+    sub_log = {
+        "source_id": source_id,
+        "original_submission": original_submission,
+        "last_status": None,
+        "completed": False,
+        "cancelled": False
+    }
+    valid_res = validate_sub_log(sub_log)
+    if not valid_res["success"]:
+        return valid_res
+
+    # Do not create existing status
+    if read_table("sub_log", source_id)["success"]:
+        return {
+            "success": False,
+            "error": "Log for '{}' already exists.".format(source_id)
+        }
+    try:
+        table.put_item(Item=sub_log, ConditionExpression=Attr("source_id").not_exists())
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        logger.info("Log entry for {}: Created".format(source_id))
+        return {
+            "success": True,
+            "sub_log": sub_log
+        }
 
 
 def delete_from_table(table_name, source_id):
@@ -653,9 +690,49 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
 
 
 def modify_sub_entry(source_id, modifications):
-    """Modify a submission log entry."""
-    # TODO: XTH
-    raise NotImplementedError
+    """Modify a submission log entry. Must be used with caution.
+
+    Arguments:
+        source_id (str): The source_id of the submission to modify.
+        modifications (dict): The keys and values to update.
+
+    Returns:
+        dict: The results:
+            success (bool): Were the modifications made?
+            error (str): The error encountered, if any.
+            log (dict): The new log entry, if updated.
+    """
+    tbl_res = get_dmo_table("sub_log")
+    if not tbl_res["success"]:
+        return tbl_res
+    table = tbl_res["table"]
+    # Get old log
+    old_log = read_table("sub_log", source_id)
+    if not old_log["success"]:
+        return old_log
+    log = old_log["log"]
+
+    # Overwrite old log
+    log = mdf_toolbox.dict_merge(modifications, log)
+
+    log_valid = validate_sub_log(log)
+    if not log_valid["success"]:
+        return log_valid
+
+    try:
+        # put_item will overwrite
+        table.put_item(Item=log)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": repr(e)
+        }
+    else:
+        logger.info("{}: Modified: '{}'".format(source_id, modifications))
+        return {
+            "success": True,
+            "log": log
+        }
 
 
 def normalize_globus_uri(location):
