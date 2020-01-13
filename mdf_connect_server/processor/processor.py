@@ -304,7 +304,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             # If nothing in dataset, panic
             if not dataset:
                 utils.update_status(source_id, "converting", "F",
-                                    text="Could not parse dataset entry", except_on_fail=True)
+                                    text="Could not process dataset entry", except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
             # If not converting, show status as skipped
@@ -314,14 +314,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                     logger.error("{}: Records parsed with no_convert flag ({} records)"
                                  .format(source_id, num_records))
                 utils.update_status(source_id, "converting", "N", except_on_fail=True)
-            # If no records, warn user
-            elif num_records < 1:
-                utils.update_status(source_id, "converting", "U",
-                                    text=("No records were parsed out of {} groups"
-                                          .format(num_groups)), except_on_fail=True)
             else:
                 utils.update_status(source_id, "converting", "M",
-                                    text=("{} records parsed out of {} groups"
+                                    text=("{} metadata records extracted out of {} file groups"
                                           .format(num_records, num_groups)), except_on_fail=True)
             logger.debug("{}: {} entries parsed".format(source_id, num_records+1))
 

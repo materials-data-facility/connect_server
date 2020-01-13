@@ -5,4 +5,4 @@ from .search_ingester import (search_ingest, submit_ingests,
                               update_search_entries, update_search_subjects)
 # TODO (XTH): Clean up utils imports
 from .utils import *
-import .api_utils
+from .api_utils import *

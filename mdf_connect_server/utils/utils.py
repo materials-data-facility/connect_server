@@ -64,8 +64,8 @@ DMO_SCHEMA = {
 STATUS_STEPS = (
     ("sub_start", "Submission initialization"),
     ("data_download", "Connect data download"),
-    ("data_transfer", "Primary data transfer"),
-    ("converting", "Data conversion"),
+    ("data_transfer", "Data transfer to primary destination"),
+    ("converting", "Metadata extraction"),
     ("curation", "Dataset curation"),
     ("ingest_search", "MDF Search ingestion"),
     ("ingest_backup", "Data transfer to secondary destinations"),
@@ -82,7 +82,6 @@ SUCCESS_CODES = [
     "M",
     "L",
     "R",
-    "U",
     "N"
 ]
 
@@ -1797,8 +1796,6 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
         status["messages"][step_index] = (text or "An error occurred but we're recovering")
-    elif code == 'U':
-        status["messages"][step_index] = (text or "Processing will continue")
     elif code == 'T':
         status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
@@ -1944,13 +1941,6 @@ def translate_status(status):
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
-                "text": msg
-            })
-        elif code == 'U':
-            msg = "{} was unsuccessful: {}.".format(step, messages[index])
-            usr_msg += msg + "\n"
-            web_msg.append({
-                "signal": "warning",
                 "text": msg
             })
         elif code == 'H':
