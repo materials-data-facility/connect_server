@@ -12,7 +12,7 @@ import mdf_toolbox
 import requests
 
 from mdf_connect_server import CONFIG, utils
-from mdf_connect_server.processor import convert
+from mdf_connect_server.processor import start_extractors
 
 
 # Set up root logger
@@ -197,9 +197,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     num_files = 0
     # Curation skip point
     if type(sub_conf["curation"]) is not str:
-        # If we're converting, download data locally, then set canon source to local
+        # If we're extracting, download data locally, then set canon source to local
         # This allows non-Globus sources (because to download to Connect's EP)
-        if not sub_conf["no_convert"]:
+        if not sub_conf["no_extract"]:
             utils.update_status(source_id, "data_download", "P", except_on_fail=True)
             try:
                 # Download from user
@@ -222,13 +222,13 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 return
 
             utils.update_status(source_id, "data_download", "M",
-                                text=("{} files will be converted ({} archives extracted)"
+                                text=("{} files will be extracted ({} archives extracted)"
                                       .format(num_files, dl_res["num_extracted"])),
                                 except_on_fail=True)
             canon_data_sources = ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)]
 
-        # If we're not converting, set canon source to only source
-        # Also create local dir with no data to "convert" for dataset entry
+        # If we're not extracting, set canon source to only source
+        # Also create local dir with no data to "extract" for dataset entry
         else:
             utils.update_status(source_id, "data_download", "N", except_on_fail=True)
             os.makedirs(local_path)
@@ -262,12 +262,12 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             "http_host": utils.lookup_http_host(sub_conf["canon_destination"]),
             "local_path": local_path,
         }
-        convert_params = {
+        extract_params = {
             "dataset": metadata,
-            "parsers": sub_conf["index"],
+            "extractors": sub_conf["index"],
             "service_data": service_data,
             "feedstock_file": feedstock_file,
-            "group_config": mdf_toolbox.dict_merge(sub_conf["conversion_config"],
+            "group_config": mdf_toolbox.dict_merge(sub_conf["extraction_config"],
                                                    CONFIG["GROUPING_RULES"]),
             "validation_info": {
                 "project_blocks": sub_conf.get("project_blocks", []),
@@ -283,42 +283,42 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             utils.complete_submission(source_id)
             return
 
-        # Convert data
-        utils.update_status(source_id, "converting", "P", except_on_fail=True)
+        # Extract data
+        utils.update_status(source_id, "extracting", "P", except_on_fail=True)
         try:
-            convert_res = convert(local_path, convert_params)
-            if not convert_res["success"]:
-                utils.update_status(source_id, "converting", "F", text=convert_res["error"],
+            extract_res = start_extractors(local_path, extract_params)
+            if not extract_res["success"]:
+                utils.update_status(source_id, "extracting", "F", text=extract_res["error"],
                                     except_on_fail=True)
                 return
-            dataset = convert_res["dataset"]
-            num_records = convert_res["num_records"]
-            num_groups = convert_res["num_groups"]
-            extensions = convert_res["extensions"]
+            dataset = extract_res["dataset"]
+            num_records = extract_res["num_records"]
+            num_groups = extract_res["num_groups"]
+            extensions = extract_res["extensions"]
         except Exception as e:
-            utils.update_status(source_id, "converting", "F", text=repr(e), except_on_fail=True)
+            utils.update_status(source_id, "extracting", "F", text=repr(e), except_on_fail=True)
             utils.complete_submission(source_id)
             return
         else:
             utils.modify_status_entry(source_id, {"extensions": extensions})
             # If nothing in dataset, panic
             if not dataset:
-                utils.update_status(source_id, "converting", "F",
+                utils.update_status(source_id, "extracting", "F",
                                     text="Could not process dataset entry", except_on_fail=True)
                 utils.complete_submission(source_id)
                 return
-            # If not converting, show status as skipped
-            # Also check if records were parsed inappropriately, flag error in log
-            elif sub_conf.get("no_convert"):
+            # If not extracting, show status as skipped
+            # Also check if records were extracted inappropriately, flag error in log
+            elif sub_conf.get("no_extract"):
                 if num_records != 0:
-                    logger.error("{}: Records parsed with no_convert flag ({} records)"
+                    logger.error("{}: Records extracted with no_extract flag ({} records)"
                                  .format(source_id, num_records))
-                utils.update_status(source_id, "converting", "N", except_on_fail=True)
+                utils.update_status(source_id, "extracting", "N", except_on_fail=True)
             else:
-                utils.update_status(source_id, "converting", "M",
+                utils.update_status(source_id, "extracting", "M",
                                     text=("{} metadata records extracted out of {} file groups"
                                           .format(num_records, num_groups)), except_on_fail=True)
-            logger.debug("{}: {} entries parsed".format(source_id, num_records+1))
+            logger.debug("{}: {} entries extracted".format(source_id, num_records+1))
 
         # NOTE: Cancellation point
         if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
@@ -344,7 +344,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 [curation_records.append(json.loads(f.readline()))
                  for i in range(min(CONFIG["NUM_CURATION_RECORDS"], num_records))]
             curation_dataset = deepcopy(dataset)
-            # Numbers can be converted into Decimal by DynamoDB, which causes JSON errors
+            # Numbers can be extracted into Decimal by DynamoDB, which causes JSON errors
             curation_dataset["mdf"].pop("scroll_id", None)
             curation_dataset["mdf"].pop("version", None)
             curation_task = {
@@ -353,8 +353,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 "dataset": json.dumps(dataset),
                 "sample_records": json.dumps(curation_records),
                 "submission_info": sub_conf,
-                "parsing_summary": ("{} records were parsed out of {} groups from {} files"
-                                    .format(num_records, num_groups, num_files)),
+                "extraction_summary": ("{} records were extracted out of {} groups from {} files"
+                                       .format(num_records, num_groups, num_files)),
                 "curation_start_date": str(datetime.today())
             }
             # If no allowed curators or public allowed, set to public
@@ -587,8 +587,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
     else:
         utils.update_status(source_id, "ingest_publish", "N", except_on_fail=True)
 
-    # Citrine (skip if not converted)
-    if sub_conf["services"].get("citrine") and not sub_conf.get("no_convert"):
+    # Citrine (skip if not extracted)
+    if sub_conf["services"].get("citrine") and not sub_conf.get("no_extract"):
         utils.update_status(source_id, "ingest_citrine", "P", except_on_fail=True)
 
         # Get old Citrine dataset version, if exists

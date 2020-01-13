@@ -316,7 +316,7 @@ class Validator:
             list_of_elem.sort()
             # Currently deprecated
             # If any "element" isn't in the periodic table,
-            # the composition is likely not a chemical formula and should not be parsed
+            # the composition is likely not a chemical formula and should not be processed
 #                if all([elem in DICT_OF_ALL_ELEMENTS.values() for elem in list_of_elem]):
 #                    record["elements"] = list_of_elem
 

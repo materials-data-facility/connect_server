@@ -8,20 +8,20 @@ from queue import Empty
 import mdf_toolbox
 
 from mdf_connect_server import CONFIG
-from mdf_connect_server.processor import transform, Validator
+from mdf_connect_server.processor import run_extractors, Validator
 
 
 logger = logging.getLogger(__name__)
 
 
-def convert(root_path, convert_params):
-    """Convert files under the root path into feedstock.
+def start_extractors(root_path, extract_params):
+    """Extract files under the root path into feedstock.
 
     Arguments:
     root_path (str): The path to the directory holding all the dataset files.
-    convert_params (dict): Parameters for conversion.
+    extract_params (dict): Parameters for extraction.
         dataset (dict): The dataset associated with the files.
-        parsers (dict): Parser-specific parameters, keyed by parser (ex. "json": {...}).
+        extractor (dict): Extractor-specific parameters, keyed by extractor (ex. "json": {...}).
         service_data (str): The path to a directory to store integration data.
         feedstock_file (str): Path to output feedstock to.
         group_config (dict): Grouping configuration.
@@ -29,18 +29,18 @@ def convert(root_path, convert_params):
 
     Returns:
     dict: The results.
-        success (bool): False if the conversion failed to complete. True otherwise.
+        success (bool): False if the extraction failed to complete. True otherwise.
         error (str): If success is False, the error encountered.
         dataset (dict): If success is True, the dataset entry.
-        num_records (int): If success is True, the number of records parsed.
-        num_groups (int): If success is True, the number of parsed groups.
+        num_records (int): If success is True, the number of records extracted.
+        num_groups (int): If success is True, the number of extracted groups.
         extensions (list of str): If success is True, all unique file extensions in the dataset.
     """
-    source_id = convert_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
+    source_id = extract_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
     vald = Validator(schema_path=CONFIG["SCHEMA_PATH"])
 
     # Process dataset entry (to fail validation early if dataset entry is invalid)
-    full_dataset = convert_params["dataset"]
+    full_dataset = extract_params["dataset"]
     '''
     # Fetch custom block descriptors, cast values to str
     new_custom = {}
@@ -63,7 +63,7 @@ def convert(root_path, convert_params):
     '''
 
     # Validate dataset
-    ds_res = vald.start_dataset(full_dataset, convert_params.get("validation_info", None))
+    ds_res = vald.start_dataset(full_dataset, extract_params.get("validation_info", None))
     if not ds_res["success"]:
         return ds_res
 
@@ -72,18 +72,18 @@ def convert(root_path, convert_params):
     output_queue = multiprocessing.Queue()
     input_complete = multiprocessing.Value(c_bool, False)
 
-    # Start up transformers
-    transformers = [multiprocessing.Process(target=transform,
-                                            args=(input_queue, output_queue,
-                                                  input_complete, convert_params))
-                    for i in range(CONFIG["NUM_TRANSFORMERS"])]
-    [t.start() for t in transformers]
-    logger.debug("{}: Transformers started".format(source_id))
+    # Start up extractors
+    extractors = [multiprocessing.Process(target=run_extractors,
+                                          args=(input_queue, output_queue,
+                                                input_complete, extract_params))
+                  for i in range(CONFIG["NUM_EXTRACTORS"])]
+    [t.start() for t in extractors]
+    logger.debug("{}: Extractors started".format(source_id))
 
     # Populate input queue
     num_groups = 0
     extensions = set()
-    for group_info in group_tree(root_path, convert_params["group_config"]):
+    for group_info in group_tree(root_path, extract_params["group_config"]):
         input_queue.put(group_info)
         num_groups += 1
         for f in group_info["files"]:
@@ -99,27 +99,27 @@ def convert(root_path, convert_params):
             record = output_queue.get(timeout=1)
             rc_res = vald.add_record(json.loads(record))
             # If one record fails, entire feedstock fails
-            # So if a failure occurs, terminate all transformers and return
+            # So if a failure occurs, terminate all extractors and return
             if not rc_res["success"]:
-                logger.info("{}: Record error - terminating transformers".format(source_id))
+                logger.info("{}: Record error - terminating extractors".format(source_id))
                 # TODO: Use t.kill() (Py3.7-only)
-                [t.terminate() for t in transformers]
-                # [t.kill() for t in transformers]
-                [t.join() for t in transformers]
-                logger.debug("{}: Transformers terminated".format(source_id))
+                [t.terminate() for t in extractors]
+                # [t.kill() for t in extractors]
+                [t.join() for t in extractors]
+                logger.debug("{}: Extractors terminated".format(source_id))
 
                 return rc_res
 
         except Empty:
-            if any([t.is_alive() for t in transformers]):
-                [t.join(timeout=1) for t in transformers]
+            if any([t.is_alive() for t in extractors]):
+                [t.join(timeout=1) for t in extractors]
             else:
-                logger.debug("{}: Transformers joined".format(source_id))
+                logger.debug("{}: Extractors joined".format(source_id))
                 break
 
     # Output feedstock
-    os.makedirs(os.path.dirname(convert_params["feedstock_file"]), exist_ok=True)
-    with open(convert_params["feedstock_file"], 'w') as out:
+    os.makedirs(os.path.dirname(extract_params["feedstock_file"]), exist_ok=True)
+    with open(extract_params["feedstock_file"], 'w') as out:
         feedstock_generator = vald.get_finished_dataset()
         # First entry is dataset
         dataset = next(feedstock_generator)
@@ -166,12 +166,12 @@ def group_tree(root, config):
             logger.debug("Ignoring non-file, non-dir node '{}'".format(node_path))
 
     # Group the files
-    # list "groups" is list of dict, each dict contains actual file list + parser info/config
+    # list "groups" is list of dict, each dict contains actual file list + extractor info/config
     groups = []
     # Group by dir overrides other grouping
     if config.get("group_by_dir"):
         groups.append({"files": files,
-                       "parsers": [],
+                       "extractors": [],
                        "params": {}})
     else:
         for format_rules in config.get("known_formats", {}).values():
@@ -195,7 +195,7 @@ def group_tree(root, config):
                     files.remove(f)
                 group_info = {
                     "files": g,
-                    "parsers": format_rules["parsers"],
+                    "extractors": format_rules["extractors"],
                     "params": format_rules["params"]
                 }
                 groups.append(group_info)
@@ -203,7 +203,7 @@ def group_tree(root, config):
         # NOTE: Keep this grouping last!
         # Default grouping: Each file is a group
         groups.extend([{"files": [f],
-                        "parsers": [],
+                        "extractors": [],
                         "params": {}}
                        for f in files])
 

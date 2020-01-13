@@ -42,32 +42,32 @@ from mdf_connect_server import CONFIG  # noqa: E402
 # Additional NaN values for Pandas
 NA_VALUES = ["", " "]
 
-# Create new logger (transformers are multi-process)
+# Create new logger (extractors are multi-process)
 logger = logging.getLogger(__name__)
 logger.setLevel(CONFIG["LOG_LEVEL"])
 logger.propagate = False
 logfile_formatter = logging.Formatter("[{asctime}] [{levelname}] {message}",
                                       style='{', datefmt="%Y-%m-%d %H:%M:%S")
-logfile_handler = logging.FileHandler(CONFIG["TRANSFORMER_ERROR_FILE"], mode='a')
+logfile_handler = logging.FileHandler(CONFIG["EXTRACTOR_ERROR_FILE"], mode='a')
 logfile_handler.setFormatter(logfile_formatter)
 logger.addHandler(logfile_handler)
 
-# Log debug messages for all parser events. Extremely spammy.
+# Log debug messages for all extractor events. Extremely spammy.
 SUPER_DEBUG = False
 
-# List of parsers at bottom
+# List of extractors at bottom
 
 
-def transform(input_queue, output_queue, queue_done, parse_params):
-    """Parse data files.
+def run_extractors(input_queue, output_queue, queue_done, extract_params):
+    """Extract data files.
 
     Returns:
-    list of dict: The metadata parsed from the file.
-                  Will be empty if no selected parser can parse data.
+    list of dict: The metadata extractd from the file.
+                  Will be empty if no selected extractor can extract data.
     """
-    source_id = parse_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
+    source_id = extract_params.get("dataset", {}).get("mdf", {}).get("source_id", "unknown")
     try:
-        # Parse each group from the queue
+        # Extract each group from the queue
         # Exit loop when queue_done is True and no groups remain
         while True:
             # Fetch group from queue
@@ -85,40 +85,40 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Process fetched group
             single_record = {}
             multi_records = []
-            for parser_name in (group_info["parsers"] or ALL_PARSERS.keys()):
+            for extractor_name in (group_info["extractors"] or ALL_EXTRACTORS.keys()):
                 try:
-                    specific_params = mdf_toolbox.dict_merge(parse_params or {},
+                    specific_params = mdf_toolbox.dict_merge(extract_params or {},
                                                              group_info["params"])
-                    parser_res = ALL_PARSERS[parser_name](group=group_info["files"],
-                                                          params=specific_params)
+                    extractor_res = ALL_EXTRACTORS[extractor_name](group=group_info["files"],
+                                                                   params=specific_params)
                 except Exception as e:
-                    logger.warn(("{} Parser {} failed with "
-                                 "exception {}").format(source_id, parser_name, repr(e)))
+                    logger.warn(("{} Extractr {} failed with "
+                                 "exception {}").format(source_id, extractor_name, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
                     # Eliminates [{}] from cluttering feedstock
-                    # Filters one-record results from parsers that always return lists
-                    if isinstance(parser_res, list) and len(parser_res) == 1:
-                        parser_res = parser_res[0]
+                    # Filters one-record results from extractors that always return lists
+                    if isinstance(extractor_res, list) and len(extractor_res) == 1:
+                        extractor_res = extractor_res[0]
                     # Only process actual results
-                    if parser_res:
+                    if extractor_res:
                         # If a single record was returned, merge with others
-                        if isinstance(parser_res, dict):
-                            single_record = mdf_toolbox.dict_merge(single_record, parser_res)
+                        if isinstance(extractor_res, dict):
+                            single_record = mdf_toolbox.dict_merge(single_record, extractor_res)
                         # If multiple records were returned, add to list
-                        elif isinstance(parser_res, list):
+                        elif isinstance(extractor_res, list):
                             # Only add records with data
-                            [multi_records.append(rec) for rec in parser_res if rec]
+                            [multi_records.append(rec) for rec in extractor_res if rec]
                         # Else, panic
                         else:
-                            raise TypeError(("Parser '{p}' returned "
-                                             "type '{t}'!").format(p=parser_name,
-                                                                   t=type(parser_res)))
-                        logger.debug("{}: {} parsed {}".format(source_id,
-                                                               parser_name, group_info["files"]))
+                            raise TypeError(("Extractr '{p}' returned "
+                                             "type '{t}'!").format(p=extractor_name,
+                                                                   t=type(extractor_res)))
+                        logger.debug("{}: {} extractd {}".format(source_id, extractor_name,
+                                                                 group_info["files"]))
                     elif SUPER_DEBUG:
-                        logger.debug("{}: {} could not parse {}".format(source_id,
-                                                                        parser_name, group_info))
+                        logger.debug("{}: {} could not extract {}".format(source_id, extractor_name,
+                                                                          group_info))
             # Merge the single_record into all multi_records if both exist
             if single_record and multi_records:
                 records = [mdf_toolbox.dict_merge(r, single_record) for r in multi_records if r]
@@ -135,23 +135,23 @@ def transform(input_queue, output_queue, queue_done, parse_params):
             # Push records to output queue
             # Get the file info
             try:
-                file_info = _parse_file_info(group=group_info["files"], params=parse_params)
+                file_info = _extract_file_info(group=group_info["files"], params=extract_params)
             except Exception as e:
-                logger.warning("{}: File info parser failed: {}".format(source_id, repr(e)))
+                logger.warning("{}: File info extractor failed: {}".format(source_id, repr(e)))
             for record in records:
                 # TODO: Should files be handled differently?
                 record = mdf_toolbox.dict_merge(record, file_info)
                 output_queue.put(json.dumps(record))
     except Exception as e:
-        logger.error("{}: Transformer error: {}".format(source_id, str(e)))
+        logger.error("{}: Extractor error: {}".format(source_id, str(e)))
     # Log all exceptions!
     except BaseException as e:
-        logger.error("{}: Transformer BaseException: {}".format(source_id, str(e)))
+        logger.error("{}: Extractor BaseException: {}".format(source_id, str(e)))
     return
 
 
-def parse_crystal_structure(group, params=None):
-    """Parser for the crystal_structure block.
+def extract_crystal_structure(group, params=None):
+    """Extractr for the crystal_structure block.
     Will also populate material block.
 
     Arguments:
@@ -159,7 +159,7 @@ def parse_crystal_structure(group, params=None):
     params (dict): N/A
 
     Returns:
-    dict: The record parsed.
+    dict: The record extractd.
     """
     record = {}
 
@@ -185,9 +185,9 @@ def parse_crystal_structure(group, params=None):
                 # Can't read file
                 continue
 
-        # Parse material block
+        # Extract material block
         material["composition"] = pmg_s.formula.replace(" ", "")
-        # Parse crystal_structure block
+        # Extract crystal_structure block
         crystal_structure["space_group_number"] = pmg_s.get_space_group_info()[1]
         crystal_structure["number_of_atoms"] = float(pmg_s.composition.num_atoms)
         crystal_structure["volume"] = float(pmg_s.volume)
@@ -201,7 +201,7 @@ def parse_crystal_structure(group, params=None):
     return record
 
 
-def parse_tdb(group, params=None):
+def extract_tdb(group, params=None):
     record = {}
 
     for data_file in group:
@@ -236,8 +236,8 @@ def parse_tdb(group, params=None):
     return record
 
 
-def parse_pif(group, params=None):
-    """Use Citrine's parsers."""
+def extract_pif(group, params=None):
+    """Use Citrine's extractors."""
     if not params:
         return {}
 
@@ -291,24 +291,24 @@ def parse_pif(group, params=None):
     return mdf_records
 
 
-def parse_json(group, params=None):
-    """Parser for JSON.
+def extract_json(group, params=None):
+    """Extractr for JSON.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             json (dict):
                 mapping (dict): The mapping of mdf_fields: json_fields
                 na_values (list of str): Values to treat as N/A. Default None.
 
     Returns:
-    dict: The record(s) parsed.
+    dict: The record(s) extractd.
     """
     try:
-        mapping = params["parsers"]["json"]["mapping"]
-        na_values = params["parsers"]["json"].get("na_values", None)
+        mapping = params["extractors"]["json"]["mapping"]
+        na_values = params["extractors"]["json"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -320,28 +320,28 @@ def parse_json(group, params=None):
         except Exception:
             pass
         else:
-            records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            records.extend(_extract_json(file_json, mapping, na_values=na_values))
     return records
 
 
-def parse_csv(group, params=None):
-    """Parser for CSVs.
+def extract_csv(group, params=None):
+    """Extractr for CSVs.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             csv (dict):
                 mapping (dict): The mapping of mdf_fields: csv_headers
                 delimiter (str): The delimiter. Default ','
                 na_values (list of str): Values to treat as N/A. Default NA_VALUES
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        csv_params = params["parsers"]["csv"]
+        csv_params = params["extractors"]["csv"]
         mapping = csv_params["mapping"]
     except (KeyError, AttributeError):
         return {}
@@ -354,27 +354,27 @@ def parse_csv(group, params=None):
         except Exception:
             pass
         else:
-            records.extend(_parse_pandas(df, mapping))
+            records.extend(_extract_pandas(df, mapping))
     return records
 
 
-def parse_yaml(group, params=None):
-    """Parser for YAML files.
+def extract_yaml(group, params=None):
+    """Extractr for YAML files.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             yaml (dict):
                 mapping (dict): The mapping of mdf_fields: yaml_fields
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        mapping = params["parsers"]["yaml"]["mapping"]
-        na_values = params["parsers"]["yaml"].get("na_values", None)
+        mapping = params["extractors"]["yaml"]["mapping"]
+        na_values = params["extractors"]["yaml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -386,27 +386,27 @@ def parse_yaml(group, params=None):
         except Exception:
             pass
         else:
-            records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            records.extend(_extract_json(file_json, mapping, na_values=na_values))
     return records
 
 
-def parse_xml(group, params=None):
-    """Parser for XML files.
+def extract_xml(group, params=None):
+    """Extractr for XML files.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             xml (dict):
                 mapping (dict): The mapping of mdf_fields: xml_fields
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        mapping = params["parsers"]["xml"]["mapping"]
-        na_values = params["parsers"]["xml"].get("na_values", None)
+        mapping = params["extractors"]["xml"]["mapping"]
+        na_values = params["extractors"]["xml"].get("na_values", None)
     except (KeyError, AttributeError):
         return {}
 
@@ -418,27 +418,27 @@ def parse_xml(group, params=None):
         except Exception:
             pass
         else:
-            records.extend(_parse_json(file_json, mapping, na_values=na_values))
+            records.extend(_extract_json(file_json, mapping, na_values=na_values))
     return records
 
 
-def parse_excel(group, params=None):
-    """Parser for MS Excel files.
+def extract_excel(group, params=None):
+    """Extractr for MS Excel files.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             excel (dict):
                 mapping (dict): The mapping of mdf_fields: excel_headers
                 na_values (list of str): Values to treat as N/A. Default NA_VALUES
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        excel_params = params["parsers"]["excel"]
+        excel_params = params["extractors"]["excel"]
         mapping = excel_params["mapping"]
     except (KeyError, AttributeError):
         return {}
@@ -450,12 +450,12 @@ def parse_excel(group, params=None):
         except Exception:
             pass
         else:
-            records.extend(_parse_pandas(df, mapping))
+            records.extend(_extract_pandas(df, mapping))
     return records
 
 
-def parse_image(group, params=None):
-    """Parse an image."""
+def extract_image(group, params=None):
+    """Extract an image."""
     records = []
     for file_path in group:
         try:
@@ -474,8 +474,8 @@ def parse_image(group, params=None):
     return records
 
 
-def parse_electron_microscopy(group, params=None):
-    """Parse an electron microscopy image with hyperspy library."""
+def extract_electron_microscopy(group, params=None):
+    """Extract an electron microscopy image with hyperspy library."""
     records = []
     for file_path in group:
         try:
@@ -590,22 +590,22 @@ def parse_electron_microscopy(group, params=None):
     return records
 
 
-def parse_filename(group, params=None):
-    """Parser for metadata stored in filenames.
+def extract_filename(group, params=None):
+    """Extractr for metadata stored in filenames.
     Will populate blocks according to mapping.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             filename (dict):
                 mapping (dict): The mapping of mdf_fields: regex_pattern
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        filename_params = params["parsers"]["filename"]
+        filename_params = params["extractors"]["filename"]
         mapping = filename_params["mapping"]
     except (KeyError, AttributeError):
         return {}
@@ -632,49 +632,49 @@ def parse_filename(group, params=None):
     return records
 
 
-ALL_PARSERS = {
-    "crystal_structure": parse_crystal_structure,
-    "tdb": parse_tdb,
-    "pif": parse_pif,
-    "json": parse_json,
-    "csv": parse_csv,
-    "yaml": parse_yaml,
-    "xml": parse_xml,
-    "excel": parse_excel,
-    "image": parse_image,
-    "electron_microscopy": parse_electron_microscopy,
-    "filename": parse_filename
+ALL_EXTRACTORS = {
+    "crystal_structure": extract_crystal_structure,
+    "tdb": extract_tdb,
+    "pif": extract_pif,
+    "json": extract_json,
+    "csv": extract_csv,
+    "yaml": extract_yaml,
+    "xml": extract_xml,
+    "excel": extract_excel,
+    "image": extract_image,
+    "electron_microscopy": extract_electron_microscopy,
+    "filename": extract_filename
 }
 
 
-def _parse_file_info(group, params=None):
-    """File information parser.
+def _extract_file_info(group, params=None):
+    """File information extractor.
     Populates the "files" block.
 
     Arguments:
     group (list of str): The paths to grouped files.
     params (dict):
-        parsers (dict):
+        extractors (dict):
             file (dict):
                 globus_endpoint (str): Data file endpoint.
                 http_host (str): Data file HTTP host.
                 local_path (str): The path to the root of the files on the current machine.
 
     Returns:
-    list of dict: The record(s) parsed.
+    list of dict: The record(s) extractd.
     """
     try:
-        globus_host_info = urllib.parse.urlparse(params["parsers"]["file"]["globus_host"])
+        globus_host_info = urllib.extract.urlextract(params["extractors"]["file"]["globus_host"])
         host_endpoint = globus_host_info.netloc
         host_path = globus_host_info.path
     except Exception as e:
         raise ValueError("File info host_endpoint missing or corrupted: {}".format(str(e)))
     try:
-        http_host = params["parsers"]["file"]["http_host"]
+        http_host = params["extractors"]["file"]["http_host"]
     except Exception:
         raise ValueError("File info http_host missing")
     try:
-        local_path = params["parsers"]["file"]["local_path"]
+        local_path = params["extractors"]["file"]["local_path"]
     except Exception:
         raise ValueError("File info local_path missing")
 
@@ -697,8 +697,8 @@ def _parse_file_info(group, params=None):
     }
 
 
-def _parse_pandas(df, mapping):
-    """Parse a Pandas DataFrame."""
+def _extract_pandas(df, mapping):
+    """Extract a Pandas DataFrame."""
     csv_len = len(df.index)
     df_json = json.loads(df.to_json())
 
@@ -707,12 +707,12 @@ def _parse_pandas(df, mapping):
         new_map = {}
         for path, value in _flatten_struct(mapping):
             new_map[path] = value + "." + str(index)
-        records.extend(_parse_json(df_json, new_map))
+        records.extend(_extract_json(df_json, new_map))
     return records
 
 
-def _parse_json(file_json, mapping, na_values=None):
-    """Parse a JSON file."""
+def _extract_json(file_json, mapping, na_values=None):
+    """Extract a JSON file."""
     # Handle lists of JSON documents as separate records
     if not isinstance(file_json, list):
         file_json = [file_json]

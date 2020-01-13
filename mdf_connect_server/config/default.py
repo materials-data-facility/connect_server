@@ -16,7 +16,7 @@ DEFAULT = {
 
     "NUM_TRANSFORMERS": 10,
     "NUM_SUBMITTERS": 5,
-    "TRANSFORMER_ERROR_FILE": "parser_errors.log",
+    "EXTRACTOR_ERROR_FILE": "extractor_errors.log",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
@@ -61,7 +61,7 @@ DEFAULT = {
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
-    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
+    "EXTRACT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
 }
 with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
     DEFAULT["MRR_TEMPLATE"] = f.read()

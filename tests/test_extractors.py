@@ -1,7 +1,7 @@
 import json
 import os
 
-import mdf_connect_server.processor.transformer as parsers
+import mdf_connect_server.processor.extractors as extractors
 import mdf_toolbox
 import pytest  # noqa: F401
 
@@ -67,12 +67,12 @@ def test_crystal_structure():
         }
     }
 
-    assert parsers.parse_crystal_structure([cif1_path]) == cif1_record
-    assert parsers.parse_crystal_structure([cif2_path]) == cif2_record
-    assert parsers.parse_crystal_structure([cif3_path]) == cif3_record
-    assert parsers.parse_crystal_structure([cif4_path]) == cif4_record
-    assert parsers.parse_crystal_structure([NO_DATA_FILE]) == {}
-    assert parsers.parse_crystal_structure([NA_PATH]) == {}
+    assert extractors.extract_crystal_structure([cif1_path]) == cif1_record
+    assert extractors.extract_crystal_structure([cif2_path]) == cif2_record
+    assert extractors.extract_crystal_structure([cif3_path]) == cif3_record
+    assert extractors.extract_crystal_structure([cif4_path]) == cif4_record
+    assert extractors.extract_crystal_structure([NO_DATA_FILE]) == {}
+    assert extractors.extract_crystal_structure([NA_PATH]) == {}
 
 
 def test_tdb():
@@ -134,14 +134,14 @@ def test_tdb():
         }
     }
 
-    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb1_path]), tdb1_record,
+    assert mdf_toolbox.insensitive_comparison(extractors.extract_tdb([tdb1_path]), tdb1_record,
                                               string_insensitive=True)
-    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb2_path]), tdb2_record,
+    assert mdf_toolbox.insensitive_comparison(extractors.extract_tdb([tdb2_path]), tdb2_record,
                                               string_insensitive=True)
-    assert mdf_toolbox.insensitive_comparison(parsers.parse_tdb([tdb3_path]), tdb3_record,
+    assert mdf_toolbox.insensitive_comparison(extractors.extract_tdb([tdb3_path]), tdb3_record,
                                               string_insensitive=True)
-    assert parsers.parse_tdb([NO_DATA_FILE]) == {}
-    assert parsers.parse_tdb([NA_PATH]) == {}
+    assert extractors.extract_tdb([NO_DATA_FILE]) == {}
+    assert extractors.extract_tdb([NA_PATH]) == {}
 
 
 def test_pif():
@@ -205,16 +205,16 @@ def test_json(tmpdir):
     }
 
     # Test with proper mappings
-    assert parsers.parse_json(group, params={
-                                        "parsers": {
+    assert extractors.extract_json(group, params={
+                                        "extractors": {
                                             "json": {
                                                 "mapping": mapping1,
                                                 "na_values": ["na"]
                                             }
                                         }
                                      }) == [correct_record]
-    assert parsers.parse_json(group, params={
-                                        "parsers": {
+    assert extractors.extract_json(group, params={
+                                        "extractors": {
                                             "json": {
                                                 "mapping": mapping2,
                                                 "na_values": "na"
@@ -222,8 +222,8 @@ def test_json(tmpdir):
                                         }
                                      }) == [correct_record]
     # With na included
-    assert parsers.parse_json(group, params={
-                                        "parsers": {
+    assert extractors.extract_json(group, params={
+                                        "extractors": {
                                             "json": {
                                                 "mapping": mapping1
                                             }
@@ -231,23 +231,23 @@ def test_json(tmpdir):
                                      }) == [with_na_record]
 
     # Test failure modes
-    assert parsers.parse_json(group, {}) == {}
-    assert parsers.parse_json([], params={
-                                    "parsers": {
+    assert extractors.extract_json(group, {}) == {}
+    assert extractors.extract_json([], params={
+                                    "extractors": {
                                         "json": {
                                             "mapping": mapping2
                                         }
                                     }
                                   }) == []
-    assert parsers.parse_json([NO_DATA_FILE], params={
-                                    "parsers": {
+    assert extractors.extract_json([NO_DATA_FILE], params={
+                                    "extractors": {
                                         "json": {
                                             "mapping": mapping2
                                         }
                                     }
                                   }) == []
-    assert parsers.parse_json([NA_PATH], params={
-                                    "parsers": {
+    assert extractors.extract_json([NA_PATH], params={
+                                    "extractors": {
                                         "json": {
                                             "mapping": mapping2
                                         }
@@ -298,38 +298,38 @@ def test_xml(tmpdir):
     }
 
     # Test with proper mappings
-    assert parsers.parse_xml(group, params={
-                                        "parsers": {
+    assert extractors.extract_xml(group, params={
+                                        "extractors": {
                                             "xml": {
                                                 "mapping": mapping1
                                             }
                                         }
                                      }) == [correct_record]
-    assert parsers.parse_xml(group, params={
-                                        "parsers": {
+    assert extractors.extract_xml(group, params={
+                                        "extractors": {
                                             "xml": {
                                                 "mapping": mapping2
                                             }
                                         }
                                      }) == [correct_record]
     # Test failure modes
-    assert parsers.parse_xml(group, {}) == {}
-    assert parsers.parse_xml([], params={
-                                    "parsers": {
+    assert extractors.extract_xml(group, {}) == {}
+    assert extractors.extract_xml([], params={
+                                    "extractors": {
                                         "xml": {
                                             "mapping": mapping2
                                         }
                                     }
                                   }) == []
-    assert parsers.parse_xml([NO_DATA_FILE], params={
-                                    "parsers": {
+    assert extractors.extract_xml([NO_DATA_FILE], params={
+                                    "extractors": {
                                         "xml": {
                                             "mapping": mapping2
                                         }
                                     }
                                   }) == []
-    assert parsers.parse_xml([NA_PATH], params={
-                                    "parsers": {
+    assert extractors.extract_xml([NA_PATH], params={
+                                    "extractors": {
                                         "xml": {
                                             "mapping": mapping2
                                         }
@@ -382,17 +382,17 @@ def test_filename():
             'composition': 'O2'
         }
     }]
-    assert parsers.parse_filename(group, params={
-                                            "parsers": {
+    assert extractors.extract_filename(group, params={
+                                            "extractors": {
                                                 "filename": {
                                                     "mapping": mapping
                                                 }
                                             }
                                          }) == correct
     # Failures
-    assert parsers.parse_filename(group, params={}) == {}
-    assert parsers.parse_filename([], params={
-                                            "parsers": {
+    assert extractors.extract_filename(group, params={}) == {}
+    assert extractors.extract_filename([], params={
+                                            "extractors": {
                                                 "filename": {
                                                     "mapping": mapping
                                                 }

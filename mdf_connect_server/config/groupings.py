@@ -4,7 +4,7 @@ GROUPINGS = {
             "files": [
                 ".cif",
             ],
-            "parsers": [
+            "extractors": [
                 "crystal_structure",
                 "pif"
             ],
@@ -31,7 +31,7 @@ GROUPINGS = {
                 "vasp_run.xml",
                 "xdatcar"
             ],
-            "parsers": [
+            "extractors": [
                 "pif",
                 "crystal_structure"
             ],
@@ -45,7 +45,7 @@ GROUPINGS = {
             "files": [
                 ".json"
             ],
-            "parsers": [
+            "extractors": [
                 "json"
             ],
             "params": {}
@@ -54,7 +54,7 @@ GROUPINGS = {
             "files": [
                 ".csv"
             ],
-            "parsers": [
+            "extractors": [
                 "csv",
                 "pif"
             ],

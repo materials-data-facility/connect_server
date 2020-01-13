@@ -134,8 +134,8 @@ def authenticate_token(token, groups, require_all=False):
             auth_succeeded = True
         else:
             # Translate convert and admin groups
-            if grp.lower() == "convert":
-                grp = CONFIG["CONVERT_GROUP_ID"]
+            if grp.lower() == "extract" or grp.lower() == "convert":
+                grp = CONFIG["EXTRACT_GROUP_ID"]
             elif grp.lower() == "admin":
                 grp = CONFIG["ADMIN_GROUP_ID"]
             # Group membership checks - each identity with each group
@@ -389,7 +389,7 @@ def fetch_org_rules(org_names, user_rules=None):
         organizations = json.load(f)
 
     # Cache list of all organization aliases to match against
-    # Transform into tuple (normalized_aliases, org_rules) for convenience
+    # Turn into tuple (normalized_aliases, org_rules) for convenience
     all_clean_orgs = []
     for org in organizations:
         aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
