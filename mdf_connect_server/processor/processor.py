@@ -222,7 +222,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 return
 
             utils.update_status(source_id, "data_download", "M",
-                                text=("{} files will be extracted ({} archives extracted)"
+                                text=("{} files will be grouped and extracted (from {} archives)"
                                       .format(num_files, dl_res["num_extracted"])),
                                 except_on_fail=True)
             canon_data_sources = ["globus://{}{}".format(CONFIG["LOCAL_EP"], local_path)]

@@ -210,7 +210,7 @@ def authenticate_token(token, groups, require_all=False):
     }
 
 
-def cancel_submission(source_id, wait=True):
+def api_cancel_submission(source_id, wait=True):
     """Cancel an in-progress submission.
     Will not cancel completed or already-cancelled submissions.
 
@@ -231,7 +231,7 @@ def cancel_submission(source_id, wait=True):
     raise NotImplementedError
 
 
-def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
+def api_complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     # TODO (XTH): Modify for API-only
     raise NotImplementedError
     """Complete a submission.

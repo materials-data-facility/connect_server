@@ -664,7 +664,7 @@ def _extract_file_info(group, params=None):
     list of dict: The record(s) extractd.
     """
     try:
-        globus_host_info = urllib.extract.urlextract(params["extractors"]["file"]["globus_host"])
+        globus_host_info = urllib.parse.urlparse(params["extractors"]["file"]["globus_host"])
         host_endpoint = globus_host_info.netloc
         host_path = globus_host_info.path
     except Exception as e:

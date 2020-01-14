@@ -14,7 +14,7 @@ DEFAULT = {
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
-    "NUM_TRANSFORMERS": 10,
+    "NUM_EXTRACTORS": 10,
     "NUM_SUBMITTERS": 5,
     "EXTRACTOR_ERROR_FILE": "extractor_errors.log",
 
