@@ -64,8 +64,8 @@ DMO_SCHEMA = {
 STATUS_STEPS = (
     ("sub_start", "Submission initialization"),
     ("data_download", "Connect data download"),
-    ("data_transfer", "Primary data transfer"),
-    ("converting", "Data conversion"),
+    ("data_transfer", "Data transfer to primary destination"),
+    ("extracting", "Metadata extraction"),
     ("curation", "Dataset curation"),
     ("ingest_search", "MDF Search ingestion"),
     ("ingest_backup", "Data transfer to secondary destinations"),
@@ -82,7 +82,6 @@ SUCCESS_CODES = [
     "M",
     "L",
     "R",
-    "U",
     "N"
 ]
 
@@ -174,8 +173,8 @@ def authenticate_token(token, groups, require_all=False):
             auth_succeeded = True
         else:
             # Translate convert and admin groups
-            if grp.lower() == "convert":
-                grp = CONFIG["CONVERT_GROUP_ID"]
+            if grp.lower() == "extract" or grp.lower() == "convert":
+                grp = CONFIG["EXTRACT_GROUP_ID"]
             elif grp.lower() == "admin":
                 grp = CONFIG["ADMIN_GROUP_ID"]
             # Group membership checks - each identity with each group
@@ -293,6 +292,7 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         # Clean token is lowercase and alphanumeric
         # TODO: After Py3.7 upgrade, use .isascii()
         clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        # and char.isascii()])
         if clean_token and clean_token not in delete_words:
             title_clean.append(clean_token)
 
@@ -300,10 +300,11 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
     author_word = ""
     for token in author_tokens:
         clean_token = "".join([char for char in token.lower() if char.isalnum()])
+        # and char.isascii()])
         author_word += clean_token
 
     # Remove author_word from title, if exists (e.g. from previous make_source_id())
-    while author_word in title_clean:
+    while author_word in title_clean and not sanitize_only:
         title_clean.remove(author_word)
 
     # Select words from title for source_name
@@ -313,7 +314,8 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
     else:
         # Must have at least one word
         raise ValueError("Title '{}' invalid: Must have at least one word that is not "
-                         "the author name".format(title))
+                         "the author name (the following words do not count: '{}')"
+                         .format(title, delete_words))
     if len(title_clean) >= 2:
         word2 = title_clean[1]
     else:
@@ -508,7 +510,7 @@ def fetch_org_rules(org_names, user_rules=None):
         organizations = json.load(f)
 
     # Cache list of all organization aliases to match against
-    # Transform into tuple (normalized_aliases, org_rules) for convenience
+    # Turn into tuple (normalized_aliases, org_rules) for convenience
     all_clean_orgs = []
     for org in organizations:
         aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
@@ -947,8 +949,7 @@ def normalize_globus_uri(location):
     """
     loc_info = urllib.parse.urlparse(location)
     # Globus Web App link into globus:// form
-    if (location.startswith("https://www.globus.org/app/transfer")
-            or location.startswith("https://app.globus.org/file-manager")):
+    if any([re.search(pattern, location) for pattern in CONFIG["GLOBUS_LINK_FORMS"]]):
         data_info = urllib.parse.unquote(loc_info.query)
         # EP ID is in origin or dest
         ep_start = data_info.find("origin_id=")
@@ -1795,8 +1796,6 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         code_list = code_list[:step_index+1] + ["X"]*len(code_list[step_index+1:])
     elif code == 'R':
         status["messages"][step_index] = (text or "An error occurred but we're recovering")
-    elif code == 'U':
-        status["messages"][step_index] = (text or "Processing will continue")
     elif code == 'T':
         status["messages"][step_index] = (text or "Retrying")
     status["code"] = "".join(code_list)
@@ -1942,13 +1941,6 @@ def translate_status(status):
             usr_msg += msg + "\n"
             web_msg.append({
                 "signal": "failure",
-                "text": msg
-            })
-        elif code == 'U':
-            msg = "{} was unsuccessful: {}.".format(step, messages[index])
-            usr_msg += msg + "\n"
-            web_msg.append({
-                "signal": "warning",
                 "text": msg
             })
         elif code == 'H':

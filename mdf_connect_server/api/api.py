@@ -54,6 +54,7 @@ def disable_connect():
 @app.route('/', methods=["GET", "POST"])
 @app.route('/submit', methods=["GET"])
 @app.route('/convert', methods=["GET"])
+@app.route('/extract', methods=["GET"])
 @app.route('/ingest', methods=["GET"])
 def root_call():
     return redirect(CONFIG["FORM_URL"], code=302)
@@ -61,12 +62,13 @@ def root_call():
 
 @app.route('/submit', methods=["POST"])
 @app.route('/convert', methods=["POST"])
+@app.route('/extract', methods=["POST"])
 def accept_submission():
-    """Accept the JSON metadata and begin the conversion process."""
+    """Accept the JSON metadata and begin the extraction process."""
     logger.debug("Started new submission")
     access_token = request.headers.get("Authorization")
     try:
-        auth_res = utils.authenticate_token(access_token, "convert")
+        auth_res = utils.authenticate_token(access_token, "extract")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -177,8 +179,8 @@ def accept_submission():
         "dataset_acl": metadata.pop("dataset_acl", []),
         "index": metadata.pop("index", {}),
         "services": metadata.pop("services", {}),
-        "conversion_config": metadata.pop("conversion_config", {}),
-        "no_convert": metadata.pop("no_convert", False),  # Pass-through flag
+        "extraction_config": metadata.pop("extraction_config", {}),
+        "no_extract": metadata.pop("no_extract", False),  # Pass-through flag
         "submitter": name
     }
 
@@ -236,6 +238,23 @@ def accept_submission():
     metadata["mdf"]["source_id"] = source_id
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = source_id_info["search_version"]
+
+    # Fetch custom block descriptors, cast values to str, turn _description => _desc
+    new_custom = {}
+    for key, val in metadata.pop("custom", {}).items():
+        if key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key] = str(val)
+    for key, val in metadata.pop("custom_desc", {}).items():
+        if key.endswith("_desc"):
+            new_custom[key] = str(val)
+        elif key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key+"_desc"] = str(val)
+    if new_custom:
+        metadata["custom"] = new_custom
 
     # Get organization rules to apply
     if metadata["mdf"].get("organizations"):
@@ -338,13 +357,13 @@ def accept_submission():
                 "test": CONFIG["DEFAULT_MRR_TEST"]
             }
 
-    # Must be Publishing if not converting
-    if sub_conf["no_convert"] and not sub_conf["services"].get("mdf_publish"):
+    # Must be Publishing if not extracting
+    if sub_conf["no_extract"] and not sub_conf["services"].get("mdf_publish"):
         return (jsonify({
             "success": False,
-            "error": "You must specify 'services.mdf_publish' if using the 'no_convert' flag",
+            "error": "You must specify 'services.mdf_publish' if using the 'no_extract' flag",
             "details": ("Datasets that are marked for 'pass-through' functionality "
-                        "(with the 'no_convert' flag) MUST be published (by using "
+                        "(with the 'no_extract' flag) MUST be published (by using "
                         "the 'mdf_publish' service in the 'services' block.")
         }), 400)
     # If Publishing, canonical data location is Publish location
@@ -420,7 +439,7 @@ def accept_submission():
             "error": repr(e)
             }), 500)
 
-    logger.info("Convert submission '{}' accepted".format(source_id))
+    logger.info("Extract submission '{}' accepted".format(source_id))
     return (jsonify({
         "success": True,
         "source_id": source_id
@@ -441,7 +460,7 @@ def get_status(source_id):
     """Fetch and return status information"""
     # User auth
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "convert")
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "extract")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -486,7 +505,7 @@ def get_user_submissions(user_id=None):
     """Get all submission statuses by a user."""
     # User auth
     try:
-        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "convert")
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "extract")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -533,7 +552,7 @@ def get_curator_tasks(user_id=None):
     access_token = request.headers.get("Authorization").replace("Bearer ", "")
     # User auth
     try:
-        auth_res = utils.authenticate_token(access_token, "convert")
+        auth_res = utils.authenticate_token(access_token, "extract")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -629,7 +648,7 @@ def curate_task(source_id):
     # User auth
     access_token = request.headers.get("Authorization").replace("Bearer ", "")
     try:
-        auth_res = utils.authenticate_token(access_token, "convert")
+        auth_res = utils.authenticate_token(access_token, "extract")
     except Exception as e:
         logger.error("Authentication failure: {}".format(e))
         return (jsonify({
@@ -721,7 +740,7 @@ def curate_task(source_id):
                 formatted_action = action[0].upper() + action[1:] + "ed"
                 curation_message = "{} by {}: {}".format(formatted_action, name, command["reason"])
                 submission_args = {
-                    "metadata": {},  # Not used after convert step
+                    "metadata": {},  # Not used after extract step
                     "sub_conf": {
                         # Only field needed to skip to curation resume
                         # Previous sub_conf loaded after resume

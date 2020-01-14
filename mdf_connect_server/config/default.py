@@ -14,9 +14,9 @@ DEFAULT = {
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
-    "NUM_TRANSFORMERS": 10,
+    "NUM_EXTRACTORS": 10,
     "NUM_SUBMITTERS": 5,
-    "TRANSFORMER_ERROR_FILE": "parser_errors.log",
+    "EXTRACTOR_ERROR_FILE": "extractor_errors.log",
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
@@ -49,10 +49,19 @@ DEFAULT = {
     "API_SCOPE_ID": "mdf_dataset_submission",
     "TRANSFER_SCOPE": "urn:globus:auth:scope:transfer.api.globus.org:all",
 
+    # Regexes for detecting Globus Web App links
+    "GLOBUS_LINK_FORMS": [
+        "^https:\/\/www\.globus\.org\/app\/transfer",  # noqa: W605 (invalid escape char '\/')
+        "^https:\/\/app\.globus\.org\/file-manager",  # noqa: W605
+        "^https:\/\/app\.globus\.org\/transfer",  # noqa: W605
+        "^https:\/\/.*globus.*(?=.*origin_id)(?=.*origin_path)",  # noqa: W605
+        "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
+    ],
+
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
-    "CONVERT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
+    "EXTRACT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
 }
 with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
     DEFAULT["MRR_TEMPLATE"] = f.read()
