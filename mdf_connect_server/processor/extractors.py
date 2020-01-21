@@ -92,7 +92,7 @@ def run_extractors(input_queue, output_queue, queue_done, extract_params):
                     extractor_res = ALL_EXTRACTORS[extractor_name](group=group_info["files"],
                                                                    params=specific_params)
                 except Exception as e:
-                    logger.warn(("{} Extractr {} failed with "
+                    logger.warn(("{} Extractor {} failed with "
                                  "exception {}").format(source_id, extractor_name, repr(e)))
                 else:
                     # If a list of one record was returned, treat as single record
@@ -111,7 +111,7 @@ def run_extractors(input_queue, output_queue, queue_done, extract_params):
                             [multi_records.append(rec) for rec in extractor_res if rec]
                         # Else, panic
                         else:
-                            raise TypeError(("Extractr '{p}' returned "
+                            raise TypeError(("Extractor '{p}' returned "
                                              "type '{t}'!").format(p=extractor_name,
                                                                    t=type(extractor_res)))
                         logger.debug("{}: {} extractd {}".format(source_id, extractor_name,
@@ -151,7 +151,7 @@ def run_extractors(input_queue, output_queue, queue_done, extract_params):
 
 
 def extract_crystal_structure(group, params=None):
-    """Extractr for the crystal_structure block.
+    """Extractor for the crystal_structure block.
     Will also populate material block.
 
     Arguments:
@@ -292,7 +292,7 @@ def extract_pif(group, params=None):
 
 
 def extract_json(group, params=None):
-    """Extractr for JSON.
+    """Extractor for JSON.
     Will populate blocks according to mapping.
 
     Arguments:
@@ -325,7 +325,7 @@ def extract_json(group, params=None):
 
 
 def extract_csv(group, params=None):
-    """Extractr for CSVs.
+    """Extractor for CSVs.
     Will populate blocks according to mapping.
 
     Arguments:
@@ -359,7 +359,7 @@ def extract_csv(group, params=None):
 
 
 def extract_yaml(group, params=None):
-    """Extractr for YAML files.
+    """Extractor for YAML files.
     Will populate blocks according to mapping.
 
     Arguments:
@@ -391,7 +391,7 @@ def extract_yaml(group, params=None):
 
 
 def extract_xml(group, params=None):
-    """Extractr for XML files.
+    """Extractor for XML files.
     Will populate blocks according to mapping.
 
     Arguments:
@@ -423,7 +423,7 @@ def extract_xml(group, params=None):
 
 
 def extract_excel(group, params=None):
-    """Extractr for MS Excel files.
+    """Extractor for MS Excel files.
     Will populate blocks according to mapping.
 
     Arguments:
@@ -583,15 +583,18 @@ def extract_electron_microscopy(group, params=None):
             for key, val in list(em.items()):
                 if val is None or val == [] or val == {}:
                     em.pop(key)
+            record = {}
             if em:
-                records.append({
-                    "electron_microscopy": em
-                })
+                record["electron_microscopy"] = em
+            if image:
+                record["image"] = image
+            if record:
+                records.append(record)
     return records
 
 
 def extract_filename(group, params=None):
-    """Extractr for metadata stored in filenames.
+    """Extractor for metadata stored in filenames.
     Will populate blocks according to mapping.
 
     Arguments:
