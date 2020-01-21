@@ -3,6 +3,33 @@ import re
 import mdf_toolbox
 
 
+def list_acls(endpoint, count_only=False, re_match=None):
+    """List or count the ACLs on an endpoint, optionally matching some regex.
+
+    Arguments:
+        endpoint (str): The endpoint ID to check for ACLs.
+        count_only (bool): When True, will only return the total count of ACLs found.
+                When False, will print each ACL found.
+                Default False.
+        re_match (str): A regular expression to test the ACL's path. Any ACL rule
+                that has a path matching this regex will be counted.
+                Default None, to match all ACLs.
+    Returns:
+        int: The total ACLs matched.
+
+    Note:
+        You must be an Access Manager or higher on the target endpoint to list ACLs.
+    """
+    tc = mdf_toolbox.login(services="transfer")["transfer"]
+    count = 0
+    for rule in tc.endpoint_acl_list(endpoint):
+        if re_match is None or re.match(re_match, rule["path"]):
+            count += 1
+            if not count_only:
+                print(rule)
+    return count
+
+
 def delete_acls(endpoint, re_match, dry_run=True):
     """Delete ACLs from an endpoint matching some regex on the rule path.
 
