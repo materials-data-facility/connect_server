@@ -58,6 +58,8 @@ DEFAULT = {
         "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
     ],
 
+    # Using Prod-P GDrive EP because having two GDrive EPs on one account seems to fail
+    "GDRIVE_EP": "728a8a88-605b-4605-8afd-396f087eb3fc",
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
