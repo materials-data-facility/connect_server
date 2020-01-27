@@ -641,20 +641,21 @@ def metadata_update(source_id):
     if new_entry.get("services", {}).get("mdf_publish"):
         try:
             doi_res = utils.datacite_update_doi(new_entry["dc"]["identifier"]["identifier"],
-                                                updates=new_entry["dc"], test=status["test"],
+                                                updates=new_entry["dc"],
+                                                test=status["test"] or CONFIG["DEFAULT_DOI_TEST"],
                                                 url=new_entry["services"]["mdf_publish"])
         except Exception as e:
             logger.error("DOI update for {} failed: {}".format(source_id, repr(e)))
             return (jsonify({
                 "success": False,
-                "error": ("Unable to update DataCite metadata: {}\nHowever, MDF Search was "
+                "error": ("Unable to update DataCite metadata: '{}'\nHowever, MDF Search was "
                           "successfully updated.".format(str(e)))
             }), 502)
         if not doi_res["success"]:
             logger.error("DOI update for {} failed: {}".format(source_id, doi_res["error"]))
             return (jsonify({
                 "success": False,
-                "error": ("Unable to update DataCite metadata: {}\nHowever, MDF Search was "
+                "error": ("Unable to update DataCite metadata: '{}'\nHowever, MDF Search was "
                           "successfully updated.".format(doi_res["error"]))
             }), 502)
 
