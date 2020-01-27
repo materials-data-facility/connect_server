@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import logging
 import os
+from tempfile import NamedTemporaryFile
 
 from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
@@ -453,6 +454,156 @@ def reject_ingest():
         "success": False,
         "error": "/ingest has been deprecated. Use /submit for all Connect submissions."
     }), 410)
+
+
+@app.route("/update/<source_id>", methods=["POST"])
+def metadata_update(source_id):
+    """Update the dataset entry without uploading the data or creating a new version."""
+    # User auth
+    try:
+        auth_res = utils.authenticate_token(request.headers.get("Authorization"), "extract")
+    except Exception as e:
+        logger.error("Authentication failure: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": "Authentication failed"
+        }), 500)
+    if not auth_res["success"]:
+        error_code = auth_res.pop("error_code")
+        return (jsonify(auth_res), error_code)
+
+    update_metadata = request.get_json(force=True, silent=True)
+    if not update_metadata:
+        return (jsonify({
+            "success": False,
+            "error": "POST data empty or not JSON"
+        }), 400)
+    # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
+    try:
+        json.dumps(update_metadata, allow_nan=False)
+    except ValueError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, submission must be valid JSON".format(str(e))
+        }), 400)
+    except json.JSONDecodeError as e:
+        return (jsonify({
+            "success": False,
+            "error": "{}, submission must be valid JSON".format(repr(e))
+        }), 400)
+
+    # Get old submission info on source_id
+    source_name_info = utils.split_source_id(source_id)
+    try:
+        scan_res = utils.scan_table(table_name="status", fields=["source_id", "user_id"],
+                                    filters=[("source_id", "^", source_name_info["source_name"])])
+    except Exception as e:
+        logger.error("Unable to scan status database for '{}': '{}'"
+                     .format(source_name_info["source_name"], repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": ("The MDF status database is experiencing technical difficulties. "
+                      "Please try again later, or notify the MDF team of this error.")
+        }), 500)
+    if not scan_res["success"]:
+        logger.error("Unable to scan status database for '{}': '{}'"
+                     .format(source_name_info["source_name"], scan_res["error"]))
+        return (jsonify({
+            "success": False,
+            "error": ("The MDF status database is experiencing technical difficulties. "
+                      "Please try again later, or notify the MDF team of this error.")
+        }), 500)
+
+    # Check permissions - user must be in user_id list
+    # This list will be empty if no results were returned (so 404 and 403 are the same)
+    user_ids = set([sub["user_id"] for sub in scan_res["results"]])
+    if not any([uid in user_ids for uid in auth_res["identities_set"]]):
+        return (jsonify({
+            "success": False,
+            "error": "Submission {} not found, or not available".format(source_id)
+            }), 404)
+    # source_id submitted must be most recent version
+    # This is to stop accidental writes, if a subsequent version updated the dataset
+    current_source_id = max([sub["source_id"] for sub in scan_res["results"]])
+    if current_source_id != source_id:
+        return (jsonify({
+            "success": False,
+            "error": ("'{}' is not the current version of the dataset. The current "
+                      "version is '{}'. Please verify that the current version "
+                      "needs these updates.".format(source_id, current_source_id))
+        }), 400)
+    # Fetch old Search entry
+    try:
+        status = utils.read_table("status", source_id)["status"]
+    except Exception as e:
+        logger.error("{} found in scan but not by direct read of DB: {}"
+                     .format(source_id, repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": ("The MDF status database is experiencing technical difficulties. "
+                      "Please try again later, or notify the MDF team of this error.")
+        }), 500)
+    index = mdf_toolbox.translate_index(CONFIG["INGEST_INDEX"]
+                                        if not status["test"] else CONFIG["INGEST_TEST_INDEX"])
+    search_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search_ingest"]})
+    search_client = mdf_toolbox.confidential_login(**search_creds)["search_ingest"]
+    old_entry = search_client.get_entry(index, source_id)["content"][0]
+
+    # Pull out ACL from updates or original submission
+    original_submission = json.loads(status["original_submission"])
+    # Order of precedence:
+    #   dataset_acl from update
+    #   base acl from update
+    #   mdf block acl field from update
+    #   dataset_acl from original submission
+    #   base acl from original submission
+    dataset_acl = (update_metadata.pop("dataset_acl", None) or update_metadata.pop("acl", None)
+                   or update_metadata.get("mdf", {}).pop("acl", None)
+                   or original_submission.get("dataset_acl") or original_submission.get("acl"))
+    # ACL should always be present, but handle missing just in case
+    if not dataset_acl:
+        return (jsonify({
+            "success": False,
+            "error": "No ACL found for this dataset. Please submit an ACL or dataset ACL."
+        }), 400)
+
+    # Merge updates and validate
+    new_entry = mdf_toolbox.dict_merge(update_metadata, old_entry)
+    if not new_entry.get("mdf"):
+        new_entry["mdf"] = {}
+    new_entry["mdf"]["acl"] = dataset_acl
+    with open(os.path.join(CONFIG["SCHEMA_PATH"], "dataset.json")) as schema_file:
+        schema = json.load(schema_file)
+    resolver = jsonschema.RefResolver(base_uri="file://{}/".format(CONFIG["SCHEMA_PATH"]),
+                                      referrer=schema)
+    try:
+        jsonschema.validate(new_entry, schema, resolver=resolver)
+    except jsonschema.ValidationError as e:
+        return (jsonify({
+            "success": False,
+            "error": "Invalid dataset entry: " + str(e).split("\n")[0],
+            "details": str(e)
+        }), 400)
+
+    # Push updates to Search
+    # Use existing tooling because of Search retry error handling
+    with NamedTemporaryFile("w+") as tfile:
+        json.dump(new_entry, tfile)
+        tfile.seek(0)
+        # Will not work on Windows - tempfile must be opened twice
+        ingest_res = utils.search_ingest(tfile.name, index, delete_existing=False)
+    if not ingest_res["success"]:
+        return (jsonify({
+            "success": False,
+            "error": "Errors: {}\nDetails: {}".format(ingest_res.get("errors", []),
+                                                      ingest_res.get("details", "No details"))
+        }), 500)
+
+    return (jsonify({
+        "success": True,
+        "source_id": source_id,
+        "new_dataset_entry": new_entry
+    }), 200)
 
 
 @app.route("/status/<source_id>", methods=["GET"])
