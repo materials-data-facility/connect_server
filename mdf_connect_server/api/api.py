@@ -492,6 +492,33 @@ def metadata_update(source_id):
             "error": "{}, submission must be valid JSON".format(repr(e))
         }), 400)
 
+    # Certain mdf block fields cannot be updated (source_name, etc.)
+    if any([banned_field in update_metadata.get("mdf", {}).keys()
+            for banned_field in CONFIG["NO_UPDATE_FIELDS_MDF"]]):
+        return (jsonify({
+            "success": False,
+            "error": ("The following fields in the 'mdf' block may not be updated:\n{}"
+                      .format(CONFIG["NO_UPDATE_FIELDS_MDF"]))
+        }), 400)
+
+    # update_metadata munging - tags -> dc.subjects and external_uri -> data.external_uri
+    if update_metadata.get("tags"):
+        tags = update_metadata.pop("tags", [])
+        if not isinstance(tags, list):
+            tags = [tags]
+        if not update_metadata.get("dc"):
+            update_metadata["dc"] = {}
+        if not update_metadata["dc"].get("subjects"):
+            update_metadata["dc"]["subjects"] = []
+        for tag in tags:
+            update_metadata["dc"]["subjects"].append({
+                "subject": tag
+            })
+    if update_metadata.get("external_uri"):
+        if not update_metadata.get("data"):
+            update_metadata["data"] = {}
+        update_metadata["data"]["external_uri"] = update_metadata.pop("external_uri")
+
     # Get old submission info on source_id
     source_name_info = utils.split_source_id(source_id)
     try:
@@ -532,7 +559,7 @@ def metadata_update(source_id):
                       "version is '{}'. Please verify that the current version "
                       "needs these updates.".format(source_id, current_source_id))
         }), 400)
-    # Fetch old Search entry
+    # Old submission must be completed, successfully
     try:
         status = utils.read_table("status", source_id)["status"]
     except Exception as e:
@@ -543,6 +570,14 @@ def metadata_update(source_id):
             "error": ("The MDF status database is experiencing technical difficulties. "
                       "Please try again later, or notify the MDF team of this error.")
         }), 500)
+    if status["code"][-1] != "S":
+        return (jsonify({
+            "success": False,
+            "error": ("The original submission for '{}' has not completed successfully. "
+                      "Only successfully completed submissions can be updated.".format(source_id))
+        }), 400)
+
+    # Fetch old Search entry
     index = mdf_toolbox.translate_index(CONFIG["INGEST_INDEX"]
                                         if not status["test"] else CONFIG["INGEST_TEST_INDEX"])
     search_creds = mdf_toolbox.dict_merge(CONFIG["GLOBUS_CREDS"], {"services": ["search_ingest"]})
@@ -557,9 +592,11 @@ def metadata_update(source_id):
     #   mdf block acl field from update
     #   dataset_acl from original submission
     #   base acl from original submission
+    #   acl from original sub_conf (status)
     dataset_acl = (update_metadata.pop("dataset_acl", None) or update_metadata.pop("acl", None)
                    or update_metadata.get("mdf", {}).pop("acl", None)
-                   or original_submission.get("dataset_acl") or original_submission.get("acl"))
+                   or original_submission.get("dataset_acl") or original_submission.get("acl")
+                   or status["acl"])
     # ACL should always be present, but handle missing just in case
     if not dataset_acl:
         return (jsonify({
@@ -598,6 +635,16 @@ def metadata_update(source_id):
             "error": "Errors: {}\nDetails: {}".format(ingest_res.get("errors", []),
                                                       ingest_res.get("details", "No details"))
         }), 500)
+
+    # Log update
+    # TODO: Migrate to modify_log_entry
+    mod_res = utils.modify_status_entry(source_id,
+                                        {"updates": status["updates"] + [update_metadata]})
+    if not mod_res["success"]:
+        # Log error internally, don't send user failure - update was successful, log was not
+        # Critical error because status DB is not current anymore
+        logger.critical("Status entry for update on {} not updated: {}"
+                        .format(source_id, mod_res["error"]))
 
     return (jsonify({
         "success": True,

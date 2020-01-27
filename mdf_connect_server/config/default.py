@@ -35,6 +35,9 @@ DEFAULT = {
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
 
+    # Fields in the mdf block that cannot be updated with /update
+    "NO_UPDATE_FIELDS_MDF": ["source_id", "source_name", "scroll_id", "version"],
+
     "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}",
     "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}.{}",
 

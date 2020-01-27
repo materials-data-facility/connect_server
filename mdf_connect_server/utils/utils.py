@@ -1690,6 +1690,7 @@ def create_status(status):
     status["extensions"] = []
     status["hibernating"] = False
     status["code"] = "z" * len(STATUS_STEPS)
+    status["updates"] = []
 
     status_valid = validate_status(status, new_status=True)
     if not status_valid["success"]:
