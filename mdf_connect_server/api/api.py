@@ -632,9 +632,31 @@ def metadata_update(source_id):
     if not ingest_res["success"]:
         return (jsonify({
             "success": False,
-            "error": "Errors: {}\nDetails: {}".format(ingest_res.get("errors", []),
-                                                      ingest_res.get("details", "No details"))
+            "error": ("Errors ingesting to Search: {}\nDetails: {}"
+                      .format(ingest_res.get("errors", []),
+                              ingest_res.get("details", "No details")))
         }), 500)
+
+    # Update Datacite, if necessary
+    if new_entry.get("services", {}).get("mdf_publish"):
+        try:
+            doi_res = utils.datacite_update_doi(new_entry["dc"]["identifier"]["identifier"],
+                                                updates=new_entry["dc"], test=status["test"],
+                                                url=new_entry["services"]["mdf_publish"])
+        except Exception as e:
+            logger.error("DOI update for {} failed: {}".format(source_id, repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": ("Unable to update DataCite metadata: {}\nHowever, MDF Search was "
+                          "successfully updated.".format(str(e)))
+            }), 502)
+        if not doi_res["success"]:
+            logger.error("DOI update for {} failed: {}".format(source_id, doi_res["error"]))
+            return (jsonify({
+                "success": False,
+                "error": ("Unable to update DataCite metadata: {}\nHowever, MDF Search was "
+                          "successfully updated.".format(doi_res["error"]))
+            }), 502)
 
     # Log update
     # TODO: Migrate to modify_log_entry
