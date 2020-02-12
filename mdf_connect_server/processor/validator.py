@@ -124,6 +124,7 @@ class Validator:
 
         # Data
         ds_md["data"] = ds_md.get("data", {})
+        ds_md["data"]["total_size"] = 0
 
         # BLOCK: custom
         # Make all values into strings
@@ -293,6 +294,8 @@ class Validator:
         # Add file data to dataset
         if rc_md["files"]:
             self.__indexed_files += rc_md["files"]
+            for f in rc_md["files"]:
+                self.__dataset["data"]["total_size"] += f.get("length", 0)
 
         # BLOCK: material
         # elements

@@ -20,7 +20,7 @@ DEFAULT = {
 
     "CANCEL_WAIT_TIME": 60,  # Seconds
 
-    "TRANSFER_PING_INTERVAL": 60,  # Seconds
+    "TRANSFER_PING_INTERVAL": 20,  # Seconds
     "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}",
 
     "TRANSFER_CANCEL_MSG": ("Your recent MDF Connect submission was cancelled due to a service"
@@ -34,6 +34,9 @@ DEFAULT = {
     "SEARCH_BATCH_SIZE": 100,
     "SEARCH_RETRIES": 3,
     "SEARCH_PING_TIME": 2,  # Seconds
+
+    # Fields in the mdf block that cannot be updated with /update
+    "NO_UPDATE_FIELDS_MDF": ["source_id", "source_name", "scroll_id", "version"],
 
     "DATASET_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}",
     "RECORD_LANDING_PAGE": "https://petreldata.net/mdf/detail/{}.{}",
@@ -58,6 +61,8 @@ DEFAULT = {
         "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
     ],
 
+    # Using Prod-P GDrive EP because having two GDrive EPs on one account seems to fail
+    "GDRIVE_EP": "728a8a88-605b-4605-8afd-396f087eb3fc",
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
