@@ -89,14 +89,16 @@ def test_validator():
         },
         "files": [{
             "data_type": "example",
-            "filename": "foo.bar"
+            "filename": "foo.bar",
+            "length": 200
         }, {
             "data_type": "also-example",
             "globus": "globus://12345a/a/b/c/foo.txt",
             "url": "https://example.com/data/foo.txt",
             "filename": "foo.txt",
             "mime_type": "silent",
-            "md5": "password12345"
+            "md5": "password12345",
+            "length": 300
         }],
         "material": {
             "composition": "FFO2"
@@ -168,7 +170,9 @@ def test_validator():
             'foo': 'bar'
         },
         'services': {},
-        'data': {}
+        'data': {
+            'total_size': 0
+        }
     }, {
         'mdf': {
             'source_name': 'foo_bar_dataset',
@@ -217,7 +221,9 @@ def test_validator():
             'foo': 'bar'
         },
         'services': {},
-        'data': {}
+        'data': {
+            "total_size": 500
+        }
     }, {
         'mdf': {
             'source_name': 'foo_bar_dataset',
@@ -245,14 +251,16 @@ def test_validator():
         },
         'files': [{
             'data_type': 'example',
-            'filename': 'foo.bar'
+            'filename': 'foo.bar',
+            'length': 200
         }, {
             'data_type': 'also-example',
             'globus': 'globus://12345a/a/b/c/foo.txt',
             'url': 'https://example.com/data/foo.txt',
             'filename': 'foo.txt',
             'mime_type': 'silent',
-            'md5': 'password12345'
+            'md5': 'password12345',
+            'length': 300
         }],
         'material': {
             'composition': 'FFO2',
