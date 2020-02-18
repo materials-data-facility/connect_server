@@ -2005,7 +2005,8 @@ def translate_status(status):
         "submitter": status["submitter"],
         "submission_time": status["submission_time"],
         "test": status["test"],
-        "active": status["active"]
+        "active": status["active"],
+        "original_submission": status["original_submission"]
         }
 
 
