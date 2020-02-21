@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from tempfile import NamedTemporaryFile
+import urllib
 
 from flask import Flask, jsonify, redirect, request
 from globus_nexus_client import NexusClient
@@ -178,6 +179,7 @@ def accept_submission():
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
         "dataset_acl": metadata.pop("dataset_acl", []),
+        "storage_acl": metadata.get("mdf", {}).get("acl", ["public"]),
         "index": metadata.pop("index", {}),
         "services": metadata.pop("services", {}),
         "extraction_config": metadata.pop("extraction_config", {}),
@@ -397,6 +399,63 @@ def accept_submission():
     }
     if metadata.get("external_uri"):
         metadata["data"]["external_uri"] = metadata.pop("external_uri")
+
+    # Determine storage_acl to set on canon destination
+    # Default is the base acl, but if dataset and dest are already public, set None
+    # If not backing up dataset, storage_acl should be default (also doesn't matter)
+    if CONFIG["BACKUP_EP"]:
+        try:
+            # This is the only part of submission intake where we need a Transfer client
+            mdf_tc = mdf_toolbox.confidential_login(services="transfer",
+                                                    **CONFIG["GLOBUS_CREDS"])["transfer"]
+            # Get EP + path from canon dest
+            canon_loc = urllib.parse.urlparse(sub_conf["canon_destination"])
+            # Get full list of ACLs (there is no search-by-path)
+            acl_list = mdf_tc.endpoint_acl_list(canon_loc.netloc)
+            # Get list of paths to match
+            head = canon_loc.path
+            path_list = []
+            # If head ends with slash, slash will be removed by dirname
+            # Otherwise, whole leaf dir removed by dirname - should save beforehand
+            if not head.endswith("/"):
+                path_list.append(head)
+            while head and head != "/":
+                head = os.path.dirname(head)
+                # ACL paths listed with trailing slash
+                # Don't add trailing slash to root path
+                path_list.append((head + '/') if head != '/' else head)
+        except Exception as e:
+            logger.error("Public ACL check exception: {}".format(e))
+            return (jsonify({
+                "success": False,
+                "error": repr(e)
+            }), 500)
+        # Check if any dir in canon_dest path is public
+        public_principals = ["anonymous", "all_authenticated_users"]
+        public_type = False
+        public_dir = None
+        for rule in acl_list.data["DATA"]:
+            if rule["path"] in path_list and rule["principal_type"] in public_principals:
+                # Log public access dir and stop searching
+                public_type = rule["principal_type"]
+                public_dir = rule["path"]
+                break
+
+        # If the dir is public and dataset is public, do not set a storage_acl
+        if public_type and "public" in sub_conf["acl"]:
+            sub_conf["storage_acl"] = None
+        # If the dir is public and the dataset is not public, error
+        elif public_type and "public" not in sub_conf["acl"]:
+            return (jsonify({
+                "success": False,
+                "error": ("Your submission has a non-public base ACL ({}), but the primary "
+                          "storage location for your data is public (path '{}' on endpoint "
+                          "'{}' is set to {} access)").format(sub_conf["acl"], public_dir,
+                                                              canon_loc.netloc, public_type)
+            }), 400)
+        # If the dir is not public, set the storage_acl to the base acl
+        else:
+            sub_conf["storage_acl"] = sub_conf["acl"]
 
     status_info = {
         "source_id": source_id,

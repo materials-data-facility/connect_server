@@ -243,7 +243,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 try:
                     backup_res = utils.backup_data(mdf_transfer_client, data_source,
                                                    sub_conf["canon_destination"],
-                                                   acl=sub_conf["acl"])
+                                                   acl=sub_conf["storage_acl"])
                     if backup_res.get("all_locations", {}).get("success", None) is False:
                         raise ValueError(backup_res["all_locations"]["error"])
                     elif not backup_res[sub_conf["canon_destination"]]["success"]:
@@ -520,7 +520,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             backup_res = utils.backup_data(mdf_transfer_client,
                                            storage_loc=sub_conf["canon_destination"],
                                            backup_locs=sub_conf["data_destinations"],
-                                           acl=sub_conf["acl"])
+                                           acl=sub_conf["storage_acl"])
         except Exception as e:
             err_msg = "Destination backup failed: {}".format(str(e))
             utils.update_status(source_id, "ingest_backup", "F", text=err_msg, except_on_fail=True)
