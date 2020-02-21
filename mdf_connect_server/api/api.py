@@ -451,7 +451,7 @@ def accept_submission():
                 "error": ("Your submission has a non-public base ACL ({}), but the primary "
                           "storage location for your data is public (path '{}' on endpoint "
                           "'{}' is set to {} access)").format(sub_conf["acl"], public_dir,
-                                                              public_type)
+                                                              canon_loc.netloc, public_type)
             }), 400)
         # If the dir is not public, set the storage_acl to the base acl
         else:
