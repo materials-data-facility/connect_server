@@ -629,8 +629,8 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
             else:
                 transfer_path = local_path
             # Check that data not already in place
-            if (loc_info.netloc != local_ep
-                    and loc_info.path != transfer_path):
+            if not (loc_info.netloc == local_ep
+                    and loc_info.path == transfer_path):
                 try:
                     if admin_client is not None:
                         # Edit ACL to allow pull

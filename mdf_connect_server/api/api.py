@@ -425,11 +425,21 @@ def accept_submission():
                 # Don't add trailing slash to root path
                 path_list.append((head + '/') if head != '/' else head)
         except Exception as e:
-            logger.error("Public ACL check exception: {}".format(e))
-            return (jsonify({
-                "success": False,
-                "error": repr(e)
-            }), 500)
+            if e.code == "PermissionDenied":
+                return (jsonify({
+                    "success": False,
+                    "error": ("MDF Connect (UUID '{}') does not have the Access Manager role on "
+                              "primary data destination endpoint '{}'.  This role is required "
+                              "so that MDF Connect can set ACLs on the data. Please contact "
+                              "the MDF team or the owner of the endpoint to resolve this "
+                              "error.").format(CONFIG["API_CLIENT_ID"], canon_loc.netloc)
+                }), 500)
+            else:
+                logger.error("Public ACL check exception: {}".format(e))
+                return (jsonify({
+                    "success": False,
+                    "error": repr(e)
+                }), 500)
         # Check if any dir in canon_dest path is public
         public_principals = ["anonymous", "all_authenticated_users"]
         public_type = False
