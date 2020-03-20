@@ -43,9 +43,9 @@ DEFAULT = {
 
     "CITRINATION_LINK": "https://citrination.com/datasets/{cit_ds_id}/",
 
-    "MRR_URL": "https://mrr.materialsdatafacility.org/rest/curate",
-
-    "MRR_SCHEMA": "5a79c146be2d440472d045d4",
+    "MRR_URL": "https://mrr.materialsdatafacility.org/rest/data/",
+    "MRR_SCHEMA": "5df1452da623810013116d89",
+    "MRR_LINK": "https://mrr.materialsdatafacility.org/data?id={}",
 
     "API_CLIENT_ID": "c17f27bb-f200-486a-b785-2a25e82af505",
     "API_SCOPE": "https://auth.globus.org/scopes/c17f27bb-f200-486a-b785-2a25e82af505/connect",

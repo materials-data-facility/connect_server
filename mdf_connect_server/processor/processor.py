@@ -661,8 +661,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 mrr_title = dataset["dc"]["titles"][0]["title"]
             mrr_entry = {
                 "title": dataset["dc"]["titles"][0]["title"],
-                "schema": CONFIG["MRR_SCHEMA"],
-                "content": CONFIG["MRR_TEMPLATE"].format(
+                "template": CONFIG["MRR_SCHEMA"],
+                "xml_content": CONFIG["MRR_TEMPLATE"].format(
                                 title=mrr_title,
                                 publisher=dataset["dc"]["publisher"],
                                 contributors="".join(
@@ -689,18 +689,29 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                     mrr_res = mrr_res_raw.json()
                 except json.JSONDecodeError:
                     raise ValueError("Invalid MRR response: {}".format(mrr_res_raw.content))
+
+                if mrr_res_raw.status_code not in [201, 202]:
+                    raise ValueError("MRR ingest failed with error code {}: '{}'"
+                                     .format(mrr_res_raw.status_code, mrr_res))
             except Exception as e:
                 utils.update_status(source_id, "ingest_mrr", "R",
-                                    text="Unable to submit MRR entry:"+repr(e),
+                                    text="Unable to submit MRR entry: "+repr(e),
                                     except_on_fail=True)
             else:
-                if mrr_res.get("_id"):
-                    utils.update_status(source_id, "ingest_mrr", "S", except_on_fail=True)
-                    service_res["mrr"] = "This dataset was registered with the MRR."
-                else:
+                try:
+                    mrr_id = mrr_res.get("id")
+                    if not mrr_id:
+                        raise ValueError("MRR entry has no ID")
+                except Exception:
                     utils.update_status(source_id, "ingest_mrr", "R",
-                                        text=mrr_res.get("message", "Unknown failure"),
+                                        text=mrr_res.get("message", "Unknown MRR failure"),
                                         except_on_fail=True)
+                else:
+                    text = "Dataset successfully registered with the MRR"
+                    mrr_link = CONFIG["MRR_LINK"].format(mrr_id)
+                    utils.update_status(source_id, "ingest_mrr", "L", text=text, link=mrr_link,
+                                        except_on_fail=True)
+                    service_res["mrr"] = mrr_link
     else:
         utils.update_status(source_id, "ingest_mrr", "N", except_on_fail=True)
 

@@ -629,8 +629,8 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
             else:
                 transfer_path = local_path
             # Check that data not already in place
-            if (loc_info.netloc != local_ep
-                    and loc_info.path != transfer_path):
+            if not (loc_info.netloc == local_ep
+                    and loc_info.path == transfer_path):
                 try:
                     if admin_client is not None:
                         # Edit ACL to allow pull
@@ -1746,7 +1746,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         while "  " in text:
             text = text.replace("  ", " ")
     if link:
-        link = urllib.parse.quote(link, safe="/:")
+        link = urllib.parse.quote(link, safe="/:?=")
 
     # Get status table
     tbl_res = get_dmo_table("status")

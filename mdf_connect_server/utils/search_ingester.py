@@ -293,7 +293,7 @@ def update_search_entries(index, entries, acl=None, overwrite=False):
                 }
             try:
                 # Will raise SearchAPIError (404) if not found
-                old_entry = search_client.get_entry(index, iden)["content"][0]
+                old_entry = search_client.get_entry(index, iden)["entries"][0]["content"]
             except Exception as e:
                 return {
                     "success": False,
@@ -365,7 +365,7 @@ def update_search_subjects(index, subjects, convert_func, acl, overwrite=False):
     for subject in subjects:
         try:
             # Will raise SearchAPIError (404) if not found
-            old_entry = search_client.get_entry(index, subject)["content"][0]
+            old_entry = search_client.get_entry(index, subject)["entries"][0]["content"]
         except Exception as e:
             return {
                 "success": False,
