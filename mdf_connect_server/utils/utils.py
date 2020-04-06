@@ -1277,7 +1277,7 @@ def cancel_submission(source_id, wait=True):
     """
     logger.debug("Attempting to cancel {}".format(source_id))
     # Check if submission can be cancelled
-    stat_res = read_table("status", source_id)
+    stat_res = old_read_table("status", source_id)
     if not stat_res["success"]:
         stat_res["stopped"] = False
         return stat_res
@@ -1323,7 +1323,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         try:
-            while read_table("status", source_id)["status"]["active"]:
+            while old_read_table("status", source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
@@ -1334,7 +1334,7 @@ def cancel_submission(source_id, wait=True):
             complete_submission(source_id)
 
     # Change status code to reflect cancellation
-    old_status_code = read_table("status", source_id)["status"]["code"]
+    old_status_code = old_read_table("status", source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
                                      .replace("T", "X").replace("P", "X")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
@@ -1366,7 +1366,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     error (str): The error message. Only exists if success is False.
     """
     # Check that status active is True
-    if not read_table("status", source_id).get("status", {}).get("active", False):
+    if not old_read_table("status", source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -1399,7 +1399,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
         logger.debug("{}: File cleanup finished".format(source_id))
     # Delete curation entry if exists
-    delete_from_table("curation", source_id)
+    old_delete_from_table("curation", source_id)
     # Update status to inactive
     update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
@@ -1526,7 +1526,11 @@ def validate_status(status, new_status=False):
 def read_table(table_name, source_id):
     # Function should be called from api_utils instead
     raise NotImplementedError("Calling deprecated version")
-    tbl_res = get_dmo_table(table_name)
+
+
+def old_read_table(table_name, source_id):
+    # Compatibility for legacy utils in this file
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1577,7 +1581,7 @@ def scan_table(table_name, fields=None, filters=None):
         error (str): If success is False, the error that occurred.
     """
     # Get Dynamo status table
-    tbl_res = get_dmo_table(table_name)
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1704,7 +1708,7 @@ def scan_table(table_name, fields=None, filters=None):
 
 
 def create_status(status):
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1724,7 +1728,7 @@ def create_status(status):
         return status_valid
 
     # Check that status does not already exist
-    if read_table("status", status["source_id"])["success"]:
+    if old_read_table("status", status["source_id"])["success"]:
         return {
             "success": False,
             "error": "ID {} already exists in status database".format(status["source_id"])
@@ -1776,14 +1780,14 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         link = urllib.parse.quote(link, safe="/:?=")
 
     # Get status table
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_table("status", source_id)
+    old_status = old_read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1870,14 +1874,14 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_table("status", source_id)
+    old_status = old_read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -2038,13 +2042,13 @@ def translate_status(status):
 
 
 def create_curation_task(task):
-    tbl_res = get_dmo_table("curation")
+    tbl_res = old_get_dmo_table("curation")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
     # Check that task does not already exist
-    if read_table("curation", task["source_id"])["success"]:
+    if old_read_table("curation", task["source_id"])["success"]:
         return {
             "success": False,
             "error": "ID {} already exists in curation database".format(task["source_id"])
@@ -2067,13 +2071,17 @@ def create_curation_task(task):
 def delete_from_table(table_name, source_id):
     # Function should be called from api_utils instead
     raise NotImplementedError("Calling deprecated version")
-    tbl_res = get_dmo_table(table_name)
+
+
+def old_delete_from_table(table_name, source_id):
+    # For compatibility with legacy utils in this file
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
     # Check that entry exists
-    if not read_table(table_name, source_id)["success"]:
+    if not old_read_table(table_name, source_id)["success"]:
         return {
             "success": False,
             "error": "ID {} does not exist in database".format(source_id)
@@ -2087,7 +2095,7 @@ def delete_from_table(table_name, source_id):
         }
 
     # Verify entry deleted
-    if read_table(table_name, source_id)["success"]:
+    if old_read_table(table_name, source_id)["success"]:
         return {
             "success": False,
             "error": "Entry not deleted from database"
@@ -2111,7 +2119,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
     schema = deepcopy(DMO_SCHEMA)
     schema["TableName"] = table_key
 
-    tbl_res = get_dmo_table(table_name, client)
+    tbl_res = old_get_dmo_table(table_name, client)
     # Table should not be active already
     if tbl_res["success"]:
         return {
@@ -2136,7 +2144,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
             "error": repr(e)
             }
 
-    tbl_res2 = get_dmo_table(table_name, client)
+    tbl_res2 = old_get_dmo_table(table_name, client)
     if not tbl_res2["success"]:
         return {
             "success": False,
@@ -2152,6 +2160,10 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
 def get_dmo_table(table_name, client=DMO_CLIENT):
     # Function should be called from api_utils instead
     raise NotImplementedError("Calling deprecated version")
+
+
+def old_get_dmo_table(table_name, client=DMO_CLIENT):
+    # For compatibility with legacy utils in this file
     try:
         table_key = DMO_TABLES[table_name]
     except KeyError:
