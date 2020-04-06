@@ -12,9 +12,11 @@ import jsonschema
 import mdf_toolbox
 
 from mdf_connect_server import CONFIG
+'''
 # TODO (XTH): Remove old imports (will be deprecated, also causes F401)
 from mdf_connect_server.utils import (create_status, submit_to_queue,  # noqa: F401
                                       translate_status, update_status, validate_status)
+'''
 
 
 logger = logging.getLogger(__name__)

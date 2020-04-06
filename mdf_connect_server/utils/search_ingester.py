@@ -10,7 +10,7 @@ from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
 from mdf_connect_server import CONFIG
-from .utils import split_source_id
+from .api_utils import split_source_id
 
 
 logger = logging.getLogger(__name__)
