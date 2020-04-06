@@ -659,13 +659,21 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         raise ValueError("Dataset status has error")
     user_ids = set([sub["user_id"] for sub in scan_res["results"]])
     # Get most recent previous source_id and info
-    if scan_res["results"]:
-        old_source_id = max([sub["source_id"] for sub in scan_res["results"]])
-    else:
-        old_source_id = ""
-    old_source_info = split_source_id(old_source_id)
-    old_search_version = old_source_info["search_version"]
-    old_sub_version = old_source_info["submission_version"]
+    old_search_version = 0
+    old_sub_version = 0
+    for old_sid in scan_res["results"]:
+        old_sid_info = split_source_id(old_sid["source_id"])
+        # If found more recent Search version, save both Search and sub versions
+        # (sub version resets on new Search version)
+        if old_sid_info["search_version"] > old_search_version:
+            old_search_version = old_sid_info["search_version"]
+            old_sub_version = old_sid_info["submission_version"]
+        # If found more recent sub version, just save sub version
+        # Search version must be the same, though
+        elif (old_sid_info["search_version"] == old_search_version
+              and old_sid_info["submission_version"] > old_sub_version):
+            old_sub_version = old_sid_info["submission_version"]
+
     # If new Search version > old Search version, sub version should reset
     if search_version > old_search_version:
         sub_version = 1

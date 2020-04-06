@@ -87,6 +87,8 @@ SUCCESS_CODES = [
 
 
 def authenticate_token(token, groups, require_all=False):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Authenticate a token.
     Arguments:
         token (str): The token to authenticate with.
@@ -250,6 +252,8 @@ def authenticate_token(token, groups, require_all=False):
 
 
 def make_source_id(title, author, test=False, index=None, sanitize_only=False):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
@@ -392,7 +396,6 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         logger.error("Old Search version '{}' > new '{}': {}"
                      .format(old_search_version, search_version, source_name))
         raise ValueError("Dataset entry in Search has error")
-
     source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
 
     return {
@@ -405,6 +408,8 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
 
 
 def split_source_id(source_id):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Retrieve the source_name and version information from a source_id.
     Not complex logic, but easier to have in one location.
     Standard form: {source_name}_v{search_version}.{submission_version}
@@ -500,6 +505,8 @@ def clean_start():
 
 
 def fetch_org_rules(org_names, user_rules=None):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Fetch organization rules and metadata.
 
     Arguments:
@@ -623,7 +630,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
 
     # Download data locally
     for raw_loc in source_loc:
-        location = normalize_globus_uri(raw_loc)
+        location = old_normalize_globus_uri(raw_loc)
         loc_info = urllib.parse.urlparse(location)
         # Globus Transfer
         if loc_info.scheme == "globus":
@@ -796,7 +803,7 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
     if acl is not None and "public" in acl:
         acl = ["public"]
     results = {}
-    norm_store = normalize_globus_uri(storage_loc)
+    norm_store = old_normalize_globus_uri(storage_loc)
     storage_info = urllib.parse.urlparse(norm_store)
 
     # Storage must be Globus endpoint
@@ -821,7 +828,7 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
 
     for backup in backup_locs:
         error = ""
-        norm_backup = normalize_globus_uri(backup)
+        norm_backup = old_normalize_globus_uri(backup)
         backup_info = urllib.parse.urlparse(norm_backup)
         # No backup if location EP is False
         if backup_info.netloc == "False":
@@ -943,6 +950,12 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
 
 
 def normalize_globus_uri(location):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+
+
+def old_normalize_globus_uri(location):
+    # For compatibility with utilities in this file, not for external use
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
     For Google Drive URIs, the file(s) must be shared with
     materialsdatafacility@gmail.com.
@@ -1015,14 +1028,16 @@ def normalize_globus_uri(location):
 
 
 def make_globus_app_link(globus_uri):
-    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri))
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+    globus_uri_info = urllib.parse.urlparse(old_normalize_globus_uri(globus_uri))
     globus_link = CONFIG["TRANSFER_WEB_APP_LINK"] \
         .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
     return globus_link
 
 
 def lookup_http_host(globus_uri):
-    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(str(globus_uri)))
+    globus_uri_info = urllib.parse.urlparse(old_normalize_globus_uri(str(globus_uri)))
     return CONFIG["GLOBUS_HTTP_HOSTS"].get(globus_uri_info.netloc or globus_uri_info.path, None)
 
 
@@ -1509,6 +1524,8 @@ def validate_status(status, new_status=False):
 
 
 def read_table(table_name, source_id):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
@@ -1527,6 +1544,8 @@ def read_table(table_name, source_id):
 
 
 def scan_table(table_name, fields=None, filters=None):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Scan the status or curation databases..
 
     Arguments:
@@ -1708,21 +1727,21 @@ def create_status(status):
     if read_table("status", status["source_id"])["success"]:
         return {
             "success": False,
-            "error": "ID {} already exists in database".format(status["source_id"])
-            }
+            "error": "ID {} already exists in status database".format(status["source_id"])
+        }
     try:
         table.put_item(Item=status, ConditionExpression=Attr("source_id").not_exists())
     except Exception as e:
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         logger.info("Status for {}: Created".format(status["source_id"]))
         return {
             "success": True,
             "status": status
-            }
+        }
 
 
 def update_status(source_id, step, code, text=None, link=None, except_on_fail=False):
@@ -2028,7 +2047,7 @@ def create_curation_task(task):
     if read_table("curation", task["source_id"])["success"]:
         return {
             "success": False,
-            "error": "ID {} already exists in database".format(task["source_id"])
+            "error": "ID {} already exists in curation database".format(task["source_id"])
         }
     try:
         table.put_item(Item=task, ConditionExpression=Attr("source_id").not_exists())
@@ -2046,6 +2065,8 @@ def create_curation_task(task):
 
 
 def delete_from_table(table_name, source_id):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     tbl_res = get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
@@ -2078,6 +2099,8 @@ def delete_from_table(table_name, source_id):
 
 
 def initialize_dmo_table(table_name, client=DMO_CLIENT):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     try:
         table_key = DMO_TABLES[table_name]
     except KeyError:
@@ -2127,6 +2150,8 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
 
 
 def get_dmo_table(table_name, client=DMO_CLIENT):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     try:
         table_key = DMO_TABLES[table_name]
     except KeyError:
