@@ -762,7 +762,8 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
+def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
+                data_client=None, data_user=None):
     """Back up data to remote endpoints.
     (One source to many destinations)
 
@@ -772,10 +773,15 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
         the results will return a success and the event will be logged.
 
     Arguments:
-    transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+    transfer_client (TransferClient): An authenticated TransferClient with access to the backup.
     storage_loc (str): A globus:// uri to the current data location.
     backup_locs (list of str): The backup locations.
     acl (list of str): The ACL to set on the backup location. Default None, to not set ACL.
+    data_client (TransferClient): For cases when the transfer_client does not have read access
+            to the source data storage, data_client must be an authenticated TransferClient
+            that does have data access. Default None, for not necessary.
+    data_user (str): The user identity for the data_client. Required if data_client is
+            supplied, and ignored otherwise. Default None.
 
     Warning: ACL setting not supported for non-directory Transfers. Globus Transfer cannot
             set ACLs on individual files, only on directories.
@@ -795,6 +801,8 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
         }
     }
     """
+    if data_client and not data_user:
+        return ValueError("data_user is required for backup when data_client is supplied")
     if isinstance(backup_locs, str):
         backup_locs = [backup_locs]
     if isinstance(acl, str):
@@ -890,6 +898,16 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
                             "path": backup_info.path,
                             "permissions": "r"
                         }]
+                if data_user and data_client:
+                    if not data_user.startswth("urn:"):
+                        data_user = "urn:globus:auth:identity:" + data_user
+                    acl_rules.append({
+                        "DATA_TYPE": "access",
+                        "principal_type": "identity",
+                        "principal": data_user,
+                        "path": backup_info.path,
+                        "permissions": "rw"
+                    })
                 for rule in acl_rules:
                     try:
                         res = transfer_client.add_endpoint_acl_rule(backup_info.netloc, rule).data

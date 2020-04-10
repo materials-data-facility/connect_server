@@ -236,6 +236,13 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
         # Move data from canon source(s) to canon dest (if different)
         utils.update_status(source_id, "data_transfer", "P", except_on_fail=True)
+        # If not extracting, set up user TC for backup use
+        if sub_conf["no_extract"]:
+            backup_user_id = user_id
+            backup_user_client = user_transfer_client
+        else:
+            backup_user_id = None
+            backup_user_client = None
         for data_source in canon_data_sources:
             if data_source != sub_conf["canon_destination"]:
                 logger.debug("Data transfer: '{}' to '{}'".format(data_source,
@@ -243,7 +250,9 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 try:
                     backup_res = utils.backup_data(mdf_transfer_client, data_source,
                                                    sub_conf["canon_destination"],
-                                                   acl=sub_conf["storage_acl"])
+                                                   acl=sub_conf["storage_acl"],
+                                                   data_client=backup_user_client,
+                                                   data_user=backup_user_id)
                     if backup_res.get("all_locations", {}).get("success", None) is False:
                         raise ValueError(backup_res["all_locations"]["error"])
                     elif not backup_res[sub_conf["canon_destination"]]["success"]:
