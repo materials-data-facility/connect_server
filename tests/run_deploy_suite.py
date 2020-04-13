@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 import os
 import sys
@@ -28,6 +29,8 @@ FAILURE_CODES = [
     'H',
     'X'  # Technically "cancelled", but cancelled tests should fail
 ]
+# Flag to easily switch "update" flag in generated submissions
+UPDATE_FLAG = True
 
 
 def submit_test_submissions(service_instance, submission_dir=TEST_SUBMISSIONS_DIR, verbose=True):
@@ -44,11 +47,18 @@ def submit_test_submissions(service_instance, submission_dir=TEST_SUBMISSIONS_DI
             success (bool): True iff all the tests succeeded.
             passed (list of str): The source_ids that passed testing.
             failed (list of dicts): The testing failures, with details.
+
+    Note:
+        If the source_name of a submission contains a keyword flag,
+        it will be processed differently.
+    Keyword flags include:
+        "fail": The test is a success if the submission fails, and vice-versa.
     """
     mdfcc = MDFConnectClient(service_instance=service_instance)
     source_ids = []
     successes = []
     failures = []
+    curated = []
     for file_name in os.listdir(submission_dir):
         path = os.path.join(submission_dir, file_name)
         if verbose:
@@ -70,18 +80,27 @@ def submit_test_submissions(service_instance, submission_dir=TEST_SUBMISSIONS_DI
     while len(source_ids) > 0:
         sid = source_ids.pop(0)
 
-        # If submission requires curation, accept it
-        # Curation tests must have "curation" in the source_id
-        if "curation" in sid and mdfcc.get_curation_task(sid, raw=True)["success"]:
-            curation_res = mdfcc.accept_curation_submission(sid, reason="Testing curation",
-                                                            prompt=False, raw=True)
+        # If submission requires curation, curate it
+        # Don't double-curate - this can cause issues
+        if (mdfcc.get_curation_task(sid, raw=True)["success"]
+                and sid not in curated):
+            # Reject "fail" submissions
+            if "fail" in sid:
+                curation_res = mdfcc.reject_curation_submission(sid, reason="Intentional failure",
+                                                                prompt=False, raw=True)
+            # Accept all other submissions
+            else:
+                curation_res = mdfcc.accept_curation_submission(sid, reason="Testing curation",
+                                                                prompt=False, raw=True)
             if not curation_res["success"]:
                 if verbose:
-                    print("Could not accept curation submission {}: {}"
+                    print("Could not curate curation submission {}: {}"
                           .format(sid, curation_res["error"]))
-                failures.append(curation_res)
+                failures.append(deepcopy(curation_res))
                 # Skip status check - test has failed
                 continue
+            else:
+                curated.append(sid)
 
         # Now check the current status
         status = mdfcc.check_status(sid, raw=True)
@@ -89,12 +108,13 @@ def submit_test_submissions(service_instance, submission_dir=TEST_SUBMISSIONS_DI
             if verbose:
                 print("Could not fetch status for", sid, status["error"])
             # Re-queue source_id
+            # Risk of infinite loop here if service is down; recommend using 'verbose' to catch
             source_ids.append(sid)
             continue
         status_res = validate_status(status["status"])
         # If failed or succeeded, put result in appropriate list
         if status_res["result"] == "failed":
-            failures.append(status_res)
+            failures.append(deepcopy(status_res))
             if verbose:
                 print(sid, "failed")
         elif status_res["result"] == "success":
@@ -125,20 +145,23 @@ def validate_status(status):
         return {
             "result": "active"
         }
+    # Check if submission is expected to fail
+    # If so, the return result will be reversed
+    fail_sub = "fail" in status["source_id"]
     # Submission is not processing, check for failure
-    # Failure is defines as:
+    # Failure is defines as any of the following:
     #   Any failure code present in full status code
     #   Final step is not success
     if (any([code in status["status_code"] for code in FAILURE_CODES])
             or status["status_code"][-1] not in SUCCESS_CODES):
         return {
-            "result": "failed",
+            "result": "failed" if not fail_sub else "success",
             "status_message": status["status_message"]
         }
     # Otherwise, consider it a success
     else:
         return {
-            "result": "success"
+            "result": "success" if not fail_sub else "failed"
         }
 
 
@@ -153,7 +176,27 @@ def generate_base_submission():
                           affiliations="UChicago")
     mdfcc.add_data_source(DATA_SOURCES)
     mdfcc.set_test(True)
-    mdfcc.update = True
+    mdfcc.update = UPDATE_FLAG
+    submission = mdfcc.get_submission()
+    with open(path, 'w') as f:
+        json.dump(submission, f)
+    return {
+        "success": True
+    }
+
+
+def generate_base_failure():
+    file_name = "base_failure.json"
+    path = os.path.join(TEST_SUBMISSIONS_DIR, file_name)
+    mdfcc = MDFConnectClient()  # service_instance is irrelevant
+    mdfcc.create_dc_block(title="Base Deploy Fail Dataset", authors="jgaff",
+                          affiliations="UChicago")
+    mdfcc.add_data_source(DATA_SOURCES)
+    # Failure point: Submission not in nanomfg organization,
+    # but attempting to write to nanomfg project block
+    mdfcc.set_project_block("nanomfg", {"catalyst": "bad data testing"})
+    mdfcc.set_test(True)
+    mdfcc.update = UPDATE_FLAG
     submission = mdfcc.get_submission()
     with open(path, 'w') as f:
         json.dump(submission, f)
@@ -173,7 +216,26 @@ def generate_integration_submission():
     # mdfcc.add_service("citrine", {"public": False})
     mdfcc.add_service("mrr")
     mdfcc.set_test(True)
-    mdfcc.update = True
+    mdfcc.update = UPDATE_FLAG
+    submission = mdfcc.get_submission()
+    with open(path, 'w') as f:
+        json.dump(submission, f)
+    return {
+        "success": True
+    }
+
+
+def generate_passthrough_submission():
+    file_name = "passthrough_submission.json"
+    path = os.path.join(TEST_SUBMISSIONS_DIR, file_name)
+    mdfcc = MDFConnectClient()  # service_instance is irrelevant
+    mdfcc.create_dc_block(title="Passthrough Deploy Testing Dataset", authors="jgaff",
+                          affiliations="UChicago")
+    mdfcc.add_data_source(DATA_SOURCES)
+    mdfcc.set_passthrough(True)
+    mdfcc.add_service("mdf_publish")  # Publication required for passthrough
+    mdfcc.set_test(True)
+    mdfcc.update = UPDATE_FLAG
     submission = mdfcc.get_submission()
     with open(path, 'w') as f:
         json.dump(submission, f)
@@ -191,7 +253,25 @@ def generate_curation_submission():
     mdfcc.add_data_source(DATA_SOURCES)
     mdfcc.set_curation(True)
     mdfcc.set_test(True)
-    mdfcc.update = True
+    mdfcc.update = UPDATE_FLAG
+    submission = mdfcc.get_submission()
+    with open(path, 'w') as f:
+        json.dump(submission, f)
+    return {
+        "success": True
+    }
+
+
+def generate_curation_failure():
+    file_name = "curation_failure.json"
+    path = os.path.join(TEST_SUBMISSIONS_DIR, file_name)
+    mdfcc = MDFConnectClient()  # service_instance is irrelevant
+    mdfcc.create_dc_block(title="Curation Fail Dataset", authors="jgaff",
+                          affiliations="UChicago")
+    mdfcc.add_data_source(DATA_SOURCES)
+    mdfcc.set_curation(True)
+    mdfcc.set_test(True)
+    mdfcc.update = UPDATE_FLAG
     submission = mdfcc.get_submission()
     with open(path, 'w') as f:
         json.dump(submission, f)
@@ -202,8 +282,11 @@ def generate_curation_submission():
 
 def generate_all_submissions():
     print("Base submission:", generate_base_submission()["success"])
+    print("Base failure:", generate_base_failure()["success"])
     print("Integration submission:", generate_integration_submission()["success"])
-    print("Curation_submission:", generate_curation_submission()["success"])
+    print("Passthrough submission:", generate_passthrough_submission()["success"])
+    print("Curation submission:", generate_curation_submission()["success"])
+    print("Curation failure:", generate_curation_failure()["success"])
 
 
 if __name__ == "__main__":

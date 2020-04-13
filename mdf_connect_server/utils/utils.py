@@ -87,6 +87,8 @@ SUCCESS_CODES = [
 
 
 def authenticate_token(token, groups, require_all=False):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Authenticate a token.
     Arguments:
         token (str): The token to authenticate with.
@@ -250,6 +252,8 @@ def authenticate_token(token, groups, require_all=False):
 
 
 def make_source_id(title, author, test=False, index=None, sanitize_only=False):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Make a source name out of a title."""
     if index is None:
         index = (CONFIG["INGEST_TEST_INDEX"] if test else CONFIG["INGEST_INDEX"])
@@ -366,13 +370,21 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         raise ValueError("Dataset status has error")
     user_ids = set([sub["user_id"] for sub in scan_res["results"]])
     # Get most recent previous source_id and info
-    if scan_res["results"]:
-        old_source_id = max([sub["source_id"] for sub in scan_res["results"]])
-    else:
-        old_source_id = ""
-    old_source_info = split_source_id(old_source_id)
-    old_search_version = old_source_info["search_version"]
-    old_sub_version = old_source_info["submission_version"]
+    old_search_version = 0
+    old_sub_version = 0
+    for old_sid in scan_res["results"]:
+        old_sid_info = split_source_id(old_sid["source_id"])
+        # If found more recent Search version, save both Search and sub versions
+        # (sub version resets on new Search version)
+        if old_sid_info["search_version"] > old_search_version:
+            old_search_version = old_sid_info["search_version"]
+            old_sub_version = old_sid_info["submission_version"]
+        # If found more recent sub version, just save sub version
+        # Search version must be the same, though
+        elif (old_sid_info["search_version"] == old_search_version
+              and old_sid_info["submission_version"] > old_sub_version):
+            old_sub_version = old_sid_info["submission_version"]
+
     # If new Search version > old Search version, sub version should reset
     if search_version > old_search_version:
         sub_version = 1
@@ -384,7 +396,6 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         logger.error("Old Search version '{}' > new '{}': {}"
                      .format(old_search_version, search_version, source_name))
         raise ValueError("Dataset entry in Search has error")
-
     source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
 
     return {
@@ -397,6 +408,8 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
 
 
 def split_source_id(source_id):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Retrieve the source_name and version information from a source_id.
     Not complex logic, but easier to have in one location.
     Standard form: {source_name}_v{search_version}.{submission_version}
@@ -492,6 +505,8 @@ def clean_start():
 
 
 def fetch_org_rules(org_names, user_rules=None):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Fetch organization rules and metadata.
 
     Arguments:
@@ -594,7 +609,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     user_id (str): The ID of the identity authenticated to the transfer_client.
                    Used for permission changes. Optional if permission changes are not needed.
 
-    Returns:
+    Yields:
     dict: success (bool): True on success, False on failure.
     """
     # admin_client and user_id must both be supplied if one is supplied
@@ -615,7 +630,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
 
     # Download data locally
     for raw_loc in source_loc:
-        location = normalize_globus_uri(raw_loc)
+        location = old_normalize_globus_uri(raw_loc)
         loc_info = urllib.parse.urlparse(location)
         # Globus Transfer
         if loc_info.scheme == "globus":
@@ -747,7 +762,8 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     }
 
 
-def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
+def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
+                data_client=None, data_user=None):
     """Back up data to remote endpoints.
     (One source to many destinations)
 
@@ -757,15 +773,20 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
         the results will return a success and the event will be logged.
 
     Arguments:
-    transfer_client (TransferClient): An authenticated TransferClient with access to the data.
+    transfer_client (TransferClient): An authenticated TransferClient with access to the backup.
     storage_loc (str): A globus:// uri to the current data location.
     backup_locs (list of str): The backup locations.
     acl (list of str): The ACL to set on the backup location. Default None, to not set ACL.
+    data_client (TransferClient): For cases when the transfer_client does not have read access
+            to the source data storage, data_client must be an authenticated TransferClient
+            that does have data access. Default None, for not necessary.
+    data_user (str): The user identity for the data_client. Required if data_client is
+            supplied, and ignored otherwise. Default None.
 
     Warning: ACL setting not supported for non-directory Transfers. Globus Transfer cannot
             set ACLs on individual files, only on directories.
 
-    Returns:
+    Yields:
     dict: [backup_loc] (dict)
             success (bool): True on a successful backup to this backup location,
                     False otherwise.
@@ -780,6 +801,8 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
         }
     }
     """
+    if data_client and not data_user:
+        raise ValueError("data_user is required for backup when data_client is supplied")
     if isinstance(backup_locs, str):
         backup_locs = [backup_locs]
     if isinstance(acl, str):
@@ -788,35 +811,21 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
     if acl is not None and "public" in acl:
         acl = ["public"]
     results = {}
-    norm_store = normalize_globus_uri(storage_loc)
+    norm_store = old_normalize_globus_uri(storage_loc)
     storage_info = urllib.parse.urlparse(norm_store)
 
     # Storage must be Globus endpoint
     if not storage_info.scheme == "globus":
-        error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
-                 "directly published from or backed up from".format(norm_store, storage_loc))
-        return {
-            "all_locations": {
-                "success": False,
-                "error": error
-            }
-        }
-    # No backups if storage EP is False
-    elif storage_info.netloc == "False":
-        logger.warning("All backups skipped from storage: '{}'".format(norm_store))
-        for backup in backup_locs:
-            results[backup] = {
-                "success": True,
-                "error": "All backups skipped from storage: '{}'".format(norm_store)
-            }
-        return results
+        raise ValueError("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot "
+                         "be directly published from or backed up from"
+                         .format(norm_store, storage_loc))
 
     for backup in backup_locs:
         error = ""
-        norm_backup = normalize_globus_uri(backup)
+        norm_backup = old_normalize_globus_uri(backup)
         backup_info = urllib.parse.urlparse(norm_backup)
         # No backup if location EP is False
-        if backup_info.netloc == "False":
+        if backup_info.netloc == "False" or storage_info.netloc == "False":
             logger.warning("Backup location skipped: '{}'".format(norm_backup))
             results[backup] = {
                 "success": True,
@@ -890,14 +899,73 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
         else:
             acl_res = None
 
-        transfer = mdf_toolbox.custom_transfer(
-                        transfer_client, storage_info.netloc, backup_info.netloc,
-                        [(storage_info.path, backup_info.path)],
-                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-        for event in transfer:
-            if not event["success"]:
-                logger.debug(event)
+        # If using data_client, need to give permissions to data_user on backup EP
+        try:
+            data_user_acl_res = None
+            if data_user is not None:
+                # Globus Auth does not support urn: format
+                if data_user.startswith("urn:"):
+                    data_user = data_user.split(":")[-1]
+                # Need to give user permissions on parent dir of backup,
+                # because backup dir may not exist yet.
+                # If parent dir also does not exist, backup will fail.
+                if backup_info.path.endswith("/"):
+                    data_acl_path = backup_info.path[:-1]
+                else:
+                    data_acl_path = backup_info.path
+                # Globus Transfer requires the path end in a slash, as well
+                data_acl_path = os.path.dirname(data_acl_path) + "/"
+
+                data_user_rule = {
+                    "DATA_TYPE": "access",
+                    "principal_type": "identity",
+                    "principal": data_user,
+                    "path": data_acl_path,
+                    "permissions": "rw"
+                }
+                try:
+                    data_user_acl_res = transfer_client.add_endpoint_acl_rule(backup_info.netloc,
+                                                                              data_user_rule).data
+                except Exception as e:
+                    logger.error("ACL for data user '{}' creation exception: {}"
+                                 .format(data_user, repr(e)))
+                    raise ValueError("Internal permissions error")
+                if not data_user_acl_res.get("code") == "Created":
+                    logger.error("Unable to create ACL rule for data user '{}': {}"
+                                 .format(data_user, data_user_acl_res))
+                    raise ValueError("Internal permissions error")
+
+            transfer = mdf_toolbox.custom_transfer(
+                            data_client or transfer_client, storage_info.netloc,
+                            backup_info.netloc, [(storage_info.path, backup_info.path)],
+                            interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                            inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+            for event in transfer:
+                if not event["success"]:
+                    logger.info("Transfer is_error: {} - {}"
+                                .format(event.get("code", "No code found"),
+                                        event.get("description", "No description found")))
+                    yield {
+                        "success": False,
+                        "error": "{} - {}".format(event.get("code", "No code found"),
+                                                  event.get("description",
+                                                            "No description found"))
+                    }
+        finally:
+            # Always remove data_user ACL if set
+            if data_user_acl_res is not None:
+                try:
+                    data_user_acl_del = transfer_client.delete_endpoint_acl_rule(
+                                                            backup_info.netloc,
+                                                            data_user_acl_res["access_id"])
+                except Exception as e:
+                    logger.critical("ACL rule deletion exception for '{}': {}"
+                                    .format(data_user_acl_res, repr(e)))
+                    raise ValueError("Internal permissions error.")
+                if not data_user_acl_del.get("code") == "Deleted":
+                    logger.critical("Unable to delete ACL rule '{}': {}"
+                                    .format(data_user_acl_res, data_user_acl_del))
+                    raise ValueError("Internal permissions error.")
 
         if not event["success"]:
             # Remove ACL, if set, because transfer failed
@@ -931,10 +999,17 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None):
             "error": error
         }
 
-    return results
+    results["success"] = True
+    yield results
 
 
 def normalize_globus_uri(location):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+
+
+def old_normalize_globus_uri(location):
+    # For compatibility with utilities in this file, not for external use
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
     For Google Drive URIs, the file(s) must be shared with
     materialsdatafacility@gmail.com.
@@ -1007,14 +1082,16 @@ def normalize_globus_uri(location):
 
 
 def make_globus_app_link(globus_uri):
-    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri))
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+    globus_uri_info = urllib.parse.urlparse(old_normalize_globus_uri(globus_uri))
     globus_link = CONFIG["TRANSFER_WEB_APP_LINK"] \
         .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
     return globus_link
 
 
 def lookup_http_host(globus_uri):
-    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(str(globus_uri)))
+    globus_uri_info = urllib.parse.urlparse(old_normalize_globus_uri(str(globus_uri)))
     return CONFIG["GLOBUS_HTTP_HOSTS"].get(globus_uri_info.netloc or globus_uri_info.path, None)
 
 
@@ -1254,7 +1331,7 @@ def cancel_submission(source_id, wait=True):
     """
     logger.debug("Attempting to cancel {}".format(source_id))
     # Check if submission can be cancelled
-    stat_res = read_table("status", source_id)
+    stat_res = old_read_table("status", source_id)
     if not stat_res["success"]:
         stat_res["stopped"] = False
         return stat_res
@@ -1300,7 +1377,7 @@ def cancel_submission(source_id, wait=True):
     # Wait for completion if requested
     if wait:
         try:
-            while read_table("status", source_id)["status"]["active"]:
+            while old_read_table("status", source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
                                                                             source_id,
@@ -1311,7 +1388,7 @@ def cancel_submission(source_id, wait=True):
             complete_submission(source_id)
 
     # Change status code to reflect cancellation
-    old_status_code = read_table("status", source_id)["status"]["code"]
+    old_status_code = old_read_table("status", source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
                                      .replace("T", "X").replace("P", "X")
     update_res = modify_status_entry(source_id, {"code": new_status_code})
@@ -1343,7 +1420,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
     error (str): The error message. Only exists if success is False.
     """
     # Check that status active is True
-    if not read_table("status", source_id).get("status", {}).get("active", False):
+    if not old_read_table("status", source_id).get("status", {}).get("active", False):
         return {
             "success": False,
             "error": "Submission not in progress"
@@ -1376,7 +1453,7 @@ def complete_submission(source_id, cleanup=CONFIG["DEFAULT_CLEANUP"]):
                 logger.debug("{}: Cleanup path does not exist: {}".format(source_id, cleanup))
         logger.debug("{}: File cleanup finished".format(source_id))
     # Delete curation entry if exists
-    delete_from_table("curation", source_id)
+    old_delete_from_table("curation", source_id)
     # Update status to inactive
     update_res = modify_status_entry(source_id, {"active": False})
     if not update_res["success"]:
@@ -1501,7 +1578,13 @@ def validate_status(status, new_status=False):
 
 
 def read_table(table_name, source_id):
-    tbl_res = get_dmo_table(table_name)
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+
+
+def old_read_table(table_name, source_id):
+    # Compatibility for legacy utils in this file
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1519,6 +1602,8 @@ def read_table(table_name, source_id):
 
 
 def scan_table(table_name, fields=None, filters=None):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     """Scan the status or curation databases..
 
     Arguments:
@@ -1550,7 +1635,7 @@ def scan_table(table_name, fields=None, filters=None):
         error (str): If success is False, the error that occurred.
     """
     # Get Dynamo status table
-    tbl_res = get_dmo_table(table_name)
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1677,7 +1762,7 @@ def scan_table(table_name, fields=None, filters=None):
 
 
 def create_status(status):
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -1697,24 +1782,24 @@ def create_status(status):
         return status_valid
 
     # Check that status does not already exist
-    if read_table("status", status["source_id"])["success"]:
+    if old_read_table("status", status["source_id"])["success"]:
         return {
             "success": False,
-            "error": "ID {} already exists in database".format(status["source_id"])
-            }
+            "error": "ID {} already exists in status database".format(status["source_id"])
+        }
     try:
         table.put_item(Item=status, ConditionExpression=Attr("source_id").not_exists())
     except Exception as e:
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         logger.info("Status for {}: Created".format(status["source_id"]))
         return {
             "success": True,
             "status": status
-            }
+        }
 
 
 def update_status(source_id, step, code, text=None, link=None, except_on_fail=False):
@@ -1749,14 +1834,14 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         link = urllib.parse.quote(link, safe="/:?=")
 
     # Get status table
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_table("status", source_id)
+    old_status = old_read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -1843,14 +1928,14 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
           error (str): The error. Only exists if success is False.
           status (str): The updated status. Only exists if success is True.
     """
-    tbl_res = get_dmo_table("status")
+    tbl_res = old_get_dmo_table("status")
     if not tbl_res["success"]:
         if except_on_fail:
             raise ValueError(tbl_res["error"])
         return tbl_res
     table = tbl_res["table"]
     # Get old status
-    old_status = read_table("status", source_id)
+    old_status = old_read_table("status", source_id)
     if not old_status["success"]:
         if except_on_fail:
             raise ValueError(old_status["error"])
@@ -2011,16 +2096,16 @@ def translate_status(status):
 
 
 def create_curation_task(task):
-    tbl_res = get_dmo_table("curation")
+    tbl_res = old_get_dmo_table("curation")
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
     # Check that task does not already exist
-    if read_table("curation", task["source_id"])["success"]:
+    if old_read_table("curation", task["source_id"])["success"]:
         return {
             "success": False,
-            "error": "ID {} already exists in database".format(task["source_id"])
+            "error": "ID {} already exists in curation database".format(task["source_id"])
         }
     try:
         table.put_item(Item=task, ConditionExpression=Attr("source_id").not_exists())
@@ -2038,13 +2123,19 @@ def create_curation_task(task):
 
 
 def delete_from_table(table_name, source_id):
-    tbl_res = get_dmo_table(table_name)
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+
+
+def old_delete_from_table(table_name, source_id):
+    # For compatibility with legacy utils in this file
+    tbl_res = old_get_dmo_table(table_name)
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
 
     # Check that entry exists
-    if not read_table(table_name, source_id)["success"]:
+    if not old_read_table(table_name, source_id)["success"]:
         return {
             "success": False,
             "error": "ID {} does not exist in database".format(source_id)
@@ -2058,7 +2149,7 @@ def delete_from_table(table_name, source_id):
         }
 
     # Verify entry deleted
-    if read_table(table_name, source_id)["success"]:
+    if old_read_table(table_name, source_id)["success"]:
         return {
             "success": False,
             "error": "Entry not deleted from database"
@@ -2070,6 +2161,8 @@ def delete_from_table(table_name, source_id):
 
 
 def initialize_dmo_table(table_name, client=DMO_CLIENT):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
     try:
         table_key = DMO_TABLES[table_name]
     except KeyError:
@@ -2080,7 +2173,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
     schema = deepcopy(DMO_SCHEMA)
     schema["TableName"] = table_key
 
-    tbl_res = get_dmo_table(table_name, client)
+    tbl_res = old_get_dmo_table(table_name, client)
     # Table should not be active already
     if tbl_res["success"]:
         return {
@@ -2105,7 +2198,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
             "error": repr(e)
             }
 
-    tbl_res2 = get_dmo_table(table_name, client)
+    tbl_res2 = old_get_dmo_table(table_name, client)
     if not tbl_res2["success"]:
         return {
             "success": False,
@@ -2119,6 +2212,12 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
 
 
 def get_dmo_table(table_name, client=DMO_CLIENT):
+    # Function should be called from api_utils instead
+    raise NotImplementedError("Calling deprecated version")
+
+
+def old_get_dmo_table(table_name, client=DMO_CLIENT):
+    # For compatibility with legacy utils in this file
     try:
         table_key = DMO_TABLES[table_name]
     except KeyError:
