@@ -609,7 +609,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
     user_id (str): The ID of the identity authenticated to the transfer_client.
                    Used for permission changes. Optional if permission changes are not needed.
 
-    Returns:
+    Yields:
     dict: success (bool): True on success, False on failure.
     """
     # admin_client and user_id must both be supplied if one is supplied
@@ -786,7 +786,7 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
     Warning: ACL setting not supported for non-directory Transfers. Globus Transfer cannot
             set ACLs on individual files, only on directories.
 
-    Returns:
+    Yields:
     dict: [backup_loc] (dict)
             success (bool): True on a successful backup to this backup location,
                     False otherwise.
@@ -802,7 +802,7 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
     }
     """
     if data_client and not data_user:
-        return ValueError("data_user is required for backup when data_client is supplied")
+        raise ValueError("data_user is required for backup when data_client is supplied")
     if isinstance(backup_locs, str):
         backup_locs = [backup_locs]
     if isinstance(acl, str):
@@ -816,30 +816,16 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
 
     # Storage must be Globus endpoint
     if not storage_info.scheme == "globus":
-        error = ("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot be "
-                 "directly published from or backed up from".format(norm_store, storage_loc))
-        return {
-            "all_locations": {
-                "success": False,
-                "error": error
-            }
-        }
-    # No backups if storage EP is False
-    elif storage_info.netloc == "False":
-        logger.warning("All backups skipped from storage: '{}'".format(norm_store))
-        for backup in backup_locs:
-            results[backup] = {
-                "success": True,
-                "error": "All backups skipped from storage: '{}'".format(norm_store)
-            }
-        return results
+        raise ValueError("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot "
+                         "be directly published from or backed up from"
+                         .format(norm_store, storage_loc))
 
     for backup in backup_locs:
         error = ""
         norm_backup = old_normalize_globus_uri(backup)
         backup_info = urllib.parse.urlparse(norm_backup)
         # No backup if location EP is False
-        if backup_info.netloc == "False":
+        if backup_info.netloc == "False" or storage_info.netloc == "False":
             logger.warning("Backup location skipped: '{}'".format(norm_backup))
             results[backup] = {
                 "success": True,
@@ -898,16 +884,6 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
                             "path": backup_info.path,
                             "permissions": "r"
                         }]
-                if data_user and data_client:
-                    if not data_user.startswth("urn:"):
-                        data_user = "urn:globus:auth:identity:" + data_user
-                    acl_rules.append({
-                        "DATA_TYPE": "access",
-                        "principal_type": "identity",
-                        "principal": data_user,
-                        "path": backup_info.path,
-                        "permissions": "rw"
-                    })
                 for rule in acl_rules:
                     try:
                         res = transfer_client.add_endpoint_acl_rule(backup_info.netloc, rule).data
@@ -923,14 +899,73 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
         else:
             acl_res = None
 
-        transfer = mdf_toolbox.custom_transfer(
-                        transfer_client, storage_info.netloc, backup_info.netloc,
-                        [(storage_info.path, backup_info.path)],
-                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-        for event in transfer:
-            if not event["success"]:
-                logger.debug(event)
+        # If using data_client, need to give permissions to data_user on backup EP
+        try:
+            data_user_acl_res = None
+            if data_user is not None:
+                # Globus Auth does not support urn: format
+                if data_user.startswith("urn:"):
+                    data_user = data_user.split(":")[-1]
+                # Need to give user permissions on parent dir of backup,
+                # because backup dir may not exist yet.
+                # If parent dir also does not exist, backup will fail.
+                if backup_info.path.endswith("/"):
+                    data_acl_path = backup_info.path[:-1]
+                else:
+                    data_acl_path = backup_info.path
+                # Globus Transfer requires the path end in a slash, as well
+                data_acl_path = os.path.dirname(data_acl_path) + "/"
+
+                data_user_rule = {
+                    "DATA_TYPE": "access",
+                    "principal_type": "identity",
+                    "principal": data_user,
+                    "path": data_acl_path,
+                    "permissions": "rw"
+                }
+                try:
+                    data_user_acl_res = transfer_client.add_endpoint_acl_rule(backup_info.netloc,
+                                                                              data_user_rule).data
+                except Exception as e:
+                    logger.error("ACL for data user '{}' creation exception: {}"
+                                 .format(data_user, repr(e)))
+                    raise ValueError("Internal permissions error")
+                if not data_user_acl_res.get("code") == "Created":
+                    logger.error("Unable to create ACL rule for data user '{}': {}"
+                                 .format(data_user, data_user_acl_res))
+                    raise ValueError("Internal permissions error")
+
+            transfer = mdf_toolbox.custom_transfer(
+                            data_client or transfer_client, storage_info.netloc,
+                            backup_info.netloc, [(storage_info.path, backup_info.path)],
+                            interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                            inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+            for event in transfer:
+                if not event["success"]:
+                    logger.info("Transfer is_error: {} - {}"
+                                .format(event.get("code", "No code found"),
+                                        event.get("description", "No description found")))
+                    yield {
+                        "success": False,
+                        "error": "{} - {}".format(event.get("code", "No code found"),
+                                                  event.get("description",
+                                                            "No description found"))
+                    }
+        finally:
+            # Always remove data_user ACL if set
+            if data_user_acl_res is not None:
+                try:
+                    data_user_acl_del = transfer_client.delete_endpoint_acl_rule(
+                                                            backup_info.netloc,
+                                                            data_user_acl_res["access_id"])
+                except Exception as e:
+                    logger.critical("ACL rule deletion exception for '{}': {}"
+                                    .format(data_user_acl_res, repr(e)))
+                    raise ValueError("Internal permissions error.")
+                if not data_user_acl_del.get("code") == "Deleted":
+                    logger.critical("Unable to delete ACL rule '{}': {}"
+                                    .format(data_user_acl_res, data_user_acl_del))
+                    raise ValueError("Internal permissions error.")
 
         if not event["success"]:
             # Remove ACL, if set, because transfer failed
@@ -964,7 +999,8 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
             "error": error
         }
 
-    return results
+    results["success"] = True
+    yield results
 
 
 def normalize_globus_uri(location):
