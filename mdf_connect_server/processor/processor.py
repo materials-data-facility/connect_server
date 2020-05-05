@@ -700,7 +700,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                 contributors=mrr_contributors,
                                 contact_name=dataset["dc"]["creators"][0]["creatorName"],
                                 description=mrr_description,
-                                subject=mrr_subjects,
+                                subjects=mrr_subjects,
                                 landing_page=CONFIG["DATASET_LANDING_PAGE"].format(source_id))
             }
         except Exception as e:
