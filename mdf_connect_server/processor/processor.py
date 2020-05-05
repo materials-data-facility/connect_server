@@ -679,21 +679,29 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                 mrr_title = "TEST_" + dataset["dc"]["titles"][0]["title"]
             else:
                 mrr_title = dataset["dc"]["titles"][0]["title"]
+            mrr_contributors = ""
+            for author in dataset["dc"]["creators"]:
+                mrr_contributors += CONFIG["MRR_CONTRIBUTOR"].format(
+                                        name=(author.get("givenName", "") + " "
+                                              + author.get("familyName", "")),
+                                        affiliation=author.get("affiliation", ""))
+            mrr_description = ""
+            for desc in dataset["dc"].get("descriptions", []):
+                mrr_description += desc["description"] + " "
+            mrr_subjects = ""
+            for subj in dataset["dc"].get("subjects", []):
+                mrr_subjects += "<subject>" + subj["subject"] + "</subject>"
             mrr_entry = {
                 "title": dataset["dc"]["titles"][0]["title"],
                 "template": CONFIG["MRR_SCHEMA"],
                 "xml_content": CONFIG["MRR_TEMPLATE"].format(
                                 title=mrr_title,
                                 publisher=dataset["dc"]["publisher"],
-                                contributors="".join(
-                                    [CONFIG["MRR_CONTRIBUTOR"].format(
-                                        name=(author.get("givenName", "") + " "
-                                              + author.get("familyName", "")),
-                                        affiliation=author.get("affiliation", ""))
-                                     for author in dataset["dc"]["creators"]]),
+                                contributors=mrr_contributors,
                                 contact_name=dataset["dc"]["creators"][0]["creatorName"],
-                                description=dataset["dc"].get("description", ""),
-                                subject="")
+                                description=mrr_description,
+                                subject=mrr_subjects,
+                                landing_page=CONFIG["DATASET_LANDING_PAGE"].format(source_id))
             }
         except Exception as e:
             utils.update_status(source_id, "ingest_mrr", "R",
