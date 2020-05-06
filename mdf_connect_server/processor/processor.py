@@ -688,7 +688,8 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
             mrr_description = ""
             for desc in dataset["dc"].get("descriptions", []):
                 mrr_description += desc["description"] + " "
-            mrr_subjects = ""
+            # Must add at least one subject to MRR entry
+            mrr_subjects = "<subject>MDF Dataset</subject>"
             for subj in dataset["dc"].get("subjects", []):
                 mrr_subjects += "<subject>" + subj["subject"] + "</subject>"
             mrr_entry = {
