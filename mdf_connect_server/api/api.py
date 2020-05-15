@@ -377,7 +377,7 @@ def accept_submission():
         # Transfer into source_id dir
         sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
                                                      source_id + "/")
-    # Otherwise (not Publishing), canon destination is backup (Petrel)
+    # Otherwise (not Publishing), canon destination is backup
     else:
         sub_conf["canon_destination"] = ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],

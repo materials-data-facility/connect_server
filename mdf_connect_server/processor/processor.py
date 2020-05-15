@@ -502,8 +502,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                                 text=("{} batches of records failed to ingest (up to {} records "
                                       "total)").format(len(search_res["errors"]),
                                                        (len(search_res["errors"])
-                                                        * CONFIG["SEARCH_BATCH_SIZE"]),
-                                                       search_res["errors"]),
+                                                        * CONFIG["SEARCH_BATCH_SIZE"])),
                                 except_on_fail=True)
             utils.complete_submission(source_id)
             return
