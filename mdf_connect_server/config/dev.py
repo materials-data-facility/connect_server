@@ -15,11 +15,20 @@ DEV = {
 
     "LOCAL_EP": "ca7550ad-55a9-4762-b558-8f2b15049039",
 
-    "BACKUP_EP": False,  # Disables backups
+    # Disable backups
+    "BACKUP_EP": False,
+
+    # Petrel
     # "BACKUP_EP": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
-    "BACKUP_PATH": "/MDF/mdf_connect/dev/data/",
-    "BACKUP_HOST": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
-    "BACKUP_FEEDSTOCK": "/MDF/mdf_connect/dev/feedstock/",
+    # "BACKUP_PATH": "/MDF/mdf_connect/dev/data/",
+    # "BACKUP_HOST": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
+    # "BACKUP_FEEDSTOCK": "/MDF/mdf_connect/dev/feedstock/",
+
+    # NCSA
+    # "BACKUP_EP": "82f1b5c6-6e9b-11e5-ba47-22000b92c6ec",
+    "BACKUP_PATH": "/mdf_connect/dev/data/",
+    "BACKUP_HOST": "https://data.materialsdatafacility.org",
+    "BACKUP_FEEDSTOCK": "/mdf_connect/dev/feedstock/",
 
     # "GDRIVE_EP": "6ab13202-7c99-4e44-b0ff-04b8fbd77c97",
 

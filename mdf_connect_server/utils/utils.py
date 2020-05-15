@@ -991,8 +991,8 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
                                             event.get("description", "No description found"),
                                             error)
             else:
-                error = "{}: {}\n{}".format(event.get("code", "No code found"),
-                                            event.get("description", "No description found"))
+                error = "{}: {}".format(event.get("code", "No code found"),
+                                        event.get("description", "No description found"))
 
         results[backup] = {
             "success": event["success"],
