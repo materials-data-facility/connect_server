@@ -9,8 +9,12 @@ from mdf_connect_client import MDFConnectClient
 # Data sources to use for testing - should be known-good files
 DATA_SOURCES = [
     # Sample VASP outputs
-    ("https://app.globus.org/file-manager?origin_id=e38ee745-6d04-11e5-ba46-22000b92c6ec"
-     "&origin_path=%2Fconnect_demo%2F")
+    # Petrel
+    # ("https://app.globus.org/file-manager?origin_id=e38ee745-6d04-11e5-ba46-22000b92c6ec"
+    #  "&origin_path=%2Fconnect_demo%2F"),
+    # NCSA
+    ("https://app.globus.org/file-manager?destination_id=82f1b5c6-6e9b-11e5-ba47-22000b92c6ec"
+     "&destination_path=%2Fpublic%2Fconnect_demo%2F")
 ]
 # Directory of test files
 TEST_SUBMISSIONS_DIR = os.path.join(os.path.dirname(__file__), "deploy_suite_files")
