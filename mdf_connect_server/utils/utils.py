@@ -63,6 +63,7 @@ DMO_SCHEMA = {
 }
 STATUS_STEPS = (
     ("sub_start", "Submission initialization"),
+    ("old_cancel", "Cancellation of previous submissions"),
     ("data_download", "Connect data download"),
     ("data_transfer", "Data transfer to primary destination"),
     ("extracting", "Metadata extraction"),
