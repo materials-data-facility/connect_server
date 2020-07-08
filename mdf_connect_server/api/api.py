@@ -509,6 +509,64 @@ def accept_submission():
             "error": repr(e)
             }), 500)
 
+    # TODO: Remove in Automate Flow
+    # This is obviously hacky - meant as temporary patch until Automate Flow functional
+    # Only send emails for Prod (indicated by a backup EP), non-test submissions
+    if CONFIG["BACKUP_EP"] is not False and sub_conf["test"] is not True:
+        import globus_automate_client
+        from time import sleep
+        logger.info("Sending start email")
+        try:
+            seap_scope = ("https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-"
+                          "ff12ddbf9653/notification_notify")
+            seap_url = "https://actions.globus.org/notification/notify"
+            ref_auth = mdf_toolbox.confidential_login(services=seap_scope,
+                                                      **CONFIG["GLOBUS_CREDS"])[seap_scope]
+            action_client = globus_automate_client.create_action_client(seap_url,
+                                                                        ref_auth.access_token)
+            email_template = ("A new dataset has been submitted to MDF Connect.\n"
+                              "Title: $title\n"
+                              "Submitter: $submitter ($email)\n"
+                              "Source ID: $source_id\n"
+                              "Time submitted: $sub_time\n"
+                              "Curation required: $curation\n")
+            body = {
+                "body_template": email_template,
+                "body_variables": {
+                    "title": sub_title,
+                    "submitter": name,
+                    "email": email,
+                    "source_id": source_id,
+                    "sub_time": status_info["submission_time"],
+                    "curation": str(sub_conf["curation"])
+                },
+                "destination": "materialsdatafacility@uchicago.edu",
+                # "destination": "jgaff@uchicago.edu",
+                "send_credentials": [{
+                    "credential_type": "smtp",
+                    "credential_value": {
+                        "hostname": CONFIG["SMTP_HOST"],
+                        "username": CONFIG["SMTP_USER"],
+                        "password": CONFIG["SMTP_PASS"]
+                    }
+                }],
+                "sender": "materialsdatafacility@uchicago.edu",
+                "subject": "New MDF Connect Submission",
+                # "__Private_Parameters": ["send_credentials"]
+            }
+            act_id = action_client.run(body)["action_id"]
+            while action_client.status(act_id)["status"] not in ["SUCCEEDED", "FAILED"]:
+                logger.info("Send Email AP not finished; waiting")
+                sleep(5)
+        except Exception as e:
+            logger.error("Exception sending start email: {}".format(repr(e)))
+        else:
+            act_status = action_client.status(act_id)
+            if act_status["status"] == "SUCCEEDED":
+                logger.info("Start email sent")
+            else:
+                logger.error("Failed sending start email: {}".format(act_status.data))
+
     logger.info("Extract submission '{}' accepted".format(source_id))
     return (jsonify({
         "success": True,

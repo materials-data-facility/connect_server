@@ -158,7 +158,7 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
 
     # Cancel the previous version(s)
     source_info = utils.split_source_id(source_id)
-    scan_res = utils.scan_table(table_name="status", fields="source_id",
+    scan_res = utils.scan_table(table_name="status", fields=["source_id", "active"],
                                 filters=[("source_id", "^", source_info["source_name"]),
                                          ("source_id", "<", source_id)])
     if not scan_res["success"]:
@@ -166,23 +166,33 @@ def submission_driver(metadata, sub_conf, source_id, access_token, user_id):
                             except_on_fail=True)
         utils.complete_submission(source_id)
         return
-    for old_source in scan_res["results"]:
-        old_source_id = old_source["source_id"]
-        cancel_res = utils.cancel_submission(old_source_id, wait=True)
-        if not cancel_res["stopped"]:
-            utils.update_status(source_id, "sub_start", "F",
-                                text=cancel_res.get("error",
-                                                    ("Unable to cancel previous "
-                                                     "submission '{}'").format(old_source_id)),
-                                except_on_fail=True)
-            utils.complete_submission(source_id)
-            return
-        if cancel_res["success"]:
-            logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
-        else:
-            logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
 
-    utils.update_status(source_id, "sub_start", "S", except_on_fail=True)
+    old_source_ids = [oldsub["source_id"] for oldsub in scan_res["results"] if oldsub["active"]]
+    if old_source_ids:
+        utils.update_status(source_id, "sub_start", "M",
+                            text=("The following submissions will be cancelled: {}"
+                                  .format(old_source_ids)), except_on_fail=True)
+        utils.update_status(source_id, "old_cancel", "P", except_on_fail=True)
+
+        for old_source_id in old_source_ids:
+            cancel_res = utils.cancel_submission(old_source_id, wait=True)
+            if not cancel_res["stopped"]:
+                utils.update_status(source_id, "sub_start", "F",
+                                    text=cancel_res.get("error",
+                                                        ("Unable to cancel previous "
+                                                         "submission '{}'").format(old_source_id)),
+                                    except_on_fail=True)
+                utils.complete_submission(source_id)
+                return
+            if cancel_res["success"]:
+                logger.info("{}: Cancelled source_id {}".format(source_id, old_source_id))
+            else:
+                logger.debug("{}: Stopped source_id {}".format(source_id, old_source_id))
+        utils.update_status(source_id, "old_cancel", "S", except_on_fail=True)
+    else:
+        utils.update_status(source_id, "sub_start", "S", except_on_fail=True)
+        utils.update_status(source_id, "old_cancel", "N", except_on_fail=True)
+
     # NOTE: Cancellation point
     if utils.read_table("status", source_id).get("status", {}).get("cancelled"):
         logger.debug("{}: Cancel signal acknowledged".format(source_id))
