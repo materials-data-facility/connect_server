@@ -517,10 +517,11 @@ def accept_submission():
         from time import sleep
         logger.info("Sending start email")
         try:
-            seap_url = ("https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-"
-                        "ff12ddbf9653/notification_notify")
-            seap_scope = "https://actions.globus.org/notification/notify"
-            ref_auth = list(mdf_toolbox.login(services=seap_scope).values())[0]
+            seap_scope = ("https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-"
+                          "ff12ddbf9653/notification_notify")
+            seap_url = "https://actions.globus.org/notification/notify"
+            ref_auth = mdf_toolbox.confidential_login(services=seap_scope,
+                                                      **CONFIG["GLOBUS_CREDS"])[seap_scope]
             action_client = globus_automate_client.create_action_client(seap_url,
                                                                         ref_auth.access_token)
             email_template = ("A new dataset has been submitted to MDF Connect.\n"
@@ -532,12 +533,12 @@ def accept_submission():
             body = {
                 "body_template": email_template,
                 "body_variables": {
-                    "title": "Email Test",
-                    "submitter": "JGaff",
-                    "email": "foo@bar.com",
-                    "source_id": "foobar_v99.99",
-                    "sub_time": "26:98PM",
-                    "curation": str(True)
+                    "title": sub_title,
+                    "submitter": name,
+                    "email": email,
+                    "source_id": source_id,
+                    "sub_time": status_info["submission_time"],
+                    "curation": str(sub_conf["curation"])
                 },
                 "destination": "materialsdatafacility@uchicago.edu",
                 # "destination": "jgaff@uchicago.edu",
