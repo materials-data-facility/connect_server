@@ -480,12 +480,52 @@ def get_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         return {
             "success": True,
             "table": table
+        }
+
+
+def get_group_emails(group_uuid):
+    """Fetch the emails for all members of a Globus Group."""
+    groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
+    groups_auth["services"] = ["groups"]
+    try:
+        nexus = mdf_toolbox.confidential_login(**groups_auth)["groups"]
+    except Exception as e:
+        logger.error("NexusClient creation error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Unable to connect to Globus Groups",
+            "error_code": 500
+        }
+    try:
+        members = nexus.get_group_memberships(group_uuid).data["members"]
+    except globus_sdk.GlobusAPIError as e:
+        logger.error("Nexus get group memberships API error: {}".format(repr(e)))
+        if e.http_status in [401, 403]:
+            return {
+                "success": False,
+                "error": ("MDF Connect does not have permissions to read from Group '{}'"
+                          .format(group_uuid)),
+                "error_code": 500
             }
+        else:
+            return {
+                "success": False,
+                "error": e.message,
+                "error_code": e.http_status
+            }
+    except Exception as e:
+        logger.error("Nexus get group memberships error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Could not fetch Globus Groups memberships",
+            "error_code": 500
+        }
+    return set([m["email"] for m in members if m["email"] is not None and m["status"] == "active"])
 
 
 def initialize_dmo_table(table_name, client=DMO_CLIENT):
@@ -505,7 +545,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": "Table already created"
-            }
+        }
     # If misc/other exception, cannot create table
     elif tbl_res["error"] != "Table does not exist or is not active":
         return tbl_res
