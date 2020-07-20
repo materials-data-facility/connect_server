@@ -10,6 +10,7 @@ if [ "$CONDA_DEFAULT_ENV" == "proda" ]; then
     rm exit.log;
     touch proda.log;
     truncate --size 0 proda.log;
+    python3 mdf_connect_server/on_startup.py
     nohup gunicorn --bind 127.0.0.1:5000 --timeout $GUNICORN_TIMEOUT -w $GUNICORN_WORKERS \
         --graceful-timeout $(($GUNICORN_TIMEOUT * 2)) --log-level info \
         mdf_connect_server.api.api:app | tail -n $EXIT_LOG_LINES &>exit.log & disown;
@@ -26,6 +27,7 @@ elif [ "$CONDA_DEFAULT_ENV" == "deva" ]; then
     rm exit.log;
     touch deva.log;
     truncate --size 0 deva.log;
+    python3 mdf_connect_server/on_startup.py
     nohup gunicorn --bind 127.0.0.1:5000 --timeout $GUNICORN_TIMEOUT -w $GUNICORN_WORKERS \
         --graceful-timeout $(($GUNICORN_TIMEOUT * 2)) --log-level debug \
         mdf_connect_server.api.api:app | tail -n $EXIT_LOG_LINES &>exit.log & disown;
