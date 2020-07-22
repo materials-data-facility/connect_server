@@ -847,8 +847,8 @@ def get_status(source_id):
             }), 200)
 
 
-@app.route("/submissions", methods=["GET"])
-@app.route("/submissions/<user_id>", methods=["GET"])
+@app.route("/submissions", methods=["GET", "POST"])
+@app.route("/submissions/<user_id>", methods=["GET", "POST"])
 def get_user_submissions(user_id=None):
     """Get all submission statuses by a user."""
     # User auth
@@ -869,7 +869,7 @@ def get_user_submissions(user_id=None):
     if not (auth_res["is_admin"] or user_id is None or user_id in auth_res["identities_set"]):
         return (jsonify({
             "success": False,
-            "error": "You are not authorized to view that submission's status"
+            "error": "You cannot view another user's submissions"
             }), 403)
 
     # Create scan filter
@@ -882,6 +882,11 @@ def get_user_submissions(user_id=None):
         filters = [("user_id", "in", auth_res["identities_set"])]
     else:
         filters = [("user_id", "==", user_id)]
+
+    # Get POST filters if present
+    user_filters = request.get_json(force=True, silent=True)
+    if user_filters:
+        filters.extend(user_filters.get("filters", []))
 
     scan_res = utils.scan_table(table_name="status", filters=filters)
     if not scan_res["success"]:
