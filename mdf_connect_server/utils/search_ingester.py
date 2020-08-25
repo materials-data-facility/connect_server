@@ -54,24 +54,18 @@ def search_ingest(feedstock_file, index, delete_existing, source_id=None, batch_
             "q": "mdf.source_name:{}".format(source_info["source_name"]),
             "advanced": True
         }
-        # Try deleting from Search until success or try limit reached
-        # Necessary because Search will 5xx but possibly succeed on large deletions
-        i = 0
-        while True:
-            try:
-                del_res = ingest_client.delete_by_query(index, del_q)
-                break
-            except GlobusAPIError as e:
-                if i < CONFIG["SEARCH_RETRIES"]:
-                    logger.warning("{}: Retrying Search delete error: {}"
-                                   .format(source_id, repr(e)))
-                    i += 1
-                else:
-                    raise
-        if del_res["num_subjects_deleted"]:
-            logger.info(("{}: {} Search entries cleared from "
-                         "{}").format(source_id, del_res["num_subjects_deleted"],
-                                      source_info["source_name"]))
+        delete_payload = [index, del_q]
+        delete_res = perform_search_task(ingest_client.delete_by_query, delete_payload,
+                                         get_task=ingest_client.get_task,
+                                         ping_time=CONFIG["SEARCH_RETRIES"],
+                                         retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
+        if delete_res["success"]:
+            logger.debug("{}: Old Search entries cleared from {}"
+                         .format(source_id, source_info["source_name"]))
+        elif delete_res["error"]:
+            logger.error("{}: Search deletion error: {}".format(source_id, delete_res["error"]))
+        else:
+            logger.critical("{}: Unknown Search deletion error: {}".format(source_id, delete_res))
     else:
         logger.debug("{}: Existing Search entries not deleted.".format(source_id))
 
@@ -180,7 +174,7 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
         ingest_res = perform_search_task(ingest_client.ingest, ingest_payload,
                                          get_task=ingest_client.get_task,
                                          ping_time=CONFIG["SEARCH_RETRIES"],
-                                         retries=CONFIG["SEARCH_PING_TIME"])
+                                         retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
         if ingest_res["success"]:
             logger.debug("{}: Search batch ingested".format(source_id))
         elif ingest_res["error"]:
