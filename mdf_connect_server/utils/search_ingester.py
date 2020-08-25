@@ -176,56 +176,98 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
             # Otherwise, more ingests are coming, try again
             else:
                 continue
-        # Ingest, with error handling
-        try:
-            # Allow retries
-            i = 0
-            while True:
-                try:
-                    ingest_res = ingest_client.ingest(index, ingestable)
-                    if not ingest_res["acknowledged"]:
-                        raise ValueError("Ingest not acknowledged by Search")
-                    task_id = ingest_res["task_id"]
-                    task_status = "PENDING"  # Assume task starts as pending
-                    # While task is not complete, check status
-                    while task_status != "SUCCESS" and task_status != "FAILURE":
-                        sleep(CONFIG["SEARCH_PING_TIME"])
-                        task_res = ingest_client.get_task(task_id)
-                        task_status = task_res["state"]
-                    break
-                except (GlobusAPIError, ValueError) as e:
-                    if i < CONFIG["SEARCH_RETRIES"]:
-                        logger.warning("{}: Retrying Search ingest error: {}"
-                                       .format(source_id, repr(e)))
-                        i += 1
-                    else:
-                        raise
-            if task_status == "FAILURE":
-                raise ValueError("Ingest failed: " + str(task_res))
-            elif task_status == "SUCCESS":
-                logger.debug("{}: Search batch ingested: {}"
-                             .format(source_id, task_res["message"]))
-            else:
-                raise ValueError("Invalid state '{}' from {}".format(task_status, task_res))
-        except GlobusAPIError as e:
-            logger.error("{}: Search ingest error: {}".format(source_id, e.raw_json))
-            # logger.debug('Stack trace:', exc_info=True)
-            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
-            err = {
-                "exception_type": str(type(e)),
-                "details": e.raw_json
-            }
-            error_queue.put(json.dumps(err))
-        except Exception as e:
-            logger.error("{}: Generic ingest error: {}".format(source_id, repr(e)))
-            # logger.debug('Stack trace:', exc_info=True)
-            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
-            err = {
-                "exception_type": str(type(e)),
-                "details": str(e)
-            }
-            error_queue.put(json.dumps(err))
+        ingest_payload = [index, ingestable]
+        ingest_res = perform_search_task(ingest_client.ingest, ingest_payload,
+                                         get_task=ingest_client.get_task,
+                                         ping_time=CONFIG["SEARCH_RETRIES"],
+                                         retries=CONFIG["SEARCH_PING_TIME"])
+        if ingest_res["success"]:
+            logger.debug("{}: Search batch ingested".format(source_id))
+        elif ingest_res["error"]:
+            logger.error("{}: Search ingestion error: {}".format(source_id, ingest_res["error"]))
+            error_queue.put(json.dumps(ingest_res["error"]))
+        else:
+            logger.critical("{}: Unknown Search ingestion error: {}".format(source_id, ingest_res))
     return
+
+
+def perform_search_task(operation, payload, get_task, ping_time, retries, quiet=False):
+    """Submit an async Globus Search task (such as ingest or delete)
+    and monitor until completion.
+
+    Arguments:
+        operation (function): The function of the SearchClient to perform.
+                If the SearchClient is not authenticated, this may fail.
+        payload (list): All arguments necessary for the operation.
+                For example, `[index, entries]` for an ingest operation.
+        get_task (function): The SearchClient.get_task function.
+        ping_time (int): The number of seconds to wait to check the status of the task.
+        retries (int): The number of task retries to perform if the task initially fails.
+                This is the number of RE-tries, so zero is the minimum.
+        quiet (bool): Suppress log messages? Default False.
+
+    Returns:
+        dict: The results.
+            success (bool): True on a successful task completion. False otherwise.
+            error (dict or bool): The error, if any. False if no error was returned.
+                exception_type (str): The type of Exception.
+                details (str): The string of the Exception.
+    """
+    success = False
+    err = False
+    try:
+        # Allow retries
+        i = 0
+        while True:
+            try:
+                submit_res = operation(*payload)
+                if not submit_res["acknowledged"]:
+                    raise ValueError("Operation not acknowledged by Search")
+                task_id = submit_res["task_id"]
+                task_status = ""
+                # While task is not complete, check status
+                while task_status != "SUCCESS" and task_status != "FAILURE":
+                    sleep(ping_time)
+                    task_res = get_task(task_id)
+                    task_status = task_res["state"]
+                break
+            except (GlobusAPIError, ValueError) as e:
+                if i < retries:
+                    if not quiet:
+                        logger.warning("Retrying Search operation error: {}".format(repr(e)))
+                    i += 1
+                else:
+                    raise
+        if task_status == "FAILURE":
+            raise ValueError("Operation failed: " + str(task_res))
+        elif task_status == "SUCCESS":
+            if not quiet:
+                logger.debug("Search operation succeeded: {}".format(task_res["message"]))
+            success = True
+        else:
+            raise ValueError("Invalid Search state '{}' from {}".format(task_status, task_res))
+    except GlobusAPIError as e:
+        if not quiet:
+            logger.error("Search operation error: {}".format(e.raw_json))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
+        err = {
+            "exception_type": str(type(e)),
+            "details": e.raw_json
+        }
+    except Exception as e:
+        if not quiet:
+            logger.error("Generic Search error: {}".format(repr(e)))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
+        err = {
+            "exception_type": str(type(e)),
+            "details": str(e)
+        }
+    return {
+        "success": success,
+        "error": err
+    }
 
 
 def update_search_entries(index, entries, acl=None, overwrite=False):
