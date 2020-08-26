@@ -1102,33 +1102,22 @@ def purge_old_tests(mock_subs=None, dry_run=False):
             "q": "mdf.source_id:{}".format(sub["source_id"]),
             "advanced": True
         }
-        # Try deleting from Search until success or try limit reached
-        # Necessary because Search will 5xx but possibly succeed on large deletions
-        i = 0
         if not dry_run:
-            while True:
-                try:
-                    del_res = search_client.delete_by_query(index, del_q)
-                    break
-                except globus_sdk.GlobusAPIError as e:
-                    if i < CONFIG["SEARCH_RETRIES"]:
-                        logger.warning("{}: Retrying Search delete error: {}"
-                                       .format(sub["source_id"], repr(e)))
-                        i += 1
-                    else:
-                        logger.error("{}: Too many ({}) Search errors: {}"
-                                     .format(sub["source_id"], i, repr(e)))
-                        del_res = {}
-                        break
+            delete_payload = [index, del_q]
+            delete_res = perform_search_task(search_client.delete_by_query, delete_payload,
+                                             get_task=search_client.get_task,
+                                             ping_time=CONFIG["SEARCH_RETRIES"],
+                                             retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
+            if delete_res["success"]:
+                logger.debug("Search entries cleared from {}".format(sub["source_id"]))
+            elif delete_res["error"]:
+                logger.error("Search deletion error on {}: {}"
+                             .format(sub["source_id"], delete_res["error"]))
+            else:
+                logger.critical("Unknown Search deletion error on {}: {}"
+                                .format(sub["source_id"], delete_res))
         else:
             logger.info("Dry run: Skipping Search entry deletion for {}".format(sub["source_id"]))
-            del_res = {}
-        if del_res.get("num_subjects_deleted"):
-            logger.info("{} Search entries cleared from {}"
-                        .format(del_res["num_subjects_deleted"], sub["source_id"]))
-        else:
-            logger.info("{}: Existing Search entries not deleted: {}"
-                        .format(sub["source_id"], del_res))
 
         # Delete from status DB
         logger.info("\nDeleting status database entry for {}".format(sub["source_id"]))
