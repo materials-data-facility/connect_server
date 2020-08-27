@@ -4,13 +4,11 @@ import logging
 import multiprocessing
 from queue import Empty
 from tempfile import NamedTemporaryFile
-from time import sleep
 
-from globus_sdk import GlobusAPIError
 import mdf_toolbox
 
 from mdf_connect_server import CONFIG
-from .api_utils import split_source_id
+from .api_utils import perform_search_task, split_source_id
 
 
 logger = logging.getLogger(__name__)
@@ -54,24 +52,18 @@ def search_ingest(feedstock_file, index, delete_existing, source_id=None, batch_
             "q": "mdf.source_name:{}".format(source_info["source_name"]),
             "advanced": True
         }
-        # Try deleting from Search until success or try limit reached
-        # Necessary because Search will 5xx but possibly succeed on large deletions
-        i = 0
-        while True:
-            try:
-                del_res = ingest_client.delete_by_query(index, del_q)
-                break
-            except GlobusAPIError as e:
-                if i < CONFIG["SEARCH_RETRIES"]:
-                    logger.warning("{}: Retrying Search delete error: {}"
-                                   .format(source_id, repr(e)))
-                    i += 1
-                else:
-                    raise
-        if del_res["num_subjects_deleted"]:
-            logger.info(("{}: {} Search entries cleared from "
-                         "{}").format(source_id, del_res["num_subjects_deleted"],
-                                      source_info["source_name"]))
+        delete_payload = [index, del_q]
+        delete_res = perform_search_task(ingest_client.delete_by_query, delete_payload,
+                                         get_task=ingest_client.get_task,
+                                         ping_time=CONFIG["SEARCH_RETRIES"],
+                                         retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
+        if delete_res["success"]:
+            logger.debug("{}: Old Search entries cleared from {}"
+                         .format(source_id, source_info["source_name"]))
+        elif delete_res["error"]:
+            logger.error("{}: Search deletion error: {}".format(source_id, delete_res["error"]))
+        else:
+            logger.critical("{}: Unknown Search deletion error: {}".format(source_id, delete_res))
     else:
         logger.debug("{}: Existing Search entries not deleted.".format(source_id))
 
@@ -176,55 +168,18 @@ def submit_ingests(ingest_queue, error_queue, index, input_done, source_id):
             # Otherwise, more ingests are coming, try again
             else:
                 continue
-        # Ingest, with error handling
-        try:
-            # Allow retries
-            i = 0
-            while True:
-                try:
-                    ingest_res = ingest_client.ingest(index, ingestable)
-                    if not ingest_res["acknowledged"]:
-                        raise ValueError("Ingest not acknowledged by Search")
-                    task_id = ingest_res["task_id"]
-                    task_status = "PENDING"  # Assume task starts as pending
-                    # While task is not complete, check status
-                    while task_status != "SUCCESS" and task_status != "FAILURE":
-                        sleep(CONFIG["SEARCH_PING_TIME"])
-                        task_res = ingest_client.get_task(task_id)
-                        task_status = task_res["state"]
-                    break
-                except (GlobusAPIError, ValueError) as e:
-                    if i < CONFIG["SEARCH_RETRIES"]:
-                        logger.warning("{}: Retrying Search ingest error: {}"
-                                       .format(source_id, repr(e)))
-                        i += 1
-                    else:
-                        raise
-            if task_status == "FAILURE":
-                raise ValueError("Ingest failed: " + str(task_res))
-            elif task_status == "SUCCESS":
-                logger.debug("{}: Search batch ingested: {}"
-                             .format(source_id, task_res["message"]))
-            else:
-                raise ValueError("Invalid state '{}' from {}".format(task_status, task_res))
-        except GlobusAPIError as e:
-            logger.error("{}: Search ingest error: {}".format(source_id, e.raw_json))
-            # logger.debug('Stack trace:', exc_info=True)
-            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
-            err = {
-                "exception_type": str(type(e)),
-                "details": e.raw_json
-            }
-            error_queue.put(json.dumps(err))
-        except Exception as e:
-            logger.error("{}: Generic ingest error: {}".format(source_id, repr(e)))
-            # logger.debug('Stack trace:', exc_info=True)
-            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
-            err = {
-                "exception_type": str(type(e)),
-                "details": str(e)
-            }
-            error_queue.put(json.dumps(err))
+        ingest_payload = [index, ingestable]
+        ingest_res = perform_search_task(ingest_client.ingest, ingest_payload,
+                                         get_task=ingest_client.get_task,
+                                         ping_time=CONFIG["SEARCH_RETRIES"],
+                                         retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
+        if ingest_res["success"]:
+            logger.debug("{}: Search batch ingested".format(source_id))
+        elif ingest_res["error"]:
+            logger.error("{}: Search ingestion error: {}".format(source_id, ingest_res["error"]))
+            error_queue.put(json.dumps(ingest_res["error"]))
+        else:
+            logger.critical("{}: Unknown Search ingestion error: {}".format(source_id, ingest_res))
     return
 
 
