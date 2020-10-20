@@ -1,8 +1,10 @@
 from copy import deepcopy
+from datetime import datetime, timedelta
 import json
 import logging
 import os
 import re
+from time import sleep
 import urllib
 
 import boto3
@@ -480,12 +482,52 @@ def get_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         return {
             "success": True,
             "table": table
+        }
+
+
+def get_group_emails(group_uuid):
+    """Fetch the emails for all members of a Globus Group."""
+    groups_auth = deepcopy(CONFIG["GLOBUS_CREDS"])
+    groups_auth["services"] = ["groups"]
+    try:
+        nexus = mdf_toolbox.confidential_login(**groups_auth)["groups"]
+    except Exception as e:
+        logger.error("NexusClient creation error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Unable to connect to Globus Groups",
+            "error_code": 500
+        }
+    try:
+        members = nexus.get_group_memberships(group_uuid).data["members"]
+    except globus_sdk.GlobusAPIError as e:
+        logger.error("Nexus get group memberships API error: {}".format(repr(e)))
+        if e.http_status in [401, 403]:
+            return {
+                "success": False,
+                "error": ("MDF Connect does not have permissions to read from Group '{}'"
+                          .format(group_uuid)),
+                "error_code": 500
             }
+        else:
+            return {
+                "success": False,
+                "error": e.message,
+                "error_code": e.http_status
+            }
+    except Exception as e:
+        logger.error("Nexus get group memberships error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Could not fetch Globus Groups memberships",
+            "error_code": 500
+        }
+    return set([m["email"] for m in members if m["email"] is not None and m["status"] == "active"])
 
 
 def initialize_dmo_table(table_name, client=DMO_CLIENT):
@@ -505,7 +547,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": "Table already created"
-            }
+        }
     # If misc/other exception, cannot create table
     elif tbl_res["error"] != "Table does not exist or is not active":
         return tbl_res
@@ -815,6 +857,290 @@ def normalize_globus_uri(location):
         new_location = location
 
     return new_location
+
+
+def perform_search_task(operation, payload, get_task, ping_time, retries, quiet=False):
+    """Submit an async Globus Search task (such as ingest or delete)
+    and monitor until completion.
+
+    Arguments:
+        operation (function): The function of the SearchClient to perform.
+                If the SearchClient is not authenticated, this may fail.
+        payload (list): All arguments necessary for the operation.
+                For example, `[index, entries]` for an ingest operation.
+        get_task (function): The SearchClient.get_task function.
+        ping_time (int): The number of seconds to wait to check the status of the task.
+        retries (int): The number of task retries to perform if the task initially fails.
+                This is the number of RE-tries, so zero is the minimum.
+        quiet (bool): Suppress log messages? Default False.
+
+    Returns:
+        dict: The results.
+            success (bool): True on a successful task completion. False otherwise.
+            error (dict or bool): The error, if any. False if no error was returned.
+                exception_type (str): The type of Exception.
+                details (str): The string of the Exception.
+    """
+    success = False
+    err = False
+    try:
+        # Allow retries
+        i = 0
+        while True:
+            try:
+                submit_res = operation(*payload)
+                if not submit_res["acknowledged"]:
+                    raise ValueError("Operation not acknowledged by Search")
+                task_id = submit_res["task_id"]
+                task_status = ""
+                # While task is not complete, check status
+                while task_status != "SUCCESS" and task_status != "FAILURE":
+                    sleep(ping_time)
+                    task_res = get_task(task_id)
+                    task_status = task_res["state"]
+                break
+            except (globus_sdk.GlobusAPIError, ValueError) as e:
+                if i < retries:
+                    if not quiet:
+                        logger.warning("Retrying Search operation error: {}".format(repr(e)))
+                    i += 1
+                else:
+                    raise
+        if task_status == "FAILURE":
+            raise ValueError("Operation failed: " + str(task_res))
+        elif task_status == "SUCCESS":
+            if not quiet:
+                logger.debug("Search operation succeeded: {}".format(task_res["message"]))
+            success = True
+        else:
+            raise ValueError("Invalid Search state '{}' from {}".format(task_status, task_res))
+    except globus_sdk.GlobusAPIError as e:
+        if not quiet:
+            logger.error("Search operation error: {}".format(e.raw_json))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
+        err = {
+            "exception_type": str(type(e)),
+            "details": e.raw_json
+        }
+    except Exception as e:
+        if not quiet:
+            logger.error("Generic Search error: {}".format(repr(e)))
+            # logger.debug('Stack trace:', exc_info=True)
+            # logger.debug("Full ingestable:\n{}\n".format(ingestable))
+        err = {
+            "exception_type": str(type(e)),
+            "details": str(e)
+        }
+    return {
+        "success": success,
+        "error": err
+    }
+
+
+def purge_old_tests(mock_subs=None, dry_run=False):
+    """Purge all old test submissions.
+    Includes:
+        - Purge test submissions older than the limit
+            - Delete from curation database (first, to stop any further processing)
+            - Delete associated files
+            - Delete Search entries
+            - Delete from status database (last, so submission is findable until full deletion)
+
+    Arguments:
+        mock_subs (list of str): source_ids to purge. This argument is used for testing.
+                Default None, to purge all old submissions.
+                CAUTION: All submissions listed here will be purged, regardless of
+                submission age. This argument bypasses the submission age check.
+        dry_run (bool): When True, will not actually delete submission information,
+                but will still output log messages.
+                When False, will purge submissions.
+                Default False.
+
+    Note:
+        This function attempts to minimize exception-throwing in favor of log messages,
+        in order to prevent partial submission deletions. However, if a submission does
+        only partially delete, re-running this function will likely delete the rest.
+    """
+    logger.info("Initializing startup tasks")
+    index = mdf_toolbox.translate_index(CONFIG["INGEST_TEST_INDEX"])
+    # Init clients
+    clients = mdf_toolbox.confidential_login(services=["search_ingest", "transfer"],
+                                             **CONFIG["GLOBUS_CREDS"])
+    transfer_client = clients["transfer"]
+    search_client = clients["search_ingest"]
+    # Get datetime with definition of "old"
+    old_cutoff = datetime.utcnow() - timedelta(days=CONFIG["TEST_TTL"])
+    # Find all test submissions older than the limit (or specified in mock_subs)
+    logger.info("Scanning status database for old test submissions")
+    test_subs = scan_table("status", filters=[("source_id", "^", "_test_")])["results"]
+    if mock_subs:
+        logger.info("Using mock_subs list instead of age filter")
+        old_subs = [sub for sub in test_subs if sub["source_id"] in mock_subs]
+    else:
+        old_subs = [sub for sub in test_subs
+                    if datetime.fromisoformat(sub["submission_time"][:-1]) < old_cutoff]
+    logger.info("Found {} submissions to purge: {}"
+                .format(len(old_subs), [s["source_id"] for s in old_subs]))
+
+    # Delete all submission information for each old submission
+    logger.debug("Scan complete. Purge initiated.")
+    for sub in old_subs:
+        logger.info("\n\nPurging submission {}\n{}".format(sub["source_id"], "="*80))
+
+        # Delete from curation DB (if present)
+        try:
+            curation_read = read_table("curation", sub["source_id"])
+            if curation_read["success"] and not dry_run:
+                curation_delete = delete_from_table("curation", sub["source_id"])
+                if curation_delete["success"]:
+                    logger.info("Deleted task for {} from curation database"
+                                .format(sub["source_id"]))
+                else:
+                    logger.error("Unable to delete task {} from curation database: {}"
+                                 .format(sub["source_id"], curation_delete["error"]))
+            elif curation_read["success"] and dry_run:
+                logger.info("Dry run: Skipping curation task deletion for {}"
+                            .format(sub["source_id"]))
+            elif "not found" in curation_read["error"]:
+                logger.info("No active curation task for {}".format(sub["source_id"]))
+            else:
+                logger.error("Unable to read curation database for {}: {}"
+                             .format(sub["source_id"], curation_read["error"]))
+        except Exception as e:
+            logger.error("Error with curation database for {}: {}"
+                         .format(sub["source_id"], repr(e)))
+
+        # Locate files to purge
+        # Fetch current version dataset entry, try to locate files based on that
+        sub_source_name = split_source_id(sub["source_id"])["source_name"]
+        current_q = {
+            "q": "mdf.source_name:{} AND mdf.resource_type:dataset".format(sub_source_name),
+            "advanced": True
+        }
+        try:
+            current_ds = mdf_toolbox.gmeta_pop(search_client.post_search(index, current_q))
+        except Exception as e:
+            logger.error("Exception fetching current submission version {}: {}"
+                         .format(sub_source_name, repr(e)))
+            current_ds = None
+        # Only process results if results exist
+        if current_ds:
+            ds_md = current_ds[0]
+            logger.debug("Found current dataset entry {}".format(ds_md["mdf"]["source_id"]))
+            # If the current version is the old version, files to delete are current files
+            if ds_md["mdf"]["source_id"] == sub["source_id"]:
+                old_data = ds_md["data"]["endpoint_path"]
+            # Otherwise, make reasonable guess about file location - replace
+            # current source_id in path with old source_id
+            else:
+                current_path = ds_md["data"]["endpoint_path"]
+                old_path = current_path.replace(ds_md["mdf"]["source_id"], sub["source_id"])
+                # Sanity-check - ensure path changed to not delete current data
+                # If current sub is old, was caught earlier
+                if old_path != current_path:
+                    old_data = old_path
+                else:
+                    logger.info("Current data path '{}' nonstandard (no source_id)"
+                                .format(current_path))
+                    old_data = None
+        else:
+            logger.info("No current dataset entry for {}".format(sub_source_name))
+            old_data = None
+        # Delete data location found
+        if old_data:
+            logger.debug("\nStarting data deletion for '{}'".format(old_data))
+            old_data_info = urllib.parse.urlparse(old_data)
+            # Check that location exists and is directory
+            # All submissions should always be in a directory
+            dir_res = mdf_toolbox.globus_check_directory(transfer_client, old_data_info.netloc,
+                                                         old_data_info.path)
+            if not dir_res["exists"]:
+                logger.info("Data location '{}' not found".format(old_data))
+            elif not dir_res["is_dir"]:
+                logger.error("Data location '{}' is not a directory, skipping"
+                             .format(old_data))
+            else:
+                logger.info("Deleting all files at data location '{}'".format(old_data))
+                try:
+                    if not dry_run:
+                        tdelete = globus_sdk.DeleteData(transfer_client, old_data_info.netloc,
+                                                        recursive=True)
+                        tdelete.add_item(old_data_info.path)
+                        tdelete_res = transfer_client.submit_delete(tdelete)
+                        if tdelete_res["code"] != "Accepted":
+                            logger.error("Transfer Delete not accepted: {}"
+                                         .format(tdelete_res["code"]))
+                        else:
+                            error_timestamps = set()
+                            while not transfer_client.task_wait(tdelete_res["task_id"]):
+                                for event in transfer_client.task_event_list(
+                                                                tdelete_res["task_id"]):
+                                    if event["is_error"] and event["time"] not in error_timestamps:
+                                        error_timestamps.add(event["time"])
+                                        logger.error("Ongoing Transfer Delete error: {}"
+                                                     .format(event))
+                            task = transfer_client.get_task(tdelete_res["task_id"]).data
+                            if task["status"] == "SUCCEEDED":
+                                logger.info("Data location '{}' deleted".format(old_data))
+                            else:
+                                logger.error("Delete task for '{}' failed: {}"
+                                             .format(old_data, task))
+                    else:
+                        logger.info("Dry run: Skipping data deletion for {}"
+                                    .format(sub["source_id"]))
+                except Exception as e:
+                    logger.error("Error deleting location '{}' for {}: {}"
+                                 .format(old_data, sub["source_id"], repr(e)))
+        else:
+            logger.info("No old data location found. No files deleted.")
+
+        # Delete from Search
+        logger.info("\nDeleting Search entries for {}".format(sub["source_id"]))
+        # Delete by source_id - this ensures only the expired version is purged
+        del_q = {
+            "q": "mdf.source_id:{}".format(sub["source_id"]),
+            "advanced": True
+        }
+        if not dry_run:
+            delete_payload = [index, del_q]
+            delete_res = perform_search_task(search_client.delete_by_query, delete_payload,
+                                             get_task=search_client.get_task,
+                                             ping_time=CONFIG["SEARCH_RETRIES"],
+                                             retries=CONFIG["SEARCH_PING_TIME"], quiet=True)
+            if delete_res["success"]:
+                logger.debug("Search entries cleared from {}".format(sub["source_id"]))
+            elif delete_res["error"]:
+                logger.error("Search deletion error on {}: {}"
+                             .format(sub["source_id"], delete_res["error"]))
+            else:
+                logger.critical("Unknown Search deletion error on {}: {}"
+                                .format(sub["source_id"], delete_res))
+        else:
+            logger.info("Dry run: Skipping Search entry deletion for {}".format(sub["source_id"]))
+
+        # Delete from status DB
+        logger.info("\nDeleting status database entry for {}".format(sub["source_id"]))
+        if not dry_run:
+            try:
+                status_delete = delete_from_table("status", sub["source_id"])
+                if status_delete["success"]:
+                    logger.info("Deleted {} from status database".format(sub["source_id"]))
+                else:
+                    logger.error("Unable to delete {} from status database: {}"
+                                 .format(sub["source_id"], status_delete["error"]))
+            except Exception as e:
+                logger.error("Error with status database for {}: {}"
+                             .format(sub["source_id"], repr(e)))
+        else:
+            logger.info("Dry run: Skipping status entry deletion for {}".format(sub["source_id"]))
+
+        # Finished with this submission
+        logger.debug("Terminating purge of {}".format(sub["source_id"]))
+
+    # Finished will all identified submissions
+    logger.info("\nAll {} expired submissions purged as possible.".format(len(old_subs)))
+    return
 
 
 def read_table(table_name, source_id):

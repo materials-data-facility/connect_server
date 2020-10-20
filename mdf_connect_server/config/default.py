@@ -11,6 +11,9 @@ DEFAULT = {
     "AUX_DATA_PATH": os.path.abspath(os.path.join(os.path.dirname(__file__), "schemas",
                                                   "connect_aux_data")),
 
+    # Minimum time (in days) to keep test submissions
+    "TEST_TTL": 30,
+
     "PROCESSOR_WAIT_TIME": 20,  # Seconds
     "PROCESSOR_SLEEP_TIME": 40,  # Seconds
 
