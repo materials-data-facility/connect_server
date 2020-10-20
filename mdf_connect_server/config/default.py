@@ -65,7 +65,7 @@ DEFAULT = {
     ],
 
     # Using Prod-P GDrive EP because having two GDrive EPs on one account seems to fail
-    "GDRIVE_EP": "728a8a88-605b-4605-8afd-396f087eb3fc",
+    "GDRIVE_EP": "f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb",
     "GDRIVE_ROOT": "/Shared With Me",
 
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
