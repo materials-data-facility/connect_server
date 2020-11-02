@@ -1,0 +1,404 @@
+{
+    "administered_by": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "definition": {
+        "StartAt": "StartSubmission",
+        "States": {
+            "CheckUserTransfer": {
+                "Choices": [
+                    {
+                        "Next": "Xtraction",
+                        "StringEquals": "SUCCEEDED",
+                        "Variable": "$.UserTransferResult.status"
+                    }
+                ],
+                "Default": "FailUserTransfer",
+                "Type": "Choice"
+            },
+            "ChooseAcceptance": {
+                "Choices": [
+                    {
+                        "Next": "SearchIngest",
+                        "StringEquals": "accepted",
+                        "Variable": "$.CurateResult.details.output.CurationResult.details.name"
+                    },
+                    {
+                        "Next": "FailCuration",
+                        "StringEquals": "rejected",
+                        "Variable": "$.CurateResult.details.output.CurationResult.details.name"
+                    }
+                ],
+                "Default": "ExceptionState",
+                "Type": "Choice"
+            },
+            "ChooseCitrine": {
+                "Choices": [
+                    {
+                        "BooleanEquals": true,
+                        "Next": "CitrinePublish",
+                        "Variable": "$.citrine"
+                    }
+                ],
+                "Default": "ChooseMRR",
+                "Type": "Choice"
+            },
+            "ChooseCuration": {
+                "Choices": [
+                    {
+                        "BooleanEquals": false,
+                        "Next": "SearchIngest",
+                        "Variable": "$.curation_input"
+                    }
+                ],
+                "Default": "CurateSubmission",
+                "Type": "Choice"
+            },
+            "ChooseMRR": {
+                "Choices": [
+                    {
+                        "BooleanEquals": true,
+                        "Next": "MRRPublish",
+                        "Variable": "$.mrr"
+                    }
+                ],
+                "Default": "PrepareSearchUpdate",
+                "Type": "Choice"
+            },
+            "ChooseNotifyUserEnd": {
+                "Choices": [
+                    {
+                        "BooleanEquals": false,
+                        "Next": "EndSubmission",
+                        "Variable": "$.curation_input"
+                    }
+                ],
+                "Default": "NotifyUserEnd",
+                "Type": "Choice"
+            },
+            "ChoosePublish": {
+                "Choices": [
+                    {
+                        "BooleanEquals": true,
+                        "Next": "MDFPublish",
+                        "Variable": "$.mdf_publish"
+                    }
+                ],
+                "Default": "ChooseCitrine",
+                "Type": "Choice"
+            },
+            "CitrinePublish": {
+                "Next": "ChooseMRR",
+                "Parameters": {},
+                "ResultPath": "$.CitrinePublishResult",
+                "Type": "Pass"
+            },
+            "CurateSubmission": {
+                "ActionScope": "https://auth.globus.org/scopes/a24d39dd-f8b7-4287-ba4d-cdd8e36fcee6/flow_a24d39dd_f8b7_4287_ba4d_cdd8e36fcee6",
+                "ActionUrl": "http://flows.automate.globus.org/flows/a24d39dd-f8b7-4287-ba4d-cdd8e36fcee6",
+                "ExceptionOnActionFailure": true,
+                "InputPath": "$.curation_input",
+                "Next": "ChooseAcceptance",
+                "ResultPath": "$.CurateResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "DataDestTransfer": {
+                "ActionScope": "https://auth.globus.org/scopes/5efa85a0-54d7-426e-b9f1-59452fda9922/flow_5efa85a0_54d7_426e_b9f1_59452fda9922_user",
+                "ActionUrl": "https://flows.globus.org/flows/5efa85a0-54d7-426e-b9f1-59452fda9922",
+                "ExceptionOnActionFailure": true,
+                "Next": "ChoosePublish",
+                "Parameters": {
+                    "action_inputs.$": "$.data_destinations"
+                },
+                "ResultPath": "$.DataDestResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "EndSubmission": {
+                "End": true,
+                "Type": "Pass"
+            },
+            "ExceptionState": {
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ExceptionOnActionFailure": true,
+                "Next": "SubmissionException",
+                "Parameters": {
+                    "__Private_Parameters": [
+                        "send_credentials"
+                    ],
+                    "body_template.=": "'Submission ' + `$.source_id` + ' fatally errored processing in Flow '+ `$._context.action_id` + '. Please review the Flow log for details about this exception.'",
+                    "destination": "jgaff@uchicago.edu",
+                    "send_credentials": [
+                        {
+                            "credential_type": "smtp",
+                            "credential_value": {
+                                "hostname": "email-smtp.us-east-1.amazonaws.com",
+                                "password": "BKvkEhX47tnt+1j7HybC7nCrkRAktX3l9Xcb9sczIf5k",
+                                "username": "AKIAYDM4GMMTXGL6B2V7"
+                            }
+                        }
+                    ],
+                    "sender": "materialsdatafacility@gmail.com",
+                    "subject": "Submission Failed to Ingest"
+                },
+                "ResultPath": "$.ExceptionNotifyResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "FailCuration": {
+                "Next": "ChooseNotifyUserEnd",
+                "Parameters": {
+                    "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the ingestion process. The curator gave the following reason for rejection: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`",
+                    "title": "MDF Submission Rejected"
+                },
+                "ResultPath": "$.FinalState",
+                "Type": "ExpressionEval"
+            },
+            "FailUserTransfer": {
+                "Next": "ChooseNotifyUserEnd",
+                "Parameters": {
+                    "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserTransferResult.details`",
+                    "title": "MDF Submission Failed"
+                },
+                "ResultPath": "$.FinalState",
+                "Type": "ExpressionEval"
+            },
+            "MDFPublish": {
+                "Next": "ChooseCitrine",
+                "Parameters": {},
+                "ResultPath": "$.MDFPublishResult",
+                "Type": "Pass"
+            },
+            "MRRPublish": {
+                "Next": "PrepareSearchUpdate",
+                "Parameters": {},
+                "ResultPath": "$.MRRPublishResult",
+                "Type": "Pass"
+            },
+            "NotifyUserEnd": {
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ExceptionOnActionFailure": true,
+                "Next": "EndSubmission",
+                "Parameters": {
+                    "__Private_Parameters": [
+                        "send_credentials"
+                    ],
+                    "body_template.$": "$.FinalState.message",
+                    "destination.$": "$.curation_input.author_email",
+                    "send_credentials": [
+                        {
+                            "credential_type": "smtp",
+                            "credential_value": {
+                                "hostname": "email-smtp.us-east-1.amazonaws.com",
+                                "password": "BKvkEhX47tnt+1j7HybC7nCrkRAktX3l9Xcb9sczIf5k",
+                                "username": "AKIAYDM4GMMTXGL6B2V7"
+                            }
+                        }
+                    ],
+                    "sender": "materialsdatafacility@gmail.com",
+                    "subject.$": "$.FinalState.title"
+                },
+                "ResultPath": "$.NotifyUserResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "PrepareSearchUpdate": {
+                "Next": "SearchUpdate",
+                "Parameters": {
+                    "content.=": "`$.XtractionResult.details.dataset_entry`",
+                    "search_index.$": "$.search_index",
+                    "subject.$": "$.source_id",
+                    "visible_to.$": "$.dataset_acl"
+                },
+                "ResultPath": "$.SearchUpdateInfo",
+                "Type": "ExpressionEval"
+            },
+            "SearchIngest": {
+                "ActionScope": "https://auth.globus.org/scopes/a9b4124f-887a-461e-ba72-fa8ea701a8f2/siap_ingest_scope",
+                "ActionUrl": "https://siap.globuscs.info/",
+                "ExceptionOnActionFailure": true,
+                "Next": "DataDestTransfer",
+                "Parameters": {
+                    "__Private_Parameters": [
+                        "auth_header"
+                    ],
+                    "auth_header.$": "$.feedstock_auth_header",
+                    "index.$": "$.search_index",
+                    "locations.=": "[`$.XtractionResult.details.output_link`]",
+                    "require_all_success": true
+                },
+                "ResultPath": "$.SearchIngestResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "SearchUpdate": {
+                "ActionUrl": "https://actions.globus.org/search/ingest",
+                "ExceptionOnActionFailure": false,
+                "InputPath": "$.SearchUpdateInfo",
+                "Next": "SubmissionSuccess",
+                "ResultPath": "$.SearchUpdateResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "StartSubmission": {
+                "Next": "UserPermissions",
+                "Type": "Pass"
+            },
+            "SubmissionException": {
+                "ActionUrl": "https://actions.globus.org/expression_eval",
+                "ExceptionOnActionFailure": true,
+                "Next": "ChooseNotifyUserEnd",
+                "Parameters": {
+                    "message": "A service error has occurred, and the MDF team has been notified. You may be contacted with additional details.",
+                    "title": "Service Error in MDF Submission"
+                },
+                "ResultPath": "$.FinalState",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "SubmissionSuccess": {
+                "Next": "ChooseNotifyUserEnd",
+                "Parameters": {
+                    "message.=": "'Submission Flow succeeded. Your submission (' + `$.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`",
+                    "title": "Submission Ingested Successfully"
+                },
+                "ResultPath": "$.FinalState",
+                "Type": "ExpressionEval"
+            },
+            "UndoUserPermissions": {
+                "Next": "CheckUserTransfer",
+                "Parameters": {},
+                "ResultPath": "$.UndoUserPermissionResult",
+                "Type": "Pass"
+            },
+            "UserPermissions": {
+                "Next": "UserTransfer",
+                "Parameters": {},
+                "ResultPath": "$.UserPermissionResult",
+                "Type": "Pass"
+            },
+            "UserTransfer": {
+                "ActionScope": "https://auth.globus.org/scopes/5efa85a0-54d7-426e-b9f1-59452fda9922/flow_5efa85a0_54d7_426e_b9f1_59452fda9922_user",
+                "ActionUrl": "https://flows.globus.org/flows/5efa85a0-54d7-426e-b9f1-59452fda9922",
+                "ExceptionOnActionFailure": false,
+                "Next": "UndoUserPermissions",
+                "Parameters": {
+                    "action_inputs.$": "$.user_transfer_inputs"
+                },
+                "ResultPath": "$.UserTransferResult",
+                "Type": "Action",
+                "WaitTime": 86400
+            },
+            "Xtraction": {
+                "Next": "ChooseCuration",
+                "Parameters": {
+                    "details": {
+                        "dataset_entry": {
+                            "data": {
+                                "endpoint_path": "globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/prod/data/_test_base_deploy_testing_v5.1/",
+                                "link": "https://app.globus.org/file-manager?origin_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&origin_path=/MDF/mdf_connect/prod/data/_test_base_deploy_testing_v5.1/",
+                                "total_size": 4709193
+                            },
+                            "dc": {
+                                "creators": [
+                                    {
+                                        "affiliations": [
+                                            "UChicago"
+                                        ],
+                                        "creatorName": "jgaff",
+                                        "familyName": "",
+                                        "givenName": "jgaff"
+                                    }
+                                ],
+                                "publicationYear": "2020",
+                                "publisher": "Materials Data Facility",
+                                "resourceType": {
+                                    "resourceType": "Dataset",
+                                    "resourceTypeGeneral": "Dataset"
+                                },
+                                "titles": [
+                                    {
+                                        "title": "Base Deploy Testing Dataset"
+                                    }
+                                ]
+                            },
+                            "mdf": {
+                                "acl": [
+                                    "public"
+                                ],
+                                "ingest_date": "2020-05-06T17:47:05.219450Z",
+                                "resource_type": "dataset",
+                                "scroll_id": 0,
+                                "source_id": "_test_base_deploy_testing_v5.1",
+                                "source_name": "_test_base_deploy_testing",
+                                "version": 5
+                            },
+                            "services": {}
+                        },
+                        "output_link": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org/MDF/mdf_connect/test_files/mock_feedstock.json"
+                    }
+                },
+                "ResultPath": "$.XtractionResult",
+                "Type": "Pass"
+            }
+        }
+    },
+    "description": "Extract, process, and ingest a dataset into MDF Connect.",
+    "runnable_by": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "schema": {
+        "_tokens": {
+            "User": "user's token"
+        },
+        "citrine": "bool",
+        "curation_input": {
+            "author_email": "str or False",
+            "author_template": "str or False",
+            "curation_permissions": "list of str",
+            "curation_text": "str or False",
+            "curator_emails": "list of str, or False",
+            "curator_template": "str or False",
+            "email_sender": "str",
+            "send_credentials": [
+                {}
+            ]
+        },
+        "data_destinations": [
+            {
+                "ep": "UUID",
+                "path": "str"
+            }
+        ],
+        "dataset_acl": [
+            "FQ UUID"
+        ],
+        "dataset_mdata": "dict",
+        "feedstock_auth_header": "str",
+        "feedstock_https_domain": "str",
+        "file_acls": [
+            "FQ UUID"
+        ],
+        "group_by_dir": "bool",
+        "mdf_dataset_path": "str",
+        "mdf_portal_link": "str, must be complete link for after submission succeeds",
+        "mdf_publish": "bool",
+        "mdf_storage_ep": "str",
+        "mrr": "bool",
+        "search_index": "UUID",
+        "source_id": "str",
+        "user_id": "str",
+        "user_transfer_sources": [
+            {
+                "ep": "UUID",
+                "path": "str"
+            }
+        ],
+        "validator_params": "dict"
+    },
+    "title": "The Materials Data Facility Dataset Processing Flow",
+    "visible_to": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ]
+}
