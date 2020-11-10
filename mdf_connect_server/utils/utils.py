@@ -820,6 +820,11 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
         raise ValueError("Storage location '{}' (from '{}') is not a Globus Endpoint and cannot "
                          "be directly published from or backed up from"
                          .format(norm_store, storage_loc))
+    # If the storage is the MDF GDrive EP, the data_client and data_user aren't necessary
+    # because the MDF client has read access already.
+    elif storage_info.netloc == CONFIG["GDRIVE_EP"]:
+        data_client = None
+        data_user = None
 
     for backup in backup_locs:
         error = ""
@@ -1392,7 +1397,8 @@ def cancel_submission(source_id, wait=True):
     old_status_code = old_read_table("status", source_id)["status"]["code"]
     new_status_code = old_status_code.replace("z", "X").replace("W", "X") \
                                      .replace("T", "X").replace("P", "X")
-    update_res = modify_status_entry(source_id, {"code": new_status_code})
+    update_res = modify_status_entry(source_id, {"code": new_status_code,
+                                                 "active": False})
     if not update_res["success"]:
         return {
             "success": False,
