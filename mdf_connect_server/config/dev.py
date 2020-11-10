@@ -30,8 +30,6 @@ DEV = {
     "BACKUP_HOST": "https://data.materialsdatafacility.org",
     "BACKUP_FEEDSTOCK": "/mdf_connect/dev/feedstock/",
 
-    # "GDRIVE_EP": "6ab13202-7c99-4e44-b0ff-04b8fbd77c97",
-
     "DEFAULT_CLEANUP": True,
     "FINAL_CLEANUP": True,
 
