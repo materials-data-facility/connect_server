@@ -630,90 +630,79 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
         source_loc = [source_loc]
 
     # Download data locally
-    logger.debug("Sources: {}".format(source_loc))
     for raw_loc in source_loc:
         location = old_normalize_globus_uri(raw_loc)
-        logger.debug("Location: {}".format(location))
         loc_info = urllib.parse.urlparse(location)
         # Globus Transfer
         if loc_info.scheme == "globus":
-            try:
-                # Use admin_client for GDrive Transfers
-                # User doesn't need permissions on MDF GDrive, we have those
-                # For all other cases use user's TC
-                tc = admin_client if (loc_info.netloc == CONFIG["GDRIVE_EP"]
-                                      and admin_client is not None) else transfer_client
-                if filename:
-                    transfer_path = os.path.join(local_path, filename)
-                else:
-                    transfer_path = local_path
-                # Check that data not already in place
-                if not (loc_info.netloc == local_ep
-                        and loc_info.path == transfer_path):
-                    try:
-                        if admin_client is not None:
-                            # Edit ACL to allow pull
-                            acl_rule = {
-                                "DATA_TYPE": "access",
-                                "principal_type": "identity",
-                                "principal": user_id,
-                                "path": local_path,
-                                "permissions": "rw"
-                            }
-                            try:
-                                acl_res = admin_client.add_endpoint_acl_rule(local_ep, acl_rule).data
-                            except Exception as e:
-                                logger.error("ACL rule creation exception for '{}': {}"
-                                             .format(acl_rule, repr(e)))
-                                raise ValueError("Internal permissions error.")
-                            if not acl_res.get("code") == "Created":
-                                logger.error("Unable to create ACL rule '{}': {}"
-                                             .format(acl_rule, acl_res))
-                                raise ValueError("Internal permissions error.")
-                        else:
-                            acl_res = None
+            # Use admin_client for GDrive Transfers
+            # User doesn't need permissions on MDF GDrive, we have those
+            # For all other cases use user's TC
+            tc = admin_client if (loc_info.netloc == CONFIG["GDRIVE_EP"]
+                                  and admin_client is not None) else transfer_client
+            if filename:
+                transfer_path = os.path.join(local_path, filename)
+            else:
+                transfer_path = local_path
+            # Check that data not already in place
+            if not (loc_info.netloc == local_ep
+                    and loc_info.path == transfer_path):
+                try:
+                    if admin_client is not None:
+                        # Edit ACL to allow pull
+                        acl_rule = {
+                            "DATA_TYPE": "access",
+                            "principal_type": "identity",
+                            "principal": user_id,
+                            "path": local_path,
+                            "permissions": "rw"
+                        }
+                        try:
+                            acl_res = admin_client.add_endpoint_acl_rule(local_ep, acl_rule).data
+                        except Exception as e:
+                            logger.error("ACL rule creation exception for '{}': {}"
+                                         .format(acl_rule, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_res.get("code") == "Created":
+                            logger.error("Unable to create ACL rule '{}': {}"
+                                         .format(acl_rule, acl_res))
+                            raise ValueError("Internal permissions error.")
+                    else:
+                        acl_res = None
 
-                        # Transfer locally
-                        logger.debug("BEFORE TRANSFER")
-                        logger.warning("Transferring:\nSource EP: {}\nDest EP: {}\nSource path: {}\nDest path: {}".format(loc_info.netloc, local_ep, loc_info.path, transfer_path))
-                        transfer = mdf_toolbox.custom_transfer(
-                                        tc, loc_info.netloc, local_ep,
-                                        [(loc_info.path, transfer_path)],
-                                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
-                        for event in transfer:
-                            if not event["success"]:
-                                logger.info("Transfer is_error: {} - {}"
-                                            .format(event.get("code", "No code found"),
-                                                    event.get("description", "No description found")))
-                                yield {
-                                    "success": False,
-                                    "error": "{} - {}".format(event.get("code", "No code found"),
-                                                              event.get("description",
-                                                                        "No description found"))
-                                }
+                    # Transfer locally
+                    transfer = mdf_toolbox.custom_transfer(
+                                    tc, loc_info.netloc, local_ep,
+                                    [(loc_info.path, transfer_path)],
+                                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                    for event in transfer:
                         if not event["success"]:
-                            logger.error("Transfer failed: {}".format(event))
-                            raise ValueError(event)
-                    finally:
-                        if acl_res is not None:
-                            try:
-                                acl_del = admin_client.delete_endpoint_acl_rule(
-                                                            local_ep, acl_res["access_id"])
-                            except Exception as e:
-                                logger.critical("ACL rule deletion exception for '{}': {}"
-                                                .format(acl_res, repr(e)))
-                                raise ValueError("Internal permissions error.")
-                            if not acl_del.get("code") == "Deleted":
-                                logger.critical("Unable to delete ACL rule '{}': {}"
-                                                .format(acl_res, acl_del))
-                                raise ValueError("Internal permissions error.")
-            except Exception as e:
-                # this is all temporary
-                import traceback
-                logger.critical("\nError {}: {}\n\nStacktrace: {}\n".format(str(e), repr(e),
-                                traceback.format_exception(type(e), e, e.__traceback__)))
-                raise
+                            logger.info("Transfer is_error: {} - {}"
+                                        .format(event.get("code", "No code found"),
+                                                event.get("description", "No description found")))
+                            yield {
+                                "success": False,
+                                "error": "{} - {}".format(event.get("code", "No code found"),
+                                                          event.get("description",
+                                                                    "No description found"))
+                            }
+                    if not event["success"]:
+                        logger.error("Transfer failed: {}".format(event))
+                        raise ValueError(event)
+                finally:
+                    if acl_res is not None:
+                        try:
+                            acl_del = admin_client.delete_endpoint_acl_rule(
+                                                        local_ep, acl_res["access_id"])
+                        except Exception as e:
+                            logger.critical("ACL rule deletion exception for '{}': {}"
+                                            .format(acl_res, repr(e)))
+                            raise ValueError("Internal permissions error.")
+                        if not acl_del.get("code") == "Deleted":
+                            logger.critical("Unable to delete ACL rule '{}': {}"
+                                            .format(acl_res, acl_del))
+                            raise ValueError("Internal permissions error.")
         # HTTP(S)
         elif loc_info.scheme.startswith("http"):
             # Get default filename and extension
