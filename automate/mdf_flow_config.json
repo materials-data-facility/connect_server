@@ -1,0 +1,14 @@
+{
+    "flow_permissions": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "admin_permissions": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "transfer_loop_url": "https://flows.globus.org/flows/5efa85a0-54d7-426e-b9f1-59452fda9922",
+    "transfer_loop_scope": "https://auth.globus.org/scopes/5efa85a0-54d7-426e-b9f1-59452fda9922/flow_5efa85a0_54d7_426e_b9f1_59452fda9922_user",
+    "curation_subflow_url": "https://flows.automate.globus.org/flows/a24d39dd-f8b7-4287-ba4d-cdd8e36fcee6",
+    "curation_subflow_scope": "https://auth.globus.org/scopes/a24d39dd-f8b7-4287-ba4d-cdd8e36fcee6/flow_a24d39dd_f8b7_4287_ba4d_cdd8e36fcee6",
+    "admin_email": "jgaff@uchicago.edu",
+    "sender_email": "materialsdatafacility@gmail.com"
+}

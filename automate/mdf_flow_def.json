@@ -1,0 +1,323 @@
+{
+    "title": "The Materials Data Facility Dataset Processing Flow",
+    "description": "Extract, process, and ingest a dataset into MDF Connect.",
+    "definition": {
+        "StartAt": "StartSubmission",
+        "States": {
+            "StartSubmission": {
+                "Type": "Pass",
+                "Next": "UserPermissions"
+            },
+            "UserPermissions": {
+                "Type": "Pass",
+                "Parameters": {},
+                "ResultPath": "$.UserPermissionResult",
+                "Next": "UserTransfer"
+            },
+            "UserTransfer": {
+                "Type": "Action",
+                "ExceptionOnActionFailure": false,
+                "Parameters": {
+                    "action_inputs.$": "$.user_transfer_inputs"
+                },
+                "ResultPath": "$.UserTransferResult",
+                "WaitTime": 86400,
+                "Next": "UndoUserPermissions"
+            },
+            "UndoUserPermissions": {
+                "Type": "Pass",
+                "Parameters": {},
+                "ResultPath": "$.UndoUserPermissionResult",
+                "Next": "CheckUserTransfer"
+            },
+            "CheckUserTransfer": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.UserTransferResult.status",
+                        "StringEquals": "SUCCEEDED",
+                        "Next": "Xtraction"
+                    }
+                ],
+                "Default": "FailUserTransfer"
+            },
+            "FailUserTransfer": {
+                "Type": "ExpressionEval",
+                "Parameters": {
+                    "title": "MDF Submission Failed",
+                    "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserTransferResult.details`"
+                },
+                "ResultPath": "$.FinalState",
+                "Next": "ChooseNotifyUserEnd"
+            },
+            "Xtraction": {
+                "Type": "Pass",
+                "Parameters": {
+                    "details": {}
+                },
+                "ResultPath": "$.XtractionResult",
+                "Next": "ChooseCuration"
+            },
+            "ChooseCuration": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.curation_input",
+                        "BooleanEquals": false,
+                        "Next": "SearchIngest"
+                    }
+                ],
+                "Default": "CurateSubmission"
+            },
+            "CurateSubmission": {
+                "Type": "Action",
+                "ExceptionOnActionFailure": true,
+                "InputPath": "$.curation_input",
+                "ResultPath": "$.CurateResult",
+                "WaitTime": 86400,
+                "Next": "ChooseAcceptance"
+            },
+            "ChooseAcceptance": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.CurateResult.details.output.CurationResult.details.name",
+                        "StringEquals": "accepted",
+                        "Next": "SearchIngest"
+                    },
+                    {
+                        "Variable": "$.CurateResult.details.output.CurationResult.details.name",
+                        "StringEquals": "rejected",
+                        "Next": "FailCuration"
+                    }
+                ],
+                "Default": "ExceptionState"
+            },
+            "SearchIngest": {
+                "Type": "Action",
+                "ActionUrl": "https://siap.globuscs.info/",
+                "ActionScope": "https://auth.globus.org/scopes/a9b4124f-887a-461e-ba72-fa8ea701a8f2/siap_ingest_scope",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "auth_header.$": "$._private_feedstock_auth_header",
+                    "index.$": "$.search_index",
+                    "locations.=": "[`$.XtractionResult.details.output_link`]",
+                    "require_all_success": true,
+                    "__Private_Parameters": [
+                        "auth_header"
+                    ]
+                },
+                "ResultPath": "$.SearchIngestResult",
+                "WaitTime": 86400,
+                "Next": "DataDestTransfer"
+            },
+            "DataDestTransfer": {
+                "Type": "Action",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "action_inputs.$": "$.data_destinations"
+                },
+                "ResultPath": "$.DataDestResult",
+                "WaitTime": 86400,
+                "Next": "ChoosePublish"
+            },
+            "ChoosePublish": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.mdf_publish",
+                        "BooleanEquals": true,
+                        "Next": "MDFPublish"
+                    }
+                ],
+                "Default": "ChooseCitrine"
+            },
+            "MDFPublish": {
+                "Type": "Pass",
+                "Parameters": {},
+                "ResultPath": "$.MDFPublishResult",
+                "Next": "ChooseCitrine"
+            },
+            "ChooseCitrine": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.citrine",
+                        "BooleanEquals": true,
+                        "Next": "CitrinePublish"
+                    }
+                ],
+                "Default": "ChooseMRR"
+            },
+            "CitrinePublish": {
+                "Type": "Pass",
+                "Parameters": {},
+                "ResultPath": "$.CitrinePublishResult",
+                "Next": "ChooseMRR"
+            },
+            "ChooseMRR": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.mrr",
+                        "BooleanEquals": true,
+                        "Next": "MRRPublish"
+                    }
+                ],
+                "Default": "PrepareSearchUpdate"
+            },
+            "MRRPublish": {
+                "Type": "Pass",
+                "Parameters": {},
+                "ResultPath": "$.MRRPublishResult",
+                "Next": "PrepareSearchUpdate"
+            },
+            "PrepareSearchUpdate": {
+                "Type": "ExpressionEval",
+                "Parameters": {
+                    "subject.$": "$.source_id",
+                    "content.=": "`$.XtractionResult.details.dataset_entry`",
+                    "visible_to.$": "$.dataset_acl",
+                    "search_index.$": "$.search_index"
+                },
+                "ResultPath": "$.SearchUpdateInfo",
+                "Next": "SearchUpdate"
+            },
+            "SearchUpdate": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/search/ingest",
+                "ExceptionOnActionFailure": false,
+                "InputPath": "$.SearchUpdateInfo",
+                "ResultPath": "$.SearchUpdateResult",
+                "WaitTime": 86400,
+                "Next": "SubmissionSuccess"
+            },
+            "SubmissionSuccess": {
+                "Type": "ExpressionEval",
+                "Parameters": {
+                    "title": "Submission Ingested Successfully",
+                    "message.=": "'Submission Flow succeeded. Your submission (' + `$.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
+                },
+                "ResultPath": "$.FinalState",
+                "Next": "ChooseNotifyUserEnd"
+            },
+            "FailCuration": {
+                "Type": "ExpressionEval",
+                "Parameters": {
+                    "title": "MDF Submission Rejected",
+                    "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the ingestion process. The curator gave the following reason for rejection: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`"
+                },
+                "ResultPath": "$.FinalState",
+                "Next": "ChooseNotifyUserEnd"
+            },
+            "ExceptionState": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "body_template.=": "'Submission ' + `$.source_id` + ' fatally errored processing in Flow '+ `$._context.action_id` + '. Please review the Flow log for details about this exception.'",
+                    "send_credentials": null,
+                    "__Private_Parameters": [
+                        "send_credentials"
+                    ],
+                    "subject": "Submission Failed to Ingest"
+                },
+                "ResultPath": "$.ExceptionNotifyResult",
+                "WaitTime": 86400,
+                "Next": "SubmissionException"
+            },
+            "SubmissionException": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/expression_eval",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "title": "Service Error in MDF Submission",
+                    "message": "A service error has occurred, and the MDF team has been notified. You may be contacted with additional details."
+                },
+                "ResultPath": "$.FinalState",
+                "WaitTime": 86400,
+                "Next": "ChooseNotifyUserEnd"
+            },
+            "ChooseNotifyUserEnd": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.curation_input",
+                        "BooleanEquals": false,
+                        "Next": "EndSubmission"
+                    }
+                ],
+                "Default": "NotifyUserEnd"
+            },
+            "NotifyUserEnd": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "body_template.$": "$.FinalState.message",
+                    "destination.$": "$.curation_input.author_email",
+                    "send_credentials": null,
+                    "__Private_Parameters": [
+                        "send_credentials"
+                    ],
+                    "subject.$": "$.FinalState.title"
+                },
+                "ResultPath": "$.NotifyUserResult",
+                "WaitTime": 86400,
+                "Next": "EndSubmission"
+            },
+            "EndSubmission": {
+                "Type": "Pass",
+                "End": true
+            }
+        }
+    },
+    "schema": {
+        "source_id": "str",
+        "mdf_portal_link": "str, must be complete link for after submission succeeds",
+        "user_transfer_sources": [
+            {
+                "ep": "UUID",
+                "path": "str"
+            }
+        ],
+        "data_destinations": [
+            {
+                "ep": "UUID",
+                "path": "str"
+            }
+        ],
+        "file_acls": [
+            "FQ UUID"
+        ],
+        "dataset_acl": [
+            "FQ UUID"
+        ],
+        "search_index": "UUID",
+        "group_by_dir": "bool",
+        "mdf_storage_ep": "str",
+        "mdf_dataset_path": "str",
+        "dataset_mdata": "dict",
+        "validator_params": "dict",
+        "feedstock_https_domain": "str",
+        "_private_feedstock_auth_header": "str",
+        "curation_input": {
+            "curator_emails": "list of str, or False",
+            "curator_template": "str or False",
+            "curation_permissions": "list of str",
+            "curation_text": "str or False",
+            "author_email": "str or False",
+            "author_template": "str or False",
+            "email_sender": "str",
+            "send_credentials": [
+                {}
+            ]
+        },
+        "mdf_publish": "bool",
+        "citrine": "bool",
+        "mrr": "bool",
+        "_tokens": {
+            "User": "user's token"
+        }
+    }
+}
