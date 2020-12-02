@@ -4,5 +4,8 @@ from .default import DEFAULT
 from .dev import DEV
 from .globus_http_hosts import GLOBUS_HTTP_HOSTS
 from .groupings import GROUPINGS
-from .keys import KEYS
+try:
+    from .keys import KEYS
+except ModuleNotFoundError:
+    pass
 from .prod import PROD
