@@ -71,7 +71,16 @@ DEFAULT = {
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
     "EXTRACT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a"
 }
-with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
-    DEFAULT["MRR_TEMPLATE"] = f.read()
-with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_contributor.xml")) as f:
-    DEFAULT["MRR_CONTRIBUTOR"] = f.read()
+
+try:
+    with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_template.xml")) as f:
+        DEFAULT["MRR_TEMPLATE"] = f.read()
+except FileNotFoundError:
+    DEFAULT["MRR_TEMPLATE"] = None
+
+try:
+    with open(os.path.join(DEFAULT["SCHEMA_PATH"], "mrr_contributor.xml")) as f:
+        DEFAULT["MRR_CONTRIBUTOR"] = f.read()
+except FileNotFoundError:
+    DEFAULT["MRR_CONTRIBUTOR"] = None
+

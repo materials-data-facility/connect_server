@@ -20,6 +20,7 @@ setup(
         # "hyperspy>=1.4.1",  # Must be conda installed
         "jsonschema>=2.6.0",
         "mdf-toolbox>=0.5.0",
+        "globus_automate_client",
         "numpy>=1.16.0",
         "pandas>=0.23.0",
         "pif-ingestor>=1.1.1",
