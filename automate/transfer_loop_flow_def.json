@@ -1,0 +1,103 @@
+{
+    "title": "Transfer Loop Flow",
+    "description": "Perform multiple Globus Transfers",
+    "visible_to": [
+        "public"
+    ],
+    "runnable_by": [
+        "all_authenticated_users"
+    ],
+    "administered_by": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "definition": {
+        "StartAt": "MoveInputs",
+        "States": {
+            "MoveInputs": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/expression_eval",
+                "ActionScope": "https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-ff12ddbf9653/expression",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "expressions": [
+                        {
+                            "expression": "action_inputs",
+                            "arguments": {
+                                "action_inputs.$": "$.action_inputs"
+                            },
+                            "result_path": "action_inputs"
+                        }
+                    ]
+                },
+                "ResultPath": "$.inputs",
+                "WaitTime": 86400,
+                "Next": "CheckInputs"
+            },
+            "CheckInputs": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/expression_eval",
+                "ActionScope": "https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-ff12ddbf9653/expression",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "expressions": [
+                        {
+                            "expression": "action_inputs == action_inputs[0:0]",
+                            "arguments": {
+                                "action_inputs.$": "$.inputs.details.action_inputs"
+                            },
+                            "result_path": "loop_finished"
+                        }
+                    ]
+                },
+                "ResultPath": "$.loop_info",
+                "WaitTime": 86400,
+                "Next": "ChooseLoop"
+            },
+            "ChooseLoop": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.loop_info.details.loop_finished",
+                        "BooleanEquals": true,
+                        "Next": "FinishLoop"
+                    }
+                ],
+                "Default": "TransferAction"
+            },
+            "TransferAction": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/transfer/transfer",
+                "ActionScope": "https://auth.globus.org/scopes/actions.globus.org/transfer/transfer",
+                "ExceptionOnActionFailure": true,
+                "InputPath": "$.inputs.details.action_inputs[0]",
+                "ResultPath": "$.TransferResult",
+                "WaitTime": 86400,
+                "Next": "RemoveInput"
+            },
+            "RemoveInput": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/expression_eval",
+                "ActionScope": "https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-ff12ddbf9653/expression",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "expressions": [
+                        {
+                            "expression": "action_inputs[1:]",
+                            "arguments": {
+                                "action_inputs.$": "$.inputs.details.action_inputs"
+                            },
+                            "result_path": "action_inputs"
+                        }
+                    ]
+                },
+                "ResultPath": "$.inputs",
+                "WaitTime": 86400,
+                "Next": "CheckInputs"
+            },
+            "FinishLoop": {
+                "Type": "Pass",
+                "End": true
+            }
+        }
+    }
+}

@@ -1,0 +1,41 @@
+{
+    "name": "Transfer",
+    "action_inputs": [
+        {
+            "destination_endpoint_id": "ca7550ad-55a9-4762-b558-8f2b15049039",
+            "label": "flow_test_a",
+            "source_endpoint_id": "ce6d512a-b414-11e7-b0a7-22000a92523b",
+            "transfer_items": [
+                {
+                    "destination_path": "/home/ubuntu/data/deleteme/",
+                    "source_path": "/home/jgaff/Downloads/connect_demo/",
+                    "recursive": true
+                }
+            ]
+        },
+        {
+            "destination_endpoint_id": "82f1b5c6-6e9b-11e5-ba47-22000b92c6ec",
+            "label": "flow_test_b",
+            "source_endpoint_id": "ca7550ad-55a9-4762-b558-8f2b15049039",
+            "transfer_items": [
+                {
+                    "destination_path": "/test/deleteme_outcar",
+                    "source_path": "/home/ubuntu/data/deleteme/Ag2Al.hP2/OUTCAR",
+                    "recursive": false
+                }
+            ]
+        },
+        {
+            "destination_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
+            "label": "MDF Flow Test Transfer1",
+            "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
+            "transfer_items": [
+                {
+                    "destination_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
+                    "recursive": true,
+                    "source_path": "/MDF/mdf_connect/test_files/canonical_datasets/dft/"
+                }
+            ]
+        }
+    ]
+}
