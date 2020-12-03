@@ -1,9 +1,32 @@
 import json
+from typing import Mapping, Any, Optional, List
 
 import globus_automate_client
 import mdf_toolbox
 
 from mdf_connect_server.automate.flow_action import FlowAction
+
+
+class GlobusAutomateFlowDef:
+    def __init__(self,
+                 flow_definition: Mapping[str, Any],
+                 title: str,
+                 subtitle: Optional[str] = None,
+                 description: Optional[str] = None,
+                 keywords: List[str] = [],
+                 visible_to: List[str] = [],
+                 runnable_by: List[str] = [],
+                 administered_by: List[str] = [],
+                 input_schema: Optional[Mapping[str, Any]] = None):
+        self.flow_definition = flow_definition
+        self.title = title
+        self.subtitle = subtitle
+        self.description = description
+        self.keywords = keywords
+        self.visible_to = visible_to
+        self.runnable_by = runnable_by
+        self.administered_by = administered_by
+        self.input_schema = input_schema
 
 
 class GlobusAutomateFlow:

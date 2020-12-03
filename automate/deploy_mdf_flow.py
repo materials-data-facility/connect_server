@@ -1,27 +1,14 @@
 import json
 import os
 # Do this to get deal with the mdf_connect_server package init assumptions
-os.environ["FLASK_ENV"]='development'
+os.environ["FLASK_ENV"] = 'development'
 
+from minimus_mdf_flow import mdf_flow
 
-from mdf_connect_server.automate.globus_automate_flow import GlobusAutomateFlow
+from mdf_connect_server.automate.globus_automate_flow import GlobusAutomateFlow, GlobusAutomateFlowDef  # NOQA
 
 automate = GlobusAutomateFlow(native_app_id="417301b1-5101-456a-8a27-423e71a2ae26")
 
-# Required secret keys for deploying Flow (not in Flow definition JSON)
-from getpass import getpass
-smtp_user = getpass("SMTP Username: ")
-smtp_pass = getpass("SMTP Password: ")
-smtp_hostname = "email-smtp.us-east-1.amazonaws.com"
-smtp_send_credentials = [{
-    # "credential_method": "",
-    "credential_type": "smtp",
-    "credential_value": {
-        "hostname": smtp_hostname,
-        "username": smtp_user,
-        "password": smtp_pass
-    }
-}]
 
 # Schemas of different APs for reference
 transfer_input_schema = {
@@ -64,21 +51,21 @@ xtract_input_schema = {
     "grouper": "matio"  # options are 'directory/matio'
 }
 
-# Load MDF Flow definition from JSON
-with open("mdf_flow_def.json") as f:
-    mdf_flow_def = json.load(f)
-# Add required secret keys
-mdf_flow_def["definition"]["States"]["ExceptionState"]["Parameters"]["send_credentials"] = smtp_send_credentials
-mdf_flow_def["definition"]["States"]["NotifyUserEnd"]["Parameters"]["send_credentials"] = smtp_send_credentials
 
 # Load other configuration variables
 # Please set these in the configuration file, not in-line here
 with open("mdf_flow_config.json") as f:
     config = json.load(f)
-# Permissions (both groups are MDF Connect Admins, for now)
-mdf_flow_def["visible_to"] = config["flow_permissions"]
-mdf_flow_def["runnable_by"] = config["flow_permissions"]
-mdf_flow_def["administered_by"] = config["admin_permissions"]
+
+mdf_flow_def = GlobusAutomateFlowDef(
+    flow_definition=mdf_flow,
+    title='The Materials Data Facility Dataset Processing Flow',
+    description='Extract, process, and ingest a dataset into MDF Connect.',
+    visible_to=config["flow_permissions"],
+    runnable_by=config["flow_permissions"],
+    administered_by=config["flow_permissions"]
+)
+
 # Curation and Transfer Loop subflows (see MDF Utility Flows)
 mdf_flow_def["definition"]["States"]["UserTransfer"]["ActionUrl"] = config["transfer_loop_url"]
 mdf_flow_def["definition"]["States"]["UserTransfer"]["ActionScope"] = config["transfer_loop_scope"]
