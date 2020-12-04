@@ -20,5 +20,6 @@ src/*
 *.pytest_cache*
 
 prototypes/forge_sandbox.ipynb
+automate/Automate_Scratch_space.ipynb
 
 travis.tar

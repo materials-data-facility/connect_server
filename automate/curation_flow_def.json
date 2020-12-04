@@ -1,0 +1,144 @@
+{
+    "definition": {
+        "StartAt": "StartFlow",
+        "States": {
+            "StartFlow": {
+                "Type": "Pass",
+                "Next": "ChooseNotifyCurator"
+            },
+            "ChooseNotifyCurator": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.curator_emails",
+                        "BooleanEquals": false,
+                        "Next": "CurateData"
+                    }
+                ],
+                "Default": "SendCuratorEmails"
+            },
+            "SendCuratorEmails": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "body_template.=": null,
+                    "body_variables": {
+                        "landing_page.=": "'https://actions.globus.org/weboption/landing_page/' + `$._context.action_id`"
+                    },
+                    "destination.$": "$.curator_emails",
+                    "send_credentials.$": "$._private_send_credentials",
+                    "sender.$": "$.email_sender",
+                    "subject": "Curation Task Available",
+                    "__Private_Parameters": [
+                        "_private_send_credentials"
+                    ]
+                },
+                "ResultPath": "$.CuratorEmailsResult",
+                "WaitTime": 86400,
+                "Next": "CurateData"
+            },
+            "CurateData": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/weboption/wait_for_option",
+                "ActionScope": "https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-ff12ddbf9653/weboption_wait_for_option",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "landing_page": {
+                        "display_options_as": "button",
+                        "header_text.=": "'Curation for Submission ' + `$._context.action_id`",
+                        "preamble_text.=": null,
+                        "selectable_by.$": "$.curation_permissions",
+                        "include_text_input_form": true,
+                        "text_input_form_prompt": null,
+                        "url_suffix.$": "$._context.action_id"
+                    },
+                    "options": [
+                        {
+                            "completed_message": "You have accepted this submission. Thank you!",
+                            "description": "Accept this submission",
+                            "name": "accepted",
+                            "selectable_by.$": "$.curation_permissions",
+                            "url_suffix.=": "`$._context.action_id` + '_accept'"
+                        },
+                        {
+                            "completed_message": "You have rejected this submission. Thank you!",
+                            "description": "Reject this submission",
+                            "name": "rejected",
+                            "selectable_by.$": "$.curation_permissions",
+                            "url_suffix.=": "`$._context.action_id` + '_reject'"
+                        }
+                    ]
+                },
+                "ResultPath": "$.CurationResult",
+                "WaitTime": 86400,
+                "Next": "ChooseNotifyAuthor"
+            },
+            "ChooseNotifyAuthor": {
+                "Type": "Choice",
+                "Choices": [
+                    {
+                        "Variable": "$.author_email",
+                        "BooleanEquals": false,
+                        "Next": "FinishCuration"
+                    }
+                ],
+                "Default": "SendAuthorEmail"
+            },
+            "SendAuthorEmail": {
+                "Type": "Action",
+                "ActionUrl": "https://actions.globus.org/notification/notify",
+                "ActionScope": "https://auth.globus.org/scopes/5fac2e64-c734-4e6b-90ea-ff12ddbf9653/notification_notify",
+                "ExceptionOnActionFailure": true,
+                "Parameters": {
+                    "body_template.=": null,
+                    "body_variables": {
+                        "curation_task_id.$": "$._context.action_id",
+                        "decision.$": "$.CurationResult.details.name",
+                        "reason.$": "$.CurationResult.details.parameters.user_input"
+                    },
+                    "destination.$": "$.author_email",
+                    "send_credentials.$": "$._private_send_credentials",
+                    "sender.$": "$.email_sender",
+                    "subject": "Submission Curated",
+                    "__Private_Parameters": [
+                        "_private_send_credentials"
+                    ]
+                },
+                "ResultPath": "$.AuthorEmailResult",
+                "WaitTime": 86400,
+                "Next": "FinishCuration"
+            },
+            "FinishCuration": {
+                "Type": "Pass",
+                "End": true
+            }
+        }
+    },
+    "description": "Run a curation flow with email notification. This Flow emails a curator, creates a curation page accessible by the curator(s), and then emails the author the decision.",
+    "runnable_by": [
+        "all_authenticated_users"
+    ],
+    "administered_by": "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20",
+    "synchronous": false,
+    "title": "Curation with Notification",
+    "types": [
+        "Action",
+        "Choice"
+    ],
+    "visible_to": [
+        "public"
+    ],
+    "schema": {
+        "curator_emails": "list of str, or False",
+        "curator_template": "str or False",
+        "curation_permissions": "list of str",
+        "curation_text": "str or False",
+        "author_email": "str or False",
+        "author_template": "str or False",
+        "email_sender": "str",
+        "_private_send_credentials": [
+            {}
+        ]
+    }
+}

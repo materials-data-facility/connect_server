@@ -1,0 +1,17 @@
+{
+    "curator_emails": [
+        "jgaff@uchicago.edu"
+    ],
+    "curator_template": "Curator Template test: $landing_page",
+    "curation_text": "Here is some sample text. https://example.org",
+    "author_email": "jgaff@uchicago.edu",
+    "author_template": "This is a test email for '$curation_task_id': Decision: $decision, reason: $reason",
+    "email_sender": "materialsdatafacility@uchicago.edu",
+    "curation_permissions": [
+        "public"
+    ],
+    "_private_send_credentials": null,
+    "__Private_Parameters": [
+        "_private_send_credentials"
+    ]
+}

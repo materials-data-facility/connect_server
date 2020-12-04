@@ -1,0 +1,6 @@
+{
+    "curator_email_template": "A new submission is available for curation. Please visit this webpage to curate the submission: $landing_page (If this link leads to a 404 Not Found page after one minute, it has already been curated.)",
+    "author_email_template": "Your submission has been $decision by a curator for the following reason: $reason",
+    "preamble_text": "Please review the submission and accept or reject it using the buttons below. You must also provide a reason for your decision.",
+    "text_box_prompt": "Please enter a reason for your decision. This will be stored and provided to the submitter."
+}
