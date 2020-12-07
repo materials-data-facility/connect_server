@@ -10,12 +10,12 @@
             },
             "UserPermissions": {
                 "Type": "Pass",
-                "Parameters": {},
                 "ResultPath": "$.UserPermissionResult",
                 "Next": "UserTransfer"
             },
             "UserTransfer": {
                 "Type": "Action",
+                "RunAs": "MDFUser",
                 "ExceptionOnActionFailure": false,
                 "Parameters": {
                     "action_inputs.$": "$.user_transfer_inputs"
@@ -26,7 +26,6 @@
             },
             "UndoUserPermissions": {
                 "Type": "Pass",
-                "Parameters": {},
                 "ResultPath": "$.UndoUserPermissionResult",
                 "Next": "CheckUserTransfer"
             },
@@ -275,6 +274,7 @@
     "schema": {
         "source_id": "str",
         "mdf_portal_link": "str, must be complete link for after submission succeeds",
+        "mdfuser_id": "str",
         "user_transfer_sources": [
             {
                 "ep": "UUID",
@@ -287,7 +287,7 @@
                 "path": "str"
             }
         ],
-        "file_acls": [
+        "file_acl": [
             "FQ UUID"
         ],
         "dataset_acl": [
@@ -309,7 +309,7 @@
             "author_email": "str or False",
             "author_template": "str or False",
             "email_sender": "str",
-            "send_credentials": [
+            "_private_send_credentials": [
                 {}
             ]
         },
@@ -317,7 +317,7 @@
         "citrine": "bool",
         "mrr": "bool",
         "_tokens": {
-            "User": "user's token"
+            "MDFUser": "user's token"
         }
     }
 }

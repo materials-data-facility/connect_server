@@ -31,7 +31,7 @@
                     "sender.$": "$.email_sender",
                     "subject": "Curation Task Available",
                     "__Private_Parameters": [
-                        "_private_send_credentials"
+                        "send_credentials"
                     ]
                 },
                 "ResultPath": "$.CuratorEmailsResult",
@@ -102,7 +102,7 @@
                     "sender.$": "$.email_sender",
                     "subject": "Submission Curated",
                     "__Private_Parameters": [
-                        "_private_send_credentials"
+                        "send_credentials"
                     ]
                 },
                 "ResultPath": "$.AuthorEmailResult",
@@ -119,7 +119,9 @@
     "runnable_by": [
         "all_authenticated_users"
     ],
-    "administered_by": "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20",
+    "administered_by": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
     "synchronous": false,
     "title": "Curation with Notification",
     "types": [

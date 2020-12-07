@@ -7,8 +7,8 @@
     ],
     "transfer_loop_url": "https://flows.globus.org/flows/46d9c8db-1545-41eb-b306-a8e27f0c3284",
     "transfer_loop_scope": "https://auth.globus.org/scopes/46d9c8db-1545-41eb-b306-a8e27f0c3284/flow_46d9c8db_1545_41eb_b306_a8e27f0c3284_user",
-    "curation_subflow_url": "https://flows.globus.org/flows/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8",
-    "curation_subflow_scope": "https://auth.globus.org/scopes/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8/flow_be683de4_1ced_4bd8_9aa5_c7817dd1a9f8_user",
+    "curation_subflow_url": "https://flows.globus.org/flows/fc2bb42a-7bc6-4a86-aaf5-241cc321dbb7",
+    "curation_subflow_scope": "https://auth.globus.org/scopes/fc2bb42a-7bc6-4a86-aaf5-241cc321dbb7/flow_fc2bb42a_7bc6_4a86_aaf5_241cc321dbb7_user",
     "admin_email": "jgaff@uchicago.edu",
     "sender_email": "materialsdatafacility@gmail.com"
 }

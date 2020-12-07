@@ -3,39 +3,32 @@
     "user_transfer_inputs": [
         {
             "destination_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
-            "label": "MDF Flow Test Transfer1",
+            "label": "MDF Source Fail",
             "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
             "transfer_items": [
                 {
                     "destination_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
                     "recursive": true,
-                    "source_path": "/MDF/mdf_connect/test_files/canonical_datasets/dft/"
+                    "source_path": "/MDF/not_a_real_dir/power_of_imagination/"
                 }
             ]
         }
-    ],
-    "data_destinations": [],
-    "data_permissions": {},
+    ],  
+    "data_destinations": [], 
+    "data_permissions": {}, 
     "dataset_acl": [
-        "urn:globus:auth:identity:117e8833-68f5-4cb2-afb3-05b25db69be1"
-    ],
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],  
     "search_index": "aeccc263-f083-45f5-ab1d-08ee702b3384",
     "group_by_dir": false,
     "mdf_storage_ep": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
     "mdf_dataset_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
-    "dataset_mdata": {},
-    "validator_params": {},
+    "dataset_mdata": {}, 
+    "validator_params": {}, 
     "feedstock_https_domain": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
-    "curation_input": {
-        "curator_emails": "jgaff@uchicago.edu",
-        "curator_template": "Visit $landing_page to curate",
-        "curation_permissions": ["all_authenticated_users"],
-        "curation_text": "Curate this submission",
-        "author_email": "jgaff@uchicago.edu",
-        "author_template": "Your submission, $curation_task_id, has been $decision: $reason",
-        "__Private_Parameters": ["_private_send_credentials"]
-    },
+    "curation_input": false,
     "mdf_publish": false,
     "citrine": false,
     "mrr": false
 }
+

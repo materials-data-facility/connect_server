@@ -3,7 +3,7 @@
     "user_transfer_inputs": [
         {
             "destination_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
-            "label": "MDF Flow Test Transfer1",
+            "label": "MDF Flow Test",
             "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
             "transfer_items": [
                 {
@@ -13,18 +13,18 @@
                 }
             ]
         }
-    ],
-    "data_destinations": [],
-    "data_permissions": {},
+    ],  
+    "data_destinations": [], 
+    "data_permissions": {}, 
     "dataset_acl": [
-        "urn:globus:auth:identity:117e8833-68f5-4cb2-afb3-05b25db69be1"
-    ],
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],  
     "search_index": "aeccc263-f083-45f5-ab1d-08ee702b3384",
     "group_by_dir": false,
     "mdf_storage_ep": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
     "mdf_dataset_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
-    "dataset_mdata": {},
-    "validator_params": {},
+    "dataset_mdata": {}, 
+    "validator_params": {}, 
     "feedstock_https_domain": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
     "curation_input": {
         "curator_emails": "jgaff@uchicago.edu",
