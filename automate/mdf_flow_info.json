@@ -1,5 +1,5 @@
 {
-    "flow_id": "16fd7acc-f178-4960-9236-585a575044b0",
-    "flow_scope": "https://auth.globus.org/scopes/16fd7acc-f178-4960-9236-585a575044b0/flow_16fd7acc_f178_4960_9236_585a575044b0_user",
-    "MDFUser_scope": "https://auth.globus.org/scopes/16fd7acc-f178-4960-9236-585a575044b0/flow_16fd7acc_f178_4960_9236_585a575044b0_mdfuser"
+    "flow_id": "60856f8d-8382-4466-bdff-1f49bf31dd8d",
+    "flow_scope": "https://auth.globus.org/scopes/60856f8d-8382-4466-bdff-1f49bf31dd8d/flow_60856f8d_8382_4466_bdff_1f49bf31dd8d_user",
+    "MDFUser_scope": "https://auth.globus.org/scopes/60856f8d-8382-4466-bdff-1f49bf31dd8d/flow_60856f8d_8382_4466_bdff_1f49bf31dd8d_mdfuser"
 }

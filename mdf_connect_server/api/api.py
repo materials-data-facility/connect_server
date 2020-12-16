@@ -7,6 +7,8 @@ from tempfile import NamedTemporaryFile
 import urllib
 
 from flask import Flask, jsonify, redirect, request
+import globus_automate_client
+from globus_automate_client.flows_client import PROD_FLOWS_BASE_URL
 from globus_nexus_client import NexusClient
 import globus_sdk
 import jsonschema
@@ -50,6 +52,23 @@ def disable_connect():
                   "We apologize for the inconvenience.").format(expected_back)
     }), 503)
 '''
+
+
+def mdf_auth(flow_url, flow_scope, client_id):
+    """Mandatory callback function to use a FlowsClient with a custom authorizer.
+    The function signature cannot be modified.
+
+    Arguments:
+        flow_url (str): The Flow's URL. Not used.
+        flow_scope (str): The Flow's scope.
+        client_id (str): A client ID. Not used.
+
+    Returns:
+        ClientCredentialsAuthorizer: A valid CCA for the given scope, using
+                the MDF identity's credentials.
+    """
+    return mdf_toolbox.confidential_login(services=flow_scope, client_id=CONFIG["API_CLIENT_ID"],
+                                          client_secret=CONFIG["API_CLIENT_SECRET"])[flow_scope]
 
 
 # Redirect root requests and GETs to the web form
@@ -467,29 +486,8 @@ def accept_submission():
         else:
             sub_conf["storage_acl"] = sub_conf["acl"]
 
-    status_info = {
-        "source_id": source_id,
-        "submission_time": datetime.utcnow().isoformat("T") + "Z",
-        "submitter": name,
-        "title": sub_title,
-        "user_id": user_id,
-        "user_email": email,
-        "acl": sub_conf["acl"],
-        "test": sub_conf["test"],
-        "original_submission": json.dumps(md_copy)
-        }
-    try:
-        status_res = utils.create_status(status_info)
-    except Exception as e:
-        logger.error("Status creation exception: {}".format(e))
-        return (jsonify({
-            "success": False,
-            "error": repr(e)
-            }), 500)
-    if not status_res["success"]:
-        logger.error("Status creation error: {}".format(status_res["error"]))
-        return (jsonify(status_res), 500)
-
+    # Pre-Automate code (to delete)
+    '''
     try:
         submission_args = {
             "metadata": metadata,
@@ -566,6 +564,82 @@ def accept_submission():
                 logger.info("Start email sent")
             else:
                 logger.error("Failed sending start email: {}".format(act_status.data))
+    '''
+    # Create FlowsClient to call Flow
+    try:
+        mdf_flows_client = globus_automate_client.FlowsClient(CONFIG["API_CLIENT_ID"],
+                                                              service="Globus Automate",
+                                                              base_url=PROD_FLOWS_BASE_URL,
+                                                              get_authorizer_callback=mdf_auth)
+    except Exception as e:
+        logger.error("Flow login error: {}".format(repr(e)))
+        return (jsonify({
+            "success": False,
+            "error": "Internal authentication error"
+        }), 500)
+    # Create Flow input
+    # It would be ideal to change sub_conf to hold the Flow input directly,
+    #   but for historical (and time) reasons this is not done.
+    flow_input = {
+        "source_id": source_id,
+        "mdf_portal_link": "",  # TODO
+        "mdfuser_id": user_id,
+        "file_acl": sub_conf["storage_acl"],
+        "dataset_acl": sub_conf["dataset_acl"],
+        "search_index": sub_conf["index"],
+        "mdf_storage_ep": CONFIG["BACKUP_EP"],
+        "mdf_dataset_path": os.path.join(CONFIG["BACKUP_PATH"], source_id),
+        "dataset_mdata": metadata,
+        "feedstock_https_domain": "",  # TODO
+        "_private_feedstock_auth_header": "",  # TODO
+        "curation_input": False,  # TODO
+        "mdf_publish": sub_conf["services"].get("mdf_publish", False),
+        "citrine": sub_conf["services"].get("citrine", False),
+        "mrr": sub_conf["services"].get("mrr", False),
+        "user_transfer_sources": [{}],  # TODO
+        "data_destinations": False,  # TODO
+        "extraction_config": metadata.pop("extraction_config", {}),  # TODO
+        "validator_params": {}  # TODO
+    }
+
+    # Start new Flow
+    try:
+        flow_res = mdf_flows_client.run_flow(CONFIG["AUTOMATE_FLOW_ID"],
+                                             CONFIG["AUTOMATE_FLOW_SCOPE"], flow_input)
+    except Exception as e:
+        logger.error("Flow start error: {}".format(repr(e)))
+        return (jsonify({
+            "success": False,
+            # TODO: Determine if a better error can be shown to the user
+            #       (some Automate responses output private keys)
+            "error": "Unable to start MDF Flow, please contact an MDF administrator."
+        }), 500)
+
+    status_info = {
+        "source_id": source_id,
+        "submission_time": datetime.utcnow().isoformat("T") + "Z",
+        "submitter": name,
+        "title": sub_title,
+        "user_id": user_id,
+        "user_email": email,
+        "acl": sub_conf["acl"],
+        "test": sub_conf["test"],
+        "original_submission": json.dumps(md_copy),
+        "flow_id": CONFIG["AUTOMATE_FLOW_ID"],
+        "flow_scope": CONFIG["AUTOMATE_FLOW_SCOPE"],
+        "flow_action_id": flow_res["action_id"]
+        }
+    try:
+        status_res = utils.create_status(status_info)
+    except Exception as e:
+        logger.error("Status creation exception: {}".format(e))
+        return (jsonify({
+            "success": False,
+            "error": repr(e)
+            }), 500)
+    if not status_res["success"]:
+        logger.error("Status creation error: {}".format(status_res["error"]))
+        return (jsonify(status_res), 500)
 
     logger.info("Extract submission '{}' accepted".format(source_id))
     return (jsonify({
@@ -841,10 +915,43 @@ def get_status(source_id):
             "error": "Submission {} not found, or not available".format(source_id)
             }), 404)
     else:
+        # Fetch status from Automate
+        # TODO: Sanitize this status! It's verbose and Automate has a nasty habit of
+        #       including private keys that are supposed to be hidden.
+
+        # Previous, non-Automate code
+        '''
         return (jsonify({
             "success": True,
             "status": utils.translate_status(raw_status["status"])
             }), 200)
+        '''
+        try:
+            mdf_flows_client = globus_automate_client.FlowsClient(CONFIG["API_CLIENT_ID"],
+                                                                  service="Globus Automate",
+                                                                  base_url=PROD_FLOWS_BASE_URL,
+                                                                  get_authorizer_callback=mdf_auth)
+        except Exception as e:
+            logger.error("Flow login error: {}".format(repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Internal authentication error"
+            }), 500)
+        try:
+            flow_status = mdf_flows_client.flow_action_status(
+                                            raw_status["status"]["flow_id"],
+                                            raw_status["status"]["flow_scope"],
+                                            raw_status["status"]["flow_action_id"]).data
+        except Exception as e:
+            logger.error("Flow status fetch error: {}".format(repr(e)))
+            return (jsonify({
+                "success": False,
+                "error": "Error fetching status of Flow"
+            }), 500)
+        return (jsonify({
+            "success": True,
+            "status": flow_status
+        }), 200)
 
 
 @app.route("/submissions", methods=["GET", "POST"])
