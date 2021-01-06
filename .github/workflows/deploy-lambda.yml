@@ -63,6 +63,8 @@ jobs:
     - name: Upload Submit Dataset Function
       run: |
          cp aws/submit-dataset.py ./lambda_function.py
+         cp aws/connect_submission.json .
          zip submit-dataset.zip ./lambda_function.py
+         zip submit-dataset.zip ./connect_submission.json
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip
