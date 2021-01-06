@@ -59,3 +59,10 @@ jobs:
          zip globus_auth.zip ./lambda_function.py
          rm ./lambda_function.py
          aws lambda update-function-code --function-name globus-auth --zip-file fileb://./globus_auth.zip
+
+    - name: Upload Submit Dataset Function
+      run: |
+         cp aws/submit-dataset.py ./lambda_function.py
+         zip submit-dataset.zip ./lambda_function.py
+         rm ./lambda_function.py
+         aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip
