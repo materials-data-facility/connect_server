@@ -52,3 +52,9 @@ jobs:
          #zip files into current directory
          zip -r globusLayer.zip ./python
          aws lambda publish-layer-version --layer-name GlobusLayer --zip-file fileb://./globusLayer.zip
+
+    - name: Upload Globus Auth Function
+      run: |
+         cd aws
+         zip ../globus_auth.zip ./globus-auth.py
+         aws lambda update-function-code --function-name globus-auth --zip-file fileb://../globus_auth.zip
