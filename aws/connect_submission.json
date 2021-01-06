@@ -1,0 +1,281 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "MOC Submission",
+  "description": "Schema for a submission to MDF Connect.",
+  "type": "object",
+  "properties": {
+    "dc": {
+      "$ref": "dc.json#/properties/dc"
+    },
+    "mdf": {
+      "type": "object",
+      "description": "Administrative metadata",
+      "properties": {
+        "acl": {
+          "type": "array",
+          "description": "The UUIDs of Users or Groups allowed to view the full dataset, or the special (and default) value 'public'.",
+          "items": {
+            "type": "string",
+            "description": "UUID for Globus User or Group."
+          }
+        },
+        "source_name": {
+          "type": "string",
+          "description": "A unique program-friendly name for this dataset (will be generated from the title if not specified)."
+        },
+        "organizations": {
+          "type": "array",
+          "description": "The organizations responsible for dataset creation. Adding organizations here will apply any organizational rules and requirements to the dataset.",
+          "items": {
+            "type": "string",
+            "description": "Name of an organization (e.g., NIST)."
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "mrr": {
+      "$ref": "mrr.json#/properties/mrr"
+    },
+    "custom": {
+      "$ref": "custom.json#/properties/custom"
+    },
+    "custom_desc": {
+        "$ref": "custom.json#/properties/custom_desc"
+    },
+    "projects": {
+        "$ref": "projects.json#/properties/projects"
+    },
+    "data_sources": {
+      "type": "array",
+      "description": "The location(s) of the data, including protocol.",
+      "items": {
+        "type": "string",
+        "format": "uri",
+        "description": "One data location, with protocol (e.g. globus://ep_id/path/data.txt)"
+      }
+    },
+    "data_destinations": {
+        "type": "array",
+        "description": "Data locations (Globus endpoints) to send the raw data to.",
+        "items": {
+            "type": "string",
+            "description": "One Globus link."
+        }
+    },
+    "external_uri": {
+        "type": "string",
+        "format": "uri",
+        "description": "The external landing page for the dataset (e.g. an external repository's landing page)."
+    },
+    "index": {
+      "type": "object",
+      "description": "Special instructions used by MDF Connect to index the data.",
+      "properties": {
+        "json": {
+          "type": "object",
+          "description": "JSON extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: data.fields"
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null. Default no values.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        },
+        "csv": {
+          "type": "object",
+          "description": "CSV extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: data.fields"
+            },
+            "delimiter": {
+              "type": "string",
+              "description": "The delimiter for column separation. Default comma."
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null. Default blank and space.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        },
+        "yaml": {
+          "type": "object",
+          "description": "YAML extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: data.fields"
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null. Default no values.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        },
+        "xml": {
+          "type": "object",
+          "description": "XML extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: data.fields"
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null. Default no values.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        },
+        "excel": {
+          "type": "object",
+          "description": "MS Excel file extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: data.fields"
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        },
+        "filename": {
+          "type": "object",
+          "description": "Filename extraction parameters.",
+          "properties": {
+            "mapping": {
+              "type": "object",
+              "description": "The mapping of mdf.fields: regex_match"
+            },
+            "na_values": {
+              "type": "array",
+              "description": "Values to treat as None/null. Default no values.",
+              "items": {
+                "type": "string",
+                "description": "One None/null value."
+              },
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mapping"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "extraction_config": {
+        "type": "object",
+        "description": "Advanced extraction configuration, including file grouping configuration.",
+        "properties": {
+            "group_by_dir": {
+                "type": "boolean",
+                "description": "When true, will group all files in a directory together. When false, will group according to known datatypes. Default false."
+            },
+            "known_formats": {
+                "type": "object",
+                "description": "Known grouping patterns. Advanced users only."
+            }
+        },
+        "additionalProperties": false
+    },
+    "services": {
+      "$ref": "services.json#/properties/services"
+    },
+    "tags": {
+        "type": "array",
+        "description": "Tags or keywords describing the dataset.",
+        "items": {
+            "type": "string",
+            "description": "One tag or keyword."
+        },
+        "minItems": 1
+    },
+    "update": {
+        "type": "boolean",
+        "description": "Must be true for dataset updates, and false for new datasets. Serves as a check against accidental dataset overwriting."
+    },
+    "incremental_update": {
+        "type": "string",
+        "description": "Set to a source_id previously submitted to perform an incremental update of that source_id, changing only the other metadata provided in this submission."
+    },
+    "curation": {
+        "type": "boolean",
+        "description": "When true, trigger curation for this submission. This is normally set by an organization."
+    },
+    "dataset_acl": {
+      "type": "array",
+      "description": "The UUIDs of Users or Groups allowed to view only the dataset entry, or the special (and default) value 'public'. This does not grant permission to view records or files in the dataset, only the dataset entry itself.",
+      "items": {
+        "type": "string",
+        "description": "UUID for Globus User or Group."
+      }
+    },
+    "test": {
+      "type": "boolean",
+      "description": "When true, will ingest into the test index and collection."
+    },
+    "no_extract": {
+        "type": "boolean",
+        "description": "When true, disables metadata extraction. Only for special cases."
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "dc",
+    "data_sources"
+  ]
+}
