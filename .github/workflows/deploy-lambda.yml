@@ -58,4 +58,4 @@ jobs:
          cp aws/globus-auth.py ./lambda_function.py
          zip globus_auth.zip ./lambda_function.py
          rm ./lambda_function.py
-         aws lambda update-function-code --function-name globus-auth --zip-file fileb://../globus_auth.zip
+         aws lambda update-function-code --function-name globus-auth --zip-file fileb://./globus_auth.zip
