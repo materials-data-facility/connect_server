@@ -1,0 +1,43 @@
+name: CI
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the master branch
+on:
+  #when there is a push to the master
+  push:
+    branches: [ serverless ]
+  #when there is a pull to the master
+  pull_request:
+    branches: [ serverless ]
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    #does this mean that the files in my github repo are accessible by this YAML file?
+    - uses: actions/checkout@v2
+
+    #installs a version of python, but I need this if deploying to a severless Python Lambda?
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.7'
+
+    #credentials to connect to AWS
+    - name: Configure AWS credentials from Production account
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+        profile_name: default
+        project_name: MDFConnect
+        runtime: python3.7
+#        s3_bucket: <your bucket name>
