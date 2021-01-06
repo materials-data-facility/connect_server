@@ -42,7 +42,7 @@ jobs:
         runtime: python3.7
 #        s3_bucket: <your bucket name>
 
-    - name: Run a multi-line script
+    - name: Create dependency layer
       run: |
          python -m pip install --upgrade pip
          mkdir python
@@ -50,5 +50,5 @@ jobs:
          pip3 install -r aws/requirements.txt -t ./python
 
          #zip files into current directory
-         zip -r test-dep-dev.zip ./python
-         unzip -l  test-dep-dev.zip
+         zip -r globusLayer.zip ./python
+         aws lambda publish-layer-version --layer-name GlobusLayer --zip-file fileb://./globusLayer.zip
