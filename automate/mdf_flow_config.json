@@ -5,8 +5,7 @@
     "admin_permissions": [
         "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
     ],
-    "transfer_loop_url": "https://flows.globus.org/flows/46d9c8db-1545-41eb-b306-a8e27f0c3284",
-    "transfer_loop_scope": "https://auth.globus.org/scopes/46d9c8db-1545-41eb-b306-a8e27f0c3284/flow_46d9c8db_1545_41eb_b306_a8e27f0c3284_user",
+
     "curation_subflow_url": "https://flows.globus.org/flows/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8",
     "curation_subflow_scope": "https://auth.globus.org/scopes/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8/flow_be683de4_1ced_4bd8_9aa5_c7817dd1a9f8_user",
     "admin_email": "jgaff@uchicago.edu",
