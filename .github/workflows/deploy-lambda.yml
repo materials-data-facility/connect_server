@@ -24,7 +24,15 @@ jobs:
     #does this mean that the files in my github repo are accessible by this YAML file?
     - uses: actions/checkout@v2
 
-    #installs a version of python, but I need this if deploying to a severless Python Lambda?
+    # Check out the schema repo to package up the JSON schemae with function
+    - name: Checkout schema repo
+      uses: actions/checkout@v2
+      with:
+        repository: materials-data-facility/data-schemas
+        path: schemas
+
+
+      #installs a version of python, but I need this if deploying to a severless Python Lambda?
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
@@ -63,8 +71,7 @@ jobs:
     - name: Upload Submit Dataset Function
       run: |
          cp aws/submit-dataset.py ./lambda_function.py
-         cp aws/connect_submission.json .
          zip submit-dataset.zip ./lambda_function.py
-         zip submit-dataset.zip ./connect_submission.json
+         zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip
