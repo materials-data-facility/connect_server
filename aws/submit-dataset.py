@@ -1,8 +1,19 @@
 import json
-
+import os
+import jsonschema
 
 class ClientException(Exception):
     pass
+
+def validate_submission_schema(metadata):
+    schema_path = "./schemas/schemas"
+    with open(os.path.join(schema_path, "connect_submission.json")) as schema_file:
+        schema = json.load(schema_file)
+        resolver = jsonschema.RefResolver(base_uri="file://{}/".format(schema_path),referrer=schema)
+        try:
+            jsonschema.validate(metadata, schema, resolver=resolver)
+        except jsonschema.ValidationError as e:
+            raise ClientException("Invalid submission: " + str(e).split("\n")[0])
 
 
 def lambda_handler(event, context):
@@ -56,8 +67,7 @@ def lambda_handler(event, context):
             metadata["dc"]["subjects"].append({
                 "subject": tag
             })
-
+    validate_submission_schema(metadata)
     return {
         'source_id': '123-44-55-66'
     }
-
