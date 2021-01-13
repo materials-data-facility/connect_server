@@ -16,23 +16,55 @@ def validate_submission_schema(metadata):
                                           referrer=schema)
         try:
             jsonschema.validate(metadata, schema, resolver=resolver)
+            return None
         except jsonschema.ValidationError as e:
-            raise ClientException("Invalid submission: " + str(e).split("\n")[0])
+            return {
+                'statusCode': 400,
+                'body': json.dumps(
+                    {
+                        "success": False,
+                        "error": "Invalid submission: " + str(e).split("\n")[0]
+                    })
+            }
 
 
 def lambda_handler(event, context):
-    metadata = event['body-json']
+    print(event)
+    name = event['requestContext']['authorizer']['name']
+    try:
+        metadata = json.loads(event['body'], )
+    except Exception as e:
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "Submission must be valid JSON"
+                })
+        }
 
     if not metadata:
-        raise ClientException(
-            "{\"failure\":true, \"errorMessage\": \"POST data empty or not JSON\"")
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "POST data empty or not JSON"
+                })
+        }
 
     # NaN, Infinity, and -Infinity cause issues in Search, and have no use in MDF
     try:
         json.dumps(metadata, allow_nan=False)
     except Exception as e:
-        raise ClientException(
-            "{\"failure\":true, \"errorMessage\": \"Submission must be valid JSON\"")
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "Submission may not contain NaN or Infinity"
+                })
+        }
 
     # If this is an incremental update, fetch the original submission
     if metadata.get("incremental_update"):
@@ -71,7 +103,34 @@ def lambda_handler(event, context):
             metadata["dc"]["subjects"].append({
                 "subject": tag
             })
-    validate_submission_schema(metadata)
+
+    validate_err = validate_submission_schema(metadata)
+    if validate_err:
+        print("---->", validate_err)
+        return validate_err
+
+    # Pull out configuration fields from metadata into sub_conf, set defaults where appropriate
+    sub_conf = {
+        "data_sources": metadata.pop("data_sources"),
+        "data_destinations": metadata.pop("data_destinations", []),
+        "curation": metadata.pop("curation", False),
+        "test": metadata.pop("test", False),
+        "update": metadata.pop("update", False),
+        "acl": metadata.get("mdf", {}).get("acl", ["public"]),
+        "dataset_acl": metadata.pop("dataset_acl", []),
+        "storage_acl": metadata.get("mdf", {}).get("acl", ["public"]),
+        "index": metadata.pop("index", {}),
+        "services": metadata.pop("services", {}),
+        "extraction_config": metadata.pop("extraction_config", {}),
+        "no_extract": metadata.pop("no_extract", False),  # Pass-through flag
+        "submitter": name
+    }
+
     return {
-        'source_id': '123-44-55-66'
+        'statusCode': 200,
+        'body': json.dumps(
+            {
+                'source_id': '123-44-55-66',
+                'name': name
+            })
     }

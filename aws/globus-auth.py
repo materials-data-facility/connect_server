@@ -16,11 +16,10 @@ def get_secret():
     get_secret_value_response = client.get_secret_value(
         SecretId=secret_name
     )
-    print("shhh, ", get_secret_value_response)
     return eval(get_secret_value_response['SecretString'])
 
 
-def generate_policy(principalId, effect, resource, message=None):
+def generate_policy(principalId, effect, resource, message="", name=None, identities=[]):
     authResponse = {}
     authResponse['principalId'] = principalId
     if effect and resource:
@@ -34,8 +33,9 @@ def generate_policy(principalId, effect, resource, message=None):
         ]
     authResponse['policyDocument'] = policyDocument
     authResponse['context'] = {
-        'message': message
+        'name': name
     }
+    print("AuthResponse", authResponse)
     return authResponse
 
 
@@ -56,6 +56,8 @@ def lambda_handler(event, context):
         return generate_policy(None, 'Deny', event['methodArn'],
                                message='User account not active')
 
-    return generate_policy(auth_res['username'], 'Allow', event['methodArn'])
+    return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
+        name=auth_res["name"],
+        identities = auth_res["identities_set"])
 
 
