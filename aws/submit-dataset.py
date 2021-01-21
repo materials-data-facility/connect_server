@@ -2,11 +2,18 @@ import json
 import os
 import jsonschema
 import source_id_manager
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ClientException(Exception):
     pass
 
+
+CONFIG = {
+    "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+}
 
 def validate_submission_schema(metadata):
     schema_path = "./schemas/schemas"
@@ -33,7 +40,8 @@ def lambda_handler(event, context):
     print(event)
     name = event['requestContext']['authorizer']['name']
     identities = event['requestContext']['authorizer']['identities']
-    print("name ",name, "identities", identities)
+    print("name ", name, "identities", identities)
+    access_token = event['headers']['Authorization']
 
     try:
         metadata = json.loads(event['body'], )
@@ -142,6 +150,7 @@ def lambda_handler(event, context):
             existing_source_name or sub_title, author_name,
             test=sub_conf["test"],
             sanitize_only=bool(existing_source_name))
+        print("SourceID Info ", source_id_info)
     except Exception as e:
         return {
             'statusCode': 400,
@@ -201,11 +210,102 @@ def lambda_handler(event, context):
         }
 
     print("Source ID", source_id_info)
+
+    # Set appropriate metadata
+    if not metadata.get("mdf"):
+        metadata["mdf"] = {}
+    metadata["mdf"]["source_id"] = source_id
+    metadata["mdf"]["source_name"] = source_name
+    metadata["mdf"]["version"] = source_id_info["search_version"]
+
+    # Fetch custom block descriptors, cast values to str, turn _description => _desc
+    new_custom = {}
+    for key, val in metadata.pop("custom", {}).items():
+        if key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key] = str(val)
+    for key, val in metadata.pop("custom_desc", {}).items():
+        if key.endswith("_desc"):
+            new_custom[key] = str(val)
+        elif key.endswith("_description"):
+            new_custom[key[:-len("ription")]] = str(val)
+        else:
+            new_custom[key + "_desc"] = str(val)
+    if new_custom:
+        metadata["custom"] = new_custom
+
+    # Get organization rules to apply
+    if metadata["mdf"].get("organizations"):
+        try:
+            metadata["mdf"]["organizations"], sub_conf = \
+                source_id_manager.fetch_org_rules(metadata["mdf"]["organizations"], sub_conf)
+        except ValueError as e:
+            logger.info("Invalid organizations: {}".format(metadata["mdf"]["organizations"]))
+            return {
+                'statusCode': 400,
+                'body': json.dumps(
+                    {
+                        "success": False,
+                        "error": str(e)
+                    })
+            }
+
+        # Pull out DC fields from org metadata
+        # rightsList (license)
+        if sub_conf.get("rightsList"):
+            if not metadata["dc"].get("rightsList"):
+                metadata["dc"]["rightsList"] = []
+            metadata["dc"]["rightsList"] += sub_conf.pop("rightsList")
+        # fundingReferences
+        if sub_conf.get("fundingReferences"):
+            if not metadata["dc"].get("fundingReferences"):
+                metadata["dc"]["fundingReferences"] = []
+            metadata["dc"]["fundingReferences"] += sub_conf.pop("fundingReferences")
+
+    # Check that user is in appropriate org group(s), if applicable
+    if sub_conf.get("permission_groups"):
+        for group_uuid in sub_conf["permission_groups"]:
+            try:
+                group_res = source_id_manager.authenticate_token(access_token, group_uuid)
+            except Exception as e:
+                logger.error("Authentication failure: {}".format(repr(e)))
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps(
+                        {
+                            "success": False,
+                            "error": "Authentication failed"
+                        })
+                }
+
+            if not group_res["success"]:
+                error_code = group_res.pop("error_code")
+                return {
+                    'statusCode': error_code,
+                    'body': json.dumps(group_res)
+                }
+
+
+    # If ACL includes "public", no other entries needed
+    if "public" in sub_conf["acl"]:
+        sub_conf["acl"] = ["public"]
+    # Otherwise, make sure Connect admins have permission, also deduplicate
+    else:
+        sub_conf["acl"].append(CONFIG["ADMIN_GROUP_ID"])
+        sub_conf["acl"] = list(set(sub_conf["acl"]))
+    # Set correct ACL in metadata
+    if "public" in sub_conf["dataset_acl"] or "public" in sub_conf["acl"]:
+        sub_conf["dataset_acl"] = ["public"]
+    else:
+        sub_conf["dataset_acl"] = list(set(sub_conf["dataset_acl"] + sub_conf["acl"]))
+
+    metadata["mdf"]["acl"] = sub_conf["dataset_acl"]
+
     return {
-        'statusCode': 200,
+        'statusCode': 202,
         'body': json.dumps(
             {
-                'source_id': '123-44-55-66',
-                'name': name
+                'source_id': source_id,
             })
     }

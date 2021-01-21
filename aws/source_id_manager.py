@@ -1,3 +1,8 @@
+import json
+import os
+from copy import deepcopy
+
+import globus_sdk
 import mdf_toolbox
 import boto3
 import re
@@ -408,7 +413,296 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         logger.error("Unable to scan status database for '{}': '{}'"
                      .format(source_name, scan_res["error"]))
         raise ValueError("Dataset status has error")
-    user_ids = set([sub["user_id"] for sub in scan_res["results"]])
 
     print("Scan res", scan_res)
+    user_ids = set([sub["user_id"] for sub in scan_res["results"]])
+    # Get most recent previous source_id and info
+    old_search_version = 0
+    old_sub_version = 0
+    for old_sid in scan_res["results"]:
+        old_sid_info = split_source_id(old_sid["source_id"])
+        # If found more recent Search version, save both Search and sub versions
+        # (sub version resets on new Search version)
+        if old_sid_info["search_version"] > old_search_version:
+            old_search_version = old_sid_info["search_version"]
+            old_sub_version = old_sid_info["submission_version"]
+        # If found more recent sub version, just save sub version
+        # Search version must be the same, though
+        elif (old_sid_info["search_version"] == old_search_version
+              and old_sid_info["submission_version"] > old_sub_version):
+            old_sub_version = old_sid_info["submission_version"]
 
+    # If new Search version > old Search version, sub version should reset
+    if search_version > old_search_version:
+        sub_version = 1
+    # If they're the same, sub version should increment
+    elif search_version == old_search_version:
+        sub_version = old_sub_version + 1
+    # Old > new is an error
+    else:
+        logger.error("Old Search version '{}' > new '{}': {}"
+                     .format(old_search_version, search_version, source_name))
+        raise ValueError("Dataset entry in Search has error")
+
+    source_id = "{}_v{}.{}".format(source_name, search_version, sub_version)
+
+    return {
+        "source_id": source_id,
+        "source_name": source_name,
+        "search_version": search_version,
+        "submission_version": sub_version,
+        "user_id_list": user_ids
+    }
+
+
+def authenticate_token(token, groups, require_all=False):
+    """Authenticate a token.
+    Arguments:
+        token (str): The token to authenticate with.
+        groups (str or list of str): The Globus Group UUIDs to require the user belong to.
+                The special value "public" is also allowed to always pass this check.
+        require_all (bool): When True, the user must be in all groups to succeed the
+                group check.
+                When False, the user must be in at least one group to succeed.
+                Default False.
+
+    Returns:
+        dict: Token and user info.
+    """
+    if not token:
+        return {
+            "success": False,
+            "error": "Not Authenticated",
+            "error_code": 401
+        }
+    try:
+        token = token.replace("Bearer ", "")
+        globus_secrets = get_secret()
+        auth_client = globus_sdk.ConfidentialAppAuthClient(globus_secrets['API_CLIENT_ID'],
+                                                           globus_secrets['API_CLIENT_SECRET'])
+        auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
+    except Exception as e:
+        logger.error("Error authenticating token: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Authentication could not be completed",
+            "error_code": 500
+        }
+    if not auth_res:
+        return {
+            "success": False,
+            "error": "Token could not be validated",
+            "error_code": 401
+        }
+    # Check that token is active
+    if not auth_res["active"]:
+        return {
+            "success": False,
+            "error": "Token expired",
+            "error_code": 403
+        }
+    # Check correct scope and audience
+    if (CONFIG["API_SCOPE"] not in auth_res["scope"]
+            or CONFIG["API_SCOPE_ID"] not in auth_res["aud"]):
+        return {
+            "success": False,
+            "error": "Not authorized to MDF Connect scope",
+            "error_code": 401
+        }
+    # Finally, verify user is in appropriate group(s)
+    if isinstance(groups, str):
+        groups = [groups]
+
+    try:
+        nexus = mdf_toolbox.confidential_login(services=['groups'],
+                                                       client_id=globus_secrets[
+                                                           'API_CLIENT_ID'],
+                                                       client_secret=globus_secrets[
+                                                           'API_CLIENT_SECRET'])['groups']
+
+    except Exception as e:
+        logger.error("NexusClient creation error: {}".format(repr(e)))
+        return {
+            "success": False,
+            "error": "Unable to connect to Globus Groups",
+            "error_code": 500
+        }
+
+    # Globus Groups does not take UUIDs, only usernames, but Globus Auth uses UUIDs
+    # for identity-aware applications. Therefore, for Connect to be identity-aware,
+    # we must convert the UUIDs into usernames.
+    # However, the GlobusID "username" is not the email-like address, just the prefix.
+    user_usernames = set([iden["username"].replace("@globusid.org", "")
+                          for iden in auth_client.get_identities(
+            ids=auth_res["identities_set"])["identities"]])
+    auth_succeeded = False
+    missing_groups = []  # Used for require_all compliance
+    group_roles = []
+    for grp in groups:
+        # public always succeeds
+        if grp.lower() == "public":
+            group_roles.append("member")
+            auth_succeeded = True
+        else:
+            # Translate convert and admin groups
+            if grp.lower() == "extract" or grp.lower() == "convert":
+                grp = CONFIG["EXTRACT_GROUP_ID"]
+            elif grp.lower() == "admin":
+                grp = CONFIG["ADMIN_GROUP_ID"]
+            # Group membership checks - each identity with each group
+            for user_identifier in user_usernames:
+                try:
+                    member_info = nexus.get_group_membership(grp, user_identifier)
+                    assert member_info["status"] == "active"
+                    group_roles.append(member_info["role"])
+                # Not in group or not active
+                except (globus_sdk.GlobusAPIError, AssertionError):
+                    # Log failed groups
+                    missing_groups.append(grp)
+                # Error getting membership
+                except Exception as e:
+                    logger.error("NexusClient fetch error: {}".format(repr(e)))
+                    return {
+                        "success": False,
+                        "error": "Unable to connect to Globus Groups",
+                        "error_code": 500
+                    }
+                else:
+                    auth_succeeded = True
+    # If must be in all groups, fail out if any groups missing
+    if require_all and missing_groups:
+        logger.debug("Auth rejected: require_all set, user '{}' not in '{}'"
+                     .format(user_usernames, missing_groups))
+        return {
+            "success": False,
+            "error": "You cannot access this service or organization",
+            "error_code": 403
+        }
+    if not auth_succeeded:
+        logger.debug("Auth rejected: User '{}' not in any group: '{}'"
+                     .format(user_usernames, groups))
+        return {
+            "success": False,
+            "error": "You cannot access this service or organization",
+            "error_code": 403
+        }
+
+    # Admin membership check (allowed to fail)
+    is_admin = False
+    for user_identifier in user_usernames:
+        try:
+            admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
+            assert admin_info["status"] == "active"
+        # Username is not active admin, which is fine
+        except (globus_sdk.GlobusAPIError, AssertionError):
+            pass
+        # Error getting membership
+        except Exception as e:
+            logger.error("NexusClient admin fetch error: {}".format(repr(e)))
+            return {
+                "success": False,
+                "error": "Unable to connect to Globus Groups",
+                "error_code": 500
+            }
+        # Successful check, is admin
+        else:
+            is_admin = True
+
+    return {
+        "success": True,
+        "token_info": auth_res,
+        "user_id": auth_res["sub"],
+        "username": user_identifier,
+        "name": auth_res["name"] or "Not given",
+        "email": auth_res["email"] or "Not given",
+        "identities_set": auth_res["identities_set"],
+        "group_roles": group_roles,
+        "is_admin": is_admin
+    }
+
+
+def fetch_org_rules(org_names, user_rules=None):
+    """Fetch organization rules and metadata.
+
+    Arguments:
+        org_names (str or list of str): Org name or alias to fetch rules for.
+        user_rules (dict): User-supplied rules to add, if desired. Default None.
+
+    Returns:
+        tuple: (list: All org canonical_names, dict: All appropriate rules)
+    """
+    # Normalize name: Remove special characters (including whitespace) and capitalization
+    # Function for convenience, but not generalizable/useful for other cases
+    def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
+
+    # Fetch list of organizations
+    schema_path = "./schemas/connect_aux_data"
+    with open(os.path.join(schema_path, "organizations.json")) as organization_file:
+        organizations = json.load(organization_file)
+
+    # Cache list of all organization aliases to match against
+    # Turn into tuple (normalized_aliases, org_rules) for convenience
+    all_clean_orgs = []
+    for org in organizations:
+        aliases = [normalize_name(alias) for alias in (org.get("aliases", [])
+                                                       + [org["canonical_name"]])]
+        all_clean_orgs.append((aliases, org))
+
+    if isinstance(org_names, list):
+        orgs_to_fetch = org_names
+    else:
+        orgs_to_fetch = [org_names]
+    rules = {}
+    all_names = []
+    # Fetch org rules and parent rules
+    while len(orgs_to_fetch) > 0:
+        # Process sub 0 always, so orgs processed in order
+        # New org matches on canonical_name or any alias
+        fetch_org = orgs_to_fetch.pop(0)
+        new_org_data = [org for aliases, org in all_clean_orgs
+                        if normalize_name(fetch_org) in aliases]
+        if len(new_org_data) < 1:
+            raise ValueError("Organization '{}' not registered in MDF Connect (from '{}')"
+                             .format(fetch_org, org_names))
+        elif len(new_org_data) > 1:
+            raise ValueError("Multiple organizations found with name '{}' (from '{}')"
+                             .format(fetch_org, org_names))
+        new_org_data = deepcopy(new_org_data[0])
+
+        # Check that org rules not already fetched
+        if new_org_data["canonical_name"] in all_names:
+            continue
+        else:
+            all_names.append(new_org_data["canonical_name"])
+
+        # Add all (unprocessed) parents to fetch list
+        orgs_to_fetch.extend([parent for parent in new_org_data.get("parent_organizations", [])
+                              if parent not in all_names])
+
+        # Merge new rules with old
+        # Strip out unneeded info
+        new_org_data.pop("canonical_name", None)
+        new_org_data.pop("aliases", None)
+        new_org_data.pop("description", None)
+        new_org_data.pop("homepage", None)
+        new_org_data.pop("parent_organizations", None)
+        # Save correct curation state
+        if rules.get("curation", False) or new_org_data.get("curation", False):
+            curation = True
+        else:
+            curation = False
+        # Merge new rules into old rules
+        rules = mdf_toolbox.dict_merge(rules, new_org_data, append_lists=True)
+        # Ensure curation set if needed
+        if curation:
+            rules["curation"] = curation
+
+    # Merge in user-set rules (with lower priority than any org-set rules)
+    if user_rules:
+        rules = mdf_toolbox.dict_merge(rules, user_rules)
+        # If user set curation, set curation
+        # Otherwise user preference is overridden by org preference
+        if user_rules.get("curation", False):
+            rules["curation"] = True
+
+    return (all_names, rules)
