@@ -61,8 +61,7 @@ jobs:
          zip -r globusLayer.zip ./python
          aws lambda publish-layer-version --layer-name GlobusLayer --zip-file fileb://./globusLayer.zip --compatible-runtimes python3.6 python3.7 > layer_info.json
          cat layer_info.json
-         cat layer_info.json
-         jq ".Version" layer_info.json
+         LAYER_VERSION=$(jq ".Version" layer_info.json)
 
 
     - name: Upload Globus Auth Function
@@ -75,7 +74,8 @@ jobs:
     - name: Upload Submit Dataset Function
       run: |
          cp aws/submit-dataset.py ./lambda_function.py
-         zip submit-dataset.zip ./lambda_function.py
+         cp aws/source_id_manager.py .
+         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py
          zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip

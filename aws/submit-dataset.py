@@ -1,30 +1,11 @@
 import json
 import os
 import jsonschema
-import boto3
-import mdf_toolbox
+import source_id_manager
 
 
 class ClientException(Exception):
     pass
-
-
-def get_secret():
-    secret_name = "Globus"
-    region_name = "us-east-1"
-
-    # Create a Secrets Manager client
-    session = boto3.session.Session()
-
-    client = session.client(
-        service_name='secretsmanager',
-        region_name=region_name
-    )
-
-    get_secret_value_response = client.get_secret_value(
-        SecretId=secret_name
-    )
-    return eval(get_secret_value_response['SecretString'])
 
 
 def validate_submission_schema(metadata):
@@ -46,14 +27,6 @@ def validate_submission_schema(metadata):
                         "error": "Invalid submission: " + str(e).split("\n")[0]
                     })
             }
-
-
-def make_source_id(title, author, test=False, index=None, sanitize_only=False):
-    globus_secrets = get_secret()
-    search_client = mdf_toolbox.confidential_login(services=['search'],
-        client_id=globus_secrets['API_CLIENT_ID'],
-        client_secret=globus_secrets['API_CLIENT_SECRET'])
-    print("Search client = ", search_client)
 
 
 def lambda_handler(event, context):
@@ -155,10 +128,12 @@ def lambda_handler(event, context):
     }
 
     sub_title = metadata["dc"]["titles"][0]["title"]
-    author_name = metadata["dc"]["creators"][0].get("familyName", metadata["dc"]["creators"][0].get("creatorName", name))
+    author_name = metadata["dc"]["creators"][0].get("familyName",
+                                                    metadata["dc"]["creators"][0].get(
+                                                        "creatorName", name))
     existing_source_name = metadata.get("mdf", {}).get("source_name", None)
 
-    make_source_id(sub_title, author_name)
+    source_id_manager.make_source_id(sub_title, author_name)
 
     return {
         'statusCode': 200,
