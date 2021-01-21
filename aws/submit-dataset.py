@@ -32,6 +32,9 @@ def validate_submission_schema(metadata):
 def lambda_handler(event, context):
     print(event)
     name = event['requestContext']['authorizer']['name']
+    identities = event['requestContext']['authorizer']['identities']
+    print("name ",name, "identities", identities)
+
     try:
         metadata = json.loads(event['body'], )
     except Exception as e:
@@ -128,13 +131,76 @@ def lambda_handler(event, context):
     }
 
     sub_title = metadata["dc"]["titles"][0]["title"]
-    author_name = metadata["dc"]["creators"][0].get("familyName",
-                                                    metadata["dc"]["creators"][0].get(
-                                                        "creatorName", name))
-    existing_source_name = metadata.get("mdf", {}).get("source_name", None)
 
-    source_id_manager.make_source_id(sub_title, author_name)
+    try:
+        # author_name is first author familyName, first author creatorName,
+        # or submitter
+        author_name = metadata["dc"]["creators"][0].get(
+            "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
+        existing_source_name = metadata.get("mdf", {}).get("source_name", None)
+        source_id_info = source_id_manager.make_source_id(
+            existing_source_name or sub_title, author_name,
+            test=sub_conf["test"],
+            sanitize_only=bool(existing_source_name))
+    except Exception as e:
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": str(e)
+                })
+        }
 
+    source_id = source_id_info["source_id"]
+    source_name = source_id_info["source_name"]
+    if (len(source_id_info["user_id_list"]) > 0
+            and not any([uid in source_id_info["user_id_list"] for uid in identities])):
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": ("Your source_name or title has been submitted previously "
+                              "by another user. Please change your source_name to "
+                              "correct this error.")
+                })
+        }
+
+    # Verify update flag is correct
+    # update == False but version > 1
+    if not sub_conf["update"] and (source_id_info["search_version"] > 1
+                                   or source_id_info["submission_version"] > 1):
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "This dataset has already been submitted, but this submission is not "
+                        "marked as an update.\nIf you are updating a previously submitted "
+                        "dataset, please resubmit with 'update=True'.\nIf you are submitting "
+                        "a new dataset, please change the source_name.")
+                })
+        }
+
+    # update == True but version == 1
+    elif sub_conf["update"] and (source_id_info["search_version"] == 1
+                                 and source_id_info["submission_version"] == 1):
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "This dataset has not already been submitted, but this submission is "
+                        "marked as an update.\nIf you are updating a previously submitted "
+                        "dataset, please verify that your source_name is correct.\nIf you "
+                        "are submitting a new dataset, please resubmit with 'update=False'.")
+                })
+        }
+
+    print("Source ID", source_id_info)
     return {
         'statusCode': 200,
         'body': json.dumps(

@@ -33,7 +33,8 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
         ]
     authResponse['policyDocument'] = policyDocument
     authResponse['context'] = {
-        'name': name
+        'name': name,
+        'identities': str(identities)
     }
     print("AuthResponse", authResponse)
     return authResponse
@@ -57,7 +58,5 @@ def lambda_handler(event, context):
                                message='User account not active')
 
     return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
-        name=auth_res["name"],
-        identities = auth_res["identities_set"])
-
-
+                           name=auth_res["name"],
+                           identities=auth_res["identities_set"])
