@@ -1,0 +1,80 @@
+import re
+import urllib
+
+
+def normalize_globus_uri(location, config):
+    """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
+    For Google Drive URIs, the file(s) must be shared with
+    materialsdatafacility@gmail.com.
+    If the URI is not a Globus Web App link or Google Drive URI,
+    it is returned unchanged.
+
+    Arguments:
+        location (str): One URI to normalize.
+
+    Returns:
+        str: The normalized URI, or the original URI if no normalization was possible.
+    """
+    loc_info = urllib.parse.urlparse(location)
+    # Globus Web App link into globus:// form
+    if any([re.search(pattern, location) for pattern in config["GLOBUS_LINK_FORMS"]]):
+        data_info = urllib.parse.unquote(loc_info.query)
+        # EP ID is in origin or dest
+        ep_start = data_info.find("origin_id=")
+        if ep_start < 0:
+            ep_start = data_info.find("destination_id=")
+            if ep_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                ep_start += len("destination_id=")
+        else:
+            ep_start += len("origin_id=")
+        ep_end = data_info.find("&", ep_start)
+        if ep_end < 0:
+            ep_end = len(data_info)
+        ep_id = data_info[ep_start:ep_end]
+
+        # Same for path
+        path_start = data_info.find("origin_path=")
+        if path_start < 0:
+            path_start = data_info.find("destination_path=")
+            if path_start < 0:
+                raise ValueError("Invalid Globus Transfer UI link")
+            else:
+                path_start += len("destination_path=")
+        else:
+            path_start += len("origin_path=")
+        path_end = data_info.find("&", path_start)
+        if path_end < 0:
+            path_end = len(data_info)
+        path = data_info[path_start:path_end]
+
+        # Make new location
+        new_location = "globus://{}{}".format(ep_id, path)
+
+    # Google Drive protocol into globus:// form
+    elif loc_info.scheme in ["gdrive", "google", "googledrive"]:
+        # Correct form is "google:///path/file.dat"
+        # (three slashes - two for scheme end, one for path start)
+        # But if a user uses two slashes, the netloc will incorrectly be the top dir
+        # (netloc="path", path="/file.dat")
+        # Otherwise netloc is nothing (which is correct)
+        if loc_info.netloc:
+            gpath = "/" + loc_info.netloc + loc_info.path
+        else:
+            gpath = loc_info.path
+        # Don't use os.path.join because gpath starts with /
+        # GDRIVE_ROOT does not end in / to make compatible
+        new_location = "globus://{}{}{}".format(config["GDRIVE_EP"], config["GDRIVE_ROOT"], gpath)
+
+    # Default - do nothing
+    else:
+        new_location = location
+
+    return new_location
+
+def make_globus_app_link(globus_uri, config):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri, config))
+    globus_link = config["TRANSFER_WEB_APP_LINK"] \
+        .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
+    return globus_link

@@ -75,7 +75,9 @@ jobs:
       run: |
          cp aws/submit-dataset.py ./lambda_function.py
          cp aws/source_id_manager.py .
-         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py
+         cp aws/utils.py .
+         cp aws/dynamo_manager.py .
+         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py ./utils.py ./dynamo_manager.py
          zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip

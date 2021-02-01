@@ -106,6 +106,8 @@ def scan_table(table_name, fields=None, filters=None):
     """
     # Get Dynamo status table
     tbl_res = get_dmo_table(table_name)
+    print("Table", tbl_res)
+
     if not tbl_res["success"]:
         return tbl_res
     table = tbl_res["table"]
@@ -206,6 +208,7 @@ def scan_table(table_name, fields=None, filters=None):
 
     # Make scan call, paging through if too many entries are scanned
     result_entries = []
+    print("Scan ", scan_args)
     while True:
         scan_res = table.scan(**scan_args)
         # Check for success
@@ -478,8 +481,9 @@ def authenticate_token(token, groups, require_all=False):
     try:
         token = token.replace("Bearer ", "")
         globus_secrets = get_secret()
-        auth_client = globus_sdk.ConfidentialAppAuthClient(globus_secrets['API_CLIENT_ID'],
-                                                           globus_secrets['API_CLIENT_SECRET'])
+        auth_client = globus_sdk.ConfidentialAppAuthClient(
+            globus_secrets['API_CLIENT_ID'],
+            globus_secrets['API_CLIENT_SECRET'])
         auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     except Exception as e:
         logger.error("Error authenticating token: {}".format(repr(e)))
@@ -515,10 +519,10 @@ def authenticate_token(token, groups, require_all=False):
 
     try:
         nexus = mdf_toolbox.confidential_login(services=['groups'],
-                                                       client_id=globus_secrets[
-                                                           'API_CLIENT_ID'],
-                                                       client_secret=globus_secrets[
-                                                           'API_CLIENT_SECRET'])['groups']
+                                               client_id=globus_secrets[
+                                                   'API_CLIENT_ID'],
+                                               client_secret=globus_secrets[
+                                                   'API_CLIENT_SECRET'])['groups']
 
     except Exception as e:
         logger.error("NexusClient creation error: {}".format(repr(e)))
@@ -591,7 +595,8 @@ def authenticate_token(token, groups, require_all=False):
     is_admin = False
     for user_identifier in user_usernames:
         try:
-            admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"], user_identifier)
+            admin_info = nexus.get_group_membership(CONFIG["ADMIN_GROUP_ID"],
+                                                    user_identifier)
             assert admin_info["status"] == "active"
         # Username is not active admin, which is fine
         except (globus_sdk.GlobusAPIError, AssertionError):
@@ -631,9 +636,11 @@ def fetch_org_rules(org_names, user_rules=None):
     Returns:
         tuple: (list: All org canonical_names, dict: All appropriate rules)
     """
+
     # Normalize name: Remove special characters (including whitespace) and capitalization
     # Function for convenience, but not generalizable/useful for other cases
-    def normalize_name(name): return "".join([c for c in name.lower() if c.isalnum()])
+    def normalize_name(name):
+        return "".join([c for c in name.lower() if c.isalnum()])
 
     # Fetch list of organizations
     schema_path = "./schemas/connect_aux_data"
@@ -676,8 +683,9 @@ def fetch_org_rules(org_names, user_rules=None):
             all_names.append(new_org_data["canonical_name"])
 
         # Add all (unprocessed) parents to fetch list
-        orgs_to_fetch.extend([parent for parent in new_org_data.get("parent_organizations", [])
-                              if parent not in all_names])
+        orgs_to_fetch.extend(
+            [parent for parent in new_org_data.get("parent_organizations", [])
+             if parent not in all_names])
 
         # Merge new rules with old
         # Strip out unneeded info
