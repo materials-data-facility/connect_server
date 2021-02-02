@@ -1,11 +1,15 @@
 import json
 import os
+import urllib
+
 import jsonschema
-import source_id_manager
 import logging
 import utils
 from datetime import datetime
 from copy import deepcopy
+
+from dynamo_manager import DynamoManager
+from source_id_manager import SourceIDManager
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +20,6 @@ class ClientException(Exception):
 
 CONFIG = {
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
-    "INGEST_TEST_INDEX": "mdf-dev",
     "BACKUP_EP": False,
     "BACKUP_PATH": "/mdf_connect/dev/data/",
     "DEFAULT_DOI_TEST": True,
@@ -35,7 +38,13 @@ CONFIG = {
     # Using Prod-P GDrive EP because having two GDrive EPs on one account seems to fail
     "GDRIVE_EP": "f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb",
     "GDRIVE_ROOT": "/Shared With Me",
-    "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}"
+
+    "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}",
+    "INGEST_URL": "https://dev-api.materialsdatafacility.org/ingest",
+    "INGEST_INDEX": "mdf-dev",
+    "INGEST_TEST_INDEX": "mdf-dev",
+    "DYNAMO_STATUS_TABLE": "dev-status-alpha-2",
+    "DYNAMO_CURATION_TABLE": "dev-curation-alpha-1"
 }
 
 
@@ -68,6 +77,9 @@ def lambda_handler(event, context):
     user_email = event['requestContext']['authorizer']['principalId']
     print("name ", name, "identities", identities)
     access_token = event['headers']['Authorization']
+
+    dynamo_manager = DynamoManager(CONFIG)
+    sourceid_manager = SourceIDManager(dynamo_manager, CONFIG)
 
     try:
         metadata = json.loads(event['body'], )
@@ -174,9 +186,11 @@ def lambda_handler(event, context):
         author_name = metadata["dc"]["creators"][0].get(
             "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
-        source_id_info = source_id_manager.make_source_id(
+        is_test = sub_conf["test"]
+        source_id_info = sourceid_manager.make_source_id(
             existing_source_name or sub_title, author_name,
-            test=sub_conf["test"],
+            is_test=is_test,
+            index=(CONFIG["INGEST_TEST_INDEX"] if is_test else CONFIG["INGEST_INDEX"]),
             sanitize_only=bool(existing_source_name))
         print("SourceID Info ", source_id_info)
     except Exception as e:
@@ -267,7 +281,7 @@ def lambda_handler(event, context):
     if metadata["mdf"].get("organizations"):
         try:
             metadata["mdf"]["organizations"], sub_conf = \
-                source_id_manager.fetch_org_rules(metadata["mdf"]["organizations"],
+                sourceid_manager.fetch_org_rules(metadata["mdf"]["organizations"],
                                                   sub_conf)
         except ValueError as e:
             logger.info(
@@ -297,7 +311,7 @@ def lambda_handler(event, context):
     if sub_conf.get("permission_groups"):
         for group_uuid in sub_conf["permission_groups"]:
             try:
-                group_res = source_id_manager.authenticate_token(access_token, group_uuid)
+                group_res = sourceid_manager.authenticate_token(access_token, group_uuid)
             except Exception as e:
                 logger.error("Authentication failure: {}".format(repr(e)))
                 return {
@@ -383,13 +397,19 @@ def lambda_handler(event, context):
 
     # Must be Publishing if not extracting
     if sub_conf["no_extract"] and not sub_conf["services"].get("mdf_publish"):
-        return (jsonify({
-            "success": False,
-            "error": "You must specify 'services.mdf_publish' if using the 'no_extract' flag",
-            "details": ("Datasets that are marked for 'pass-through' functionality "
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "You must specify 'services.mdf_publish' if using the 'no_extract' flag",
+                    "details": (
+                        "Datasets that are marked for 'pass-through' functionality "
                         "(with the 'no_extract' flag) MUST be published (by using "
                         "the 'mdf_publish' service in the 'services' block.")
-        }), 400)
+                })
+        }
+
     # If Publishing, canonical data location is Publish location
     elif sub_conf["services"].get("mdf_publish"):
         sub_conf["canon_destination"] = utils.normalize_globus_uri(
@@ -448,21 +468,31 @@ def lambda_handler(event, context):
                 path_list.append((head + '/') if head != '/' else head)
         except Exception as e:
             if e.code == "PermissionDenied":
-                return (jsonify({
-                    "success": False,
-                    "error": (
-                        "MDF Connect (UUID '{}') does not have the Access Manager role on "
-                        "primary data destination endpoint '{}'.  This role is required "
-                        "so that MDF Connect can set ACLs on the data. Please contact "
-                        "the MDF team or the owner of the endpoint to resolve this "
-                        "error.").format(CONFIG["API_CLIENT_ID"], canon_loc.netloc)
-                }), 500)
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps(
+                        {
+                            "success": False,
+                            "error": (
+                                "MDF Connect (UUID '{}') does not have the Access Manager role on "
+                                "primary data destination endpoint '{}'.  This role is required "
+                                "so that MDF Connect can set ACLs on the data. Please contact "
+                                "the MDF team or the owner of the endpoint to resolve this "
+                                "error.").format(CONFIG["API_CLIENT_ID"],
+                                                 canon_loc.netloc)
+                        })
+                }
             else:
                 logger.error("Public ACL check exception: {}".format(e))
-                return (jsonify({
-                    "success": False,
-                    "error": repr(e)
-                }), 500)
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps(
+                        {
+                            "success": False,
+                            "error": repr(e)
+                        })
+                }
+
         # Check if any dir in canon_dest path is public
         public_principals = ["anonymous", "all_authenticated_users"]
         public_type = False
@@ -479,14 +509,21 @@ def lambda_handler(event, context):
             sub_conf["storage_acl"] = None
         # If the dir is public and the dataset is not public, error
         elif public_type and "public" not in sub_conf["acl"]:
-            return (jsonify({
-                "success": False,
-                "error": (
-                    "Your submission has a non-public base ACL ({}), but the primary "
-                    "storage location for your data is public (path '{}' on endpoint "
-                    "'{}' is set to {} access)").format(sub_conf["acl"], public_dir,
-                                                        canon_loc.netloc, public_type)
-            }), 400)
+            return {
+                'statusCode': 400,
+                'body': json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            "Your submission has a non-public base ACL ({}), but the primary "
+                            "storage location for your data is public (path '{}' on endpoint "
+                            "'{}' is set to {} access)").format(sub_conf["acl"],
+                                                                public_dir,
+                                                                canon_loc.netloc,
+                                                                public_type)
+                    })
+            }
+
         # If the dir is not public, set the storage_acl to the base acl
         else:
             sub_conf["storage_acl"] = sub_conf["acl"]
@@ -505,10 +542,32 @@ def lambda_handler(event, context):
 
     print("status ", status_info)
 
+    try:
+        status_res = utils.create_status(status_info)
+    except Exception as e:
+        logger.error("Status creation exception: {}".format(e))
+        return {
+            'statusCode': 500,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": repr(e)
+                })
+        }
+
+    if not status_res["success"]:
+        logger.error("Status creation error: {}".format(status_res["error"]))
+        return {
+            'statusCode': 500,
+            'body': json.dumps(status_res)
+        }
+
+
     return {
         'statusCode': 202,
         'body': json.dumps(
             {
-                'source_id': source_id,
+                "success": True,
+                'source_id': source_id
             })
     }
