@@ -42,23 +42,18 @@ class DynamoManager:
     )
 
     def __init__(self, config):
-        self.dmo_client = boto3.resource('dynamodb',
-                                         aws_access_key_id=config["AWS_KEY"],
-                                         aws_secret_access_key=config["AWS_SECRET"],
-                                         region_name="us-east-1")
+        self.dmo_client = boto3.resource('dynamodb', region_name="us-east-1")
         self.dmo_tables = {
             "status": config["DYNAMO_STATUS_TABLE"],
             "curation": config["DYNAMO_CURATION_TABLE"]
         }
 
         # Load status schema
-        with open(os.path.join(config["SCHEMA_PATH"],
-                               "internal_status.json")) as schema_file:
+        schema_path = "./schemas/schemas"
+        with open(os.path.join(schema_path, "internal_status.json")) as schema_file:
             self.schema = json.load(schema_file)
 
-        self.resolver = jsonschema.RefResolver(
-            base_uri="file://{}/".format(config["SCHEMA_PATH"]),
-            referrer=self.schema)
+        self.resolver = jsonschema.RefResolver(base_uri="file://{}/{}/".format(os.getcwd(), schema_path), referrer=self.schema)
 
     def get_dmo_table(self, table_name):
         # For compatibility with legacy utils in this file

@@ -20,6 +20,9 @@ class ClientException(Exception):
 
 CONFIG = {
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
+    "EXTRACT_GROUP_ID": "cc192dca-3751-11e8-90c1-0a7c735d220a",
+    "API_SCOPE": "https://auth.globus.org/scopes/c17f27bb-f200-486a-b785-2a25e82af505/connect",
+    "API_SCOPE_ID": "mdf_dataset_submission",
     "BACKUP_EP": False,
     "BACKUP_PATH": "/mdf_connect/dev/data/",
     "DEFAULT_DOI_TEST": True,
@@ -543,7 +546,7 @@ def lambda_handler(event, context):
     print("status ", status_info)
 
     try:
-        status_res = utils.create_status(status_info)
+        status_res = dynamo_manager.create_status(status_info)
     except Exception as e:
         logger.error("Status creation exception: {}".format(e))
         return {
