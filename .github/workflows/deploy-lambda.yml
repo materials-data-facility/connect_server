@@ -77,7 +77,8 @@ jobs:
          cp aws/source_id_manager.py .
          cp aws/utils.py .
          cp aws/dynamo_manager.py .
-         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py ./utils.py ./dynamo_manager.py
+         cp mdf_connect_server/automate/*.py .
+         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py ./utils.py ./dynamo_manager.py ./globus_automate_flow.py ./flow_action.py
          zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip
