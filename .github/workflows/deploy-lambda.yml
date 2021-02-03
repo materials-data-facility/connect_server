@@ -55,7 +55,7 @@ jobs:
          python -m pip install --upgrade pip
          mkdir python
          #install all dependencies as defined by requirements.txt in the aws directory
-         pip3 install -r aws/requirements.txt -t ./python
+         pip3 install --use-deprecated=legacy-resolver -r aws/requirements.txt -t ./python
 
          #zip files into current directory
          zip -r globusLayer.zip ./python
