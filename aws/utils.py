@@ -1,6 +1,8 @@
 import re
 import urllib
 
+import boto3
+
 
 def normalize_globus_uri(location, config):
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
@@ -78,3 +80,20 @@ def make_globus_app_link(globus_uri, config):
     globus_link = config["TRANSFER_WEB_APP_LINK"] \
         .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
     return globus_link
+
+def get_secret():
+    secret_name = "Globus"
+    region_name = "us-east-1"
+
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    get_secret_value_response = client.get_secret_value(
+        SecretId=secret_name
+    )
+    return eval(get_secret_value_response['SecretString'])

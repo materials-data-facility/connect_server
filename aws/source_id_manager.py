@@ -4,9 +4,10 @@ from copy import deepcopy
 
 import globus_sdk
 import mdf_toolbox
-import boto3
 import re
 import logging
+
+from utils import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -85,23 +86,6 @@ class SourceIDManager:
         }
 
 
-    def get_secret(self):
-        secret_name = "Globus"
-        region_name = "us-east-1"
-
-        # Create a Secrets Manager client
-        session = boto3.session.Session()
-
-        client = session.client(
-            service_name='secretsmanager',
-            region_name=region_name
-        )
-
-        get_secret_value_response = client.get_secret_value(
-            SecretId=secret_name
-        )
-        return eval(get_secret_value_response['SecretString'])
-
     def make_source_id(self, title, author, index, is_test, sanitize_only=False):
         """Make a source name out of a title."""
 
@@ -166,7 +150,7 @@ class SourceIDManager:
 
         # Determine version number to add
         # Get last Search version
-        globus_secrets = self.get_secret()
+        globus_secrets = get_secret()
         search_client = mdf_toolbox.confidential_login(services=['search'],
                                                        client_id=globus_secrets[
                                                            'API_CLIENT_ID'],

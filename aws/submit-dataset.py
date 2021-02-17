@@ -7,6 +7,15 @@ import logging
 import utils
 from datetime import datetime
 from copy import deepcopy
+import globus_automate_client
+
+from automate_manager import AutomateManager
+from utils import get_secret
+import globus_sdk
+from globus_automate_client.flows_client import FlowsClient
+
+
+
 
 from dynamo_manager import DynamoManager
 from source_id_manager import SourceIDManager
@@ -75,7 +84,7 @@ def validate_submission_schema(metadata):
 def lambda_handler(event, context):
     print(event)
     name = event['requestContext']['authorizer']['name']
-    identities = event['requestContext']['authorizer']['identities']
+    identities = eval(event['requestContext']['authorizer']['identities'])
     user_id = event['requestContext']['authorizer']['user_id']
     user_email = event['requestContext']['authorizer']['principalId']
     print("name ", name, "identities", identities)
@@ -565,7 +574,10 @@ def lambda_handler(event, context):
             'body': json.dumps(status_res)
         }
 
+    automate_manager = AutomateManager(get_secret(),
+                                       scope="https://auth.globus.org/scopes/a7ed0e78-a6b9-463c-aaf4-73a2f10f493f/flow_a7ed0e78_a6b9_463c_aaf4_73a2f10f493f_user")
 
+    print(automate_manager)
     return {
         'statusCode': 202,
         'body': json.dumps(
