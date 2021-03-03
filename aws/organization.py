@@ -20,7 +20,7 @@ class Organization:
 
     @classmethod
     def from_schema_repo(cls, canonical_name):
-        schema_path = "../../data-schemas/schemas"
+        schema_path = "./schemas/schemas"
         with open(os.path.join(schema_path, "..", "connect_aux_data", "organizations.json")) as org_schema:
             orgs = json.load(org_schema)
             filtered_orgs = list(filter(lambda org: org['canonical_name'] == canonical_name, orgs))

@@ -10,6 +10,7 @@ from copy import deepcopy
 import globus_automate_client
 
 from automate_manager import AutomateManager
+from organization import Organization
 from utils import get_secret
 import globus_sdk
 from globus_automate_client.flows_client import FlowsClient
@@ -577,7 +578,8 @@ def lambda_handler(event, context):
     automate_manager = AutomateManager(get_secret(),
                                        scope="https://auth.globus.org/scopes/a7ed0e78-a6b9-463c-aaf4-73a2f10f493f/flow_a7ed0e78_a6b9_463c_aaf4_73a2f10f493f_user")
 
-    print(automate_manager)
+    organization = Organization.from_schema_repo(metadata["mdf"].get("organizations", "MDF Open"))
+    print(organization)
     return {
         'statusCode': 202,
         'body': json.dumps(
