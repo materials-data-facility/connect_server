@@ -1,9 +1,9 @@
 import globus_sdk
 from globus_automate_client import FlowsClient
+from urllib.parse import urlparse
 
 
 class AutomateManager:
-    petrel_endpoint_id = "e38ee745-6d04-11e5-ba46-22000b92c6ec"
 
     def __init__(self, globus_secrets, scope):
         def cli_authorizer_callback(**kwargs):
@@ -20,17 +20,22 @@ class AutomateManager:
             authorizer=auth)
         print(self.flows_client)
 
-    def submit(self, mdf_rec):
+    def submit(self, mdf_rec, organization):
+        destination_parsed = urlparse(organization.data_destinations[0])
+        print(destination_parsed)
+
+        assert destination_parsed.scheme == 'globus'
+
         automate_rec = {
             "mdf_portal_link": "https://example.com/example_link",
             "user_transfer_inputs": [
                 {
-                    "destination_endpoint_id": self.petrel_endpoint_id,
+                    "destination_endpoint_id": destination_parsed.netloc,
                     "label": "MDF Flow Test Transfer1",
                     "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
                     "transfer_items": [
                         {
-                            "destination_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
+                            "destination_path": destination_parsed.path,
                             "recursive": True,
                             "source_path": "/MDF/mdf_connect/test_files/canonical_datasets/dft/"
                         }
@@ -54,3 +59,5 @@ class AutomateManager:
             "citrine": False,
             "mrr": False
         }
+
+        print(automate_rec)
