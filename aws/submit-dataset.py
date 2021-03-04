@@ -1,25 +1,19 @@
 import json
+import logging
 import os
 import urllib
+from copy import deepcopy
+from datetime import datetime
 
 import jsonschema
-import logging
-import utils
-from datetime import datetime
-from copy import deepcopy
-import globus_automate_client
+import mdf_toolbox
 
+import utils
+from dynamo_manager import DynamoManager
 from automate_manager import AutomateManager
 from organization import Organization
-from utils import get_secret
-import globus_sdk
-from globus_automate_client.flows_client import FlowsClient
-
-
-
-
-from dynamo_manager import DynamoManager
 from source_id_manager import SourceIDManager
+from utils import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -575,9 +569,7 @@ def lambda_handler(event, context):
             'body': json.dumps(status_res)
         }
 
-    automate_manager = AutomateManager(get_secret(),
-                                       scope="https://auth.globus.org/scopes/a7ed0e78-a6b9-463c-aaf4-73a2f10f493f/flow_a7ed0e78_a6b9_463c_aaf4_73a2f10f493f_user")
-
+    automate_manager = AutomateManager(get_secret())
     organization = Organization.from_schema_repo(metadata["mdf"].get("organizations", "MDF Open"))
     print(organization)
     automate_manager.submit(metadata, organization)

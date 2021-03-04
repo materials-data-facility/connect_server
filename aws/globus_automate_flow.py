@@ -43,14 +43,17 @@ class GlobusAutomateFlow:
         return result
 
     @classmethod
-    def from_existing_flow(cls, client: FlowsClient, path: str):
-        result = GlobusAutomateFlow(client)
+    def from_existing_flow(cls, path: str):
+        result = GlobusAutomateFlow(None)
         result.read_flow(path)
         return result
 
+    def set_client(self, client):
+        self.flows_client = client
+
     @property
     def url(self):
-        return "https://flows.globus.org/flows/"+self.flow_id
+        return "https://flows.globus.org/flows/" + self.flow_id
 
     def __str__(self):
         return f'Globus Automate Flow: id={self.flow_id}, scope={self.flow_scope}'

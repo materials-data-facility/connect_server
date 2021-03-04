@@ -1,11 +1,8 @@
-import json
-
 import action_providers
-from mdf_connect_server.automate.globus_automate_flow import GlobusAutomateFlowDef
+from globus_automate_flow import GlobusAutomateFlowDef
 
 
-def flow_def(smtp_send_credentials, sender_email, flow_permissions,
-             transfer_loop_subflow):
+def flow_def(smtp_send_credentials, sender_email, flow_permissions):
     return GlobusAutomateFlowDef(
         title="Transfer Loop Flow",
         description="Perform multiple Globus Transfers",
@@ -32,7 +29,10 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions,
                     "WaitTime": 86400,
                     "RunAs": "User",
                     "Parameters": {
-                        "action_inputs.$": "$.user_transfer_inputs"
+                        "source_endpoint_id.$": "$.user_transfer_inputs.source_endpoint_id",
+                        "destination_endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                        "label.$": "$.user_transfer_inputs.label",
+                        "transfer_items.$": "$.user_transfer_inputs.transfer_items"
                     },
                     "ResultPath": "$.UserTransferResult",
                     "Next": "UndoUserPermissions"
