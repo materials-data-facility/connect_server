@@ -1,6 +1,7 @@
 import globus_sdk
 from globus_automate_client import FlowsClient
 from urllib.parse import urlparse
+from globus_automate_flow import GlobusAutomateFlow
 
 
 class AutomateManager:
@@ -61,3 +62,9 @@ class AutomateManager:
         }
 
         print(automate_rec)
+        flow = GlobusAutomateFlow.from_existing_flow(self.flows_client,
+                                                     "mdf_flow_info.json")
+        print("Flow is ", flow)
+        flow_run = flow.run_flow(automate_rec)
+        print("Result is ", flow_run.action_id)
+        print("Status is ", flow_run.get_status())

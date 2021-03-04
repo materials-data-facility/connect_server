@@ -579,6 +579,7 @@ def lambda_handler(event, context):
                                        scope="https://auth.globus.org/scopes/a7ed0e78-a6b9-463c-aaf4-73a2f10f493f/flow_a7ed0e78_a6b9_463c_aaf4_73a2f10f493f_user")
 
     organization = Organization.from_schema_repo(metadata["mdf"].get("organizations", "MDF Open"))
+    print(organization)
     automate_manager.submit(metadata, organization)
 
     return {

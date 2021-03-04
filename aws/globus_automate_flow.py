@@ -3,10 +3,9 @@ from typing import Mapping, Any, Optional, List
 
 from globus_automate_client import FlowsClient
 
-import globus_automate_client
 import mdf_toolbox
 
-from mdf_connect_server.automate.flow_action import FlowAction
+from flow_action import FlowAction
 
 
 class GlobusAutomateFlowDef:

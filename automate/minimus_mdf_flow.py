@@ -26,15 +26,15 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions,
                     "Next": "UserTransfer"
                 },
                 "UserTransfer": {
+                    "Comment": "Copy from user's endpoint to organization's dataset destination",
                     "Type": "Action",
-                    "ActionUrl": transfer_loop_subflow.url,
-                    "ActionScope": transfer_loop_subflow.flow_scope,
-                    "ExceptionOnActionFailure": False,
+                    "ActionUrl": "https://actions.globus.org/transfer/transfer",
+                    "WaitTime": 86400,
+                    "RunAs": "User",
                     "Parameters": {
                         "action_inputs.$": "$.user_transfer_inputs"
                     },
                     "ResultPath": "$.UserTransferResult",
-                    "WaitTime": 86400,
                     "Next": "UndoUserPermissions"
                 },
                 "UndoUserPermissions": {

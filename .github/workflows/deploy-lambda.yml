@@ -75,12 +75,7 @@ jobs:
     - name: Upload Submit Dataset Function
       run: |
          cp aws/submit-dataset.py ./lambda_function.py
-         cp aws/source_id_manager.py .
-         cp aws/utils.py .
-         cp aws/dynamo_manager.py .
-         cp aws/automate_manager.py .
-         cp aws/organization.py .
-         cp mdf_connect_server/automate/*.py .
+         cp aws/*.py .
          cp aws/mdf_flow_info.json .
          zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py \
              ./utils.py ./dynamo_manager.py ./automate_manager.py \
