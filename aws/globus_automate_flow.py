@@ -6,6 +6,7 @@ from globus_automate_client import FlowsClient
 import mdf_toolbox
 
 from flow_action import FlowAction
+from globus_auth_manager import GlobusAuthManager
 
 
 class GlobusAutomateFlowDef:
@@ -31,14 +32,19 @@ class GlobusAutomateFlowDef:
 
 
 class GlobusAutomateFlow:
-    def __init__(self, client: FlowsClient):
+    def __init__(self, client: FlowsClient, globus_auth: GlobusAuthManager = None):
         self.flows_client = client
         self.flow_id = None
         self.flow_scope = None
+        self.saved_flow = None
+        self.runAsScopes = None
+        self.globus_auth = globus_auth
 
     @classmethod
-    def from_flow_def(cls, client: FlowsClient, flow_def: GlobusAutomateFlowDef):
-        result = GlobusAutomateFlow(client)
+    def from_flow_def(cls, client: FlowsClient,
+                      flow_def: GlobusAutomateFlowDef,
+                      globus_auth: GlobusAuthManager = None):
+        result = GlobusAutomateFlow(client, globus_auth)
         result._deploy_mdf_flow(flow_def)
         return result
 
@@ -91,6 +97,9 @@ class GlobusAutomateFlow:
         )
         self.flow_id = flow_deploy_res["id"]
         self.flow_scope = flow_deploy_res["globus_auth_scope"]
+        self.saved_flow = self.flows_client.get_flow(self.flow_id).data
+        self.runAsScopes = self.saved_flow['globus_auth_scopes_by_RunAs']
+        print(self.runAsScopes)
 
     def run_flow(self, flow_input: dict):
         flow_res = self.flows_client.run_flow(self.flow_id, self.flow_scope, flow_input)
@@ -111,3 +120,7 @@ class GlobusAutomateFlow:
             flow_info = json.load(f)
             self.flow_id = flow_info['flow_id']
             self.flow_scope = flow_info['flow_scope']
+
+    def get_scope_for_runAs_role(self, rolename):
+        print("--->RunAsScopes ", self.runAsScopes[rolename])
+        return self.globus_auth.scope_id_from_uri(self.runAsScopes[rolename])

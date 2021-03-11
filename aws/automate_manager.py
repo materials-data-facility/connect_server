@@ -60,7 +60,7 @@ class AutomateManager:
         print(self.flows_client)
         self.flow.set_client(self.flows_client)
 
-    def submit(self, mdf_rec, organization):
+    def submit(self, mdf_rec, organization, submitting_user_token):
         destination_parsed = urlparse(organization.data_destinations[0])
         print(destination_parsed)
 
@@ -96,7 +96,10 @@ class AutomateManager:
             "curation_input": False,
             "mdf_publish": False,
             "citrine": False,
-            "mrr": False
+            "mrr": False,
+            "_tokens": {
+                'SubmittingUser': submitting_user_token['access_token']
+            }
         }
 
         print(automate_rec)

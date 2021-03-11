@@ -82,7 +82,12 @@ def lambda_handler(event, context):
     identities = eval(event['requestContext']['authorizer']['identities'])
     user_id = event['requestContext']['authorizer']['user_id']
     user_email = event['requestContext']['authorizer']['principalId']
+
+    depends = event['requestContext']['authorizer']['globus_dependent_token'].replace(
+        'null', 'None')
+    globus_dependent_token = eval(depends)
     print("name ", name, "identities", identities)
+    print("globus_dependent_token ", globus_dependent_token)
     access_token = event['headers']['Authorization']
 
     dynamo_manager = DynamoManager(CONFIG)
@@ -289,7 +294,7 @@ def lambda_handler(event, context):
         try:
             metadata["mdf"]["organizations"], sub_conf = \
                 sourceid_manager.fetch_org_rules(metadata["mdf"]["organizations"],
-                                                  sub_conf)
+                                                 sub_conf)
         except ValueError as e:
             logger.info(
                 "Invalid organizations: {}".format(metadata["mdf"]["organizations"]))
@@ -570,9 +575,12 @@ def lambda_handler(event, context):
         }
 
     automate_manager = AutomateManager(get_secret())
-    organization = Organization.from_schema_repo(metadata["mdf"].get("organizations", "MDF Open"))
-    print(organization)
-    automate_manager.submit(metadata, organization)
+    organization = Organization.from_schema_repo(
+        metadata["mdf"].get("organizations", "MDF Open"))
+    print("######", organization)
+    print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
+    automate_manager.submit(metadata, organization, globus_dependent_token[
+        'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
 
     return {
         'statusCode': 202,

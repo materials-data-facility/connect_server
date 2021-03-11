@@ -27,7 +27,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                     "Type": "Action",
                     "ActionUrl": "https://actions.globus.org/transfer/transfer",
                     "WaitTime": 86400,
-                    "RunAs": "User",
+                    "RunAs": "SubmittingUser",
                     "Parameters": {
                         "source_endpoint_id.$": "$.user_transfer_inputs.source_endpoint_id",
                         "destination_endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
