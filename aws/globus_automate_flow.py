@@ -49,8 +49,10 @@ class GlobusAutomateFlow:
         return result
 
     @classmethod
-    def from_existing_flow(cls, path: str):
-        result = GlobusAutomateFlow(None)
+    def from_existing_flow(cls, path: str,
+                           client: FlowsClient = None,
+                           globus_auth: GlobusAuthManager = None):
+        result = GlobusAutomateFlow(client, globus_auth)
         result.read_flow(path)
         return result
 
@@ -80,6 +82,27 @@ class GlobusAutomateFlow:
             self.flow_id, self.flow_scope,
             action_id,
             limit=100).data
+
+    def update_flow(self, flow_def: GlobusAutomateFlowDef):
+        flow_deploy_res = self.flows_client.update_flow(
+            flow_id=self.flow_id,
+            flow_definition=flow_def.flow_definition,
+            title=flow_def.title,
+            subtitle=flow_def.subtitle,
+            description=flow_def.description,
+            visible_to=flow_def.visible_to,
+            runnable_by=flow_def.runnable_by,
+            administered_by=flow_def.administered_by,
+            # TODO: Make rough schema outline into JSONSchema
+            input_schema=flow_def.input_schema,
+            validate_definition=True,
+            validate_input_schema=True
+        )
+        self.flow_id = flow_deploy_res["id"]
+        self.flow_scope = flow_deploy_res["globus_auth_scope"]
+        self.saved_flow = self.flows_client.get_flow(self.flow_id).data
+        self.runAsScopes = self.saved_flow['globus_auth_scopes_by_RunAs']
+        print(self.runAsScopes)
 
     def _deploy_mdf_flow(self, mdf_flow_def: GlobusAutomateFlowDef):
         flow_deploy_res = self.flows_client.deploy_flow(

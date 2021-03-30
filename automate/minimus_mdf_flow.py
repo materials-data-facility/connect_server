@@ -9,6 +9,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
         administered_by=flow_permissions,
+
         flow_definition={
             "StartAt": "StartSubmission",
             "States": {
@@ -17,8 +18,17 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                     "Next": "UserPermissions"
                 },
                 "UserPermissions": {
-                    "Type": "Pass",
-                    "Parameters": {},
+                    "Comment": "Temporarily add write permissions for the submitting user",
+                    "Type": "Action",
+                    "ActionUrl": "https://actions.globus.org/transfer/set_permission",
+                    "Parameters": {
+                        "operation": "CREATE",
+                        "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                        "path.$": "$.user_transfer_inputs.transfer_items[0].destination_path",
+                        "principal_type": "identity",
+                        "principal.$": "$.user_transfer_inputs.submitting-user-id",
+                        "permissions": "rw"
+                    },
                     "ResultPath": "$.UserPermissionResult",
                     "Next": "UserTransfer"
                 },

@@ -60,7 +60,7 @@ class AutomateManager:
         print(self.flows_client)
         self.flow.set_client(self.flows_client)
 
-    def submit(self, mdf_rec, organization, submitting_user_token):
+    def submit(self, mdf_rec, organization, submitting_user_token, submitting_user_id):
         destination_parsed = urlparse(organization.data_destinations[0])
         print(destination_parsed)
 
@@ -73,6 +73,7 @@ class AutomateManager:
                     "destination_endpoint_id": destination_parsed.netloc,
                     "label": "MDF Flow Test Transfer1",
                     "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
+                    "submitting-user-id": submitting_user_id,
                     "transfer_items": [
                         {
                             "destination_path": destination_parsed.path,

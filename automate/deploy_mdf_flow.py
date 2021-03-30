@@ -32,15 +32,22 @@ flow_def = minimus_mdf_flow.flow_def(smtp_send_credentials=smtp_send_credentials
                                      sender_email=config['sender_email'],
                                      flow_permissions=config['flow_permissions'])
 print(flow_def.flow_definition)
+mdf_flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json",
+                                                 client=flows_client,
+                                                 globus_auth=globus_auth)
+mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
+    smtp_send_credentials=smtp_send_credentials,
+    sender_email=config['sender_email'],
+    flow_permissions=config['flow_permissions']))
 
-mdf_flow = GlobusAutomateFlow.from_flow_def(flows_client,
-                                            flow_def=minimus_mdf_flow.flow_def(
-                                                smtp_send_credentials=smtp_send_credentials,
-                                                sender_email=config['sender_email'],
-                                                flow_permissions=config['flow_permissions']),
-                                            globus_auth=globus_auth)
-
-mdf_flow.save_flow("mdf_flow_info.json")
+# mdf_flow = GlobusAutomateFlow.from_flow_def(flows_client,
+#                                             flow_def=minimus_mdf_flow.flow_def(
+#                                                 smtp_send_credentials=smtp_send_credentials,
+#                                                 sender_email=config['sender_email'],
+#                                                 flow_permissions=config['flow_permissions']),
+#                                             globus_auth=globus_auth)
+#
+# mdf_flow.save_flow("mdf_flow_info.json")
 print("scope = ", mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
 
 print("MDF Flow deployed", mdf_flow)

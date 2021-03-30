@@ -344,3 +344,9 @@ class DynamoManager:
                 "success": True,
                 "status": status
             }
+
+    def for_source_id(self, source_id):
+        table = self.get_dmo_table("status")
+        print("Table name", table)
+        return None
+

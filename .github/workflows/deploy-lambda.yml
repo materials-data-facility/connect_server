@@ -84,3 +84,16 @@ jobs:
          zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-dataset --zip-file fileb://./submit-dataset.zip
+
+    - name: Upload Submission Status Function
+      run: |
+         cp aws/submit-status.py ./lambda_function.py
+         cp aws/*.py .
+         cp aws/mdf_flow_info.json .
+         zip submit-status.zip ./lambda_function.py ./source_id_manager.py \
+             ./utils.py ./dynamo_manager.py ./automate_manager.py \
+             ./globus_automate_flow.py ./flow_action.py ./organization.py \
+            ./mdf_flow_info.json
+         zip -r submit-status.zip ./schemas
+         rm ./lambda_function.py
+         aws lambda update-function-code --function-name submit-status --zip-file fileb://./submit-status.zip

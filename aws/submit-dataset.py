@@ -77,7 +77,7 @@ def validate_submission_schema(metadata):
 
 
 def lambda_handler(event, context):
-    print(event)
+    print(json.dumps(event))
     name = event['requestContext']['authorizer']['name']
     identities = eval(event['requestContext']['authorizer']['identities'])
     user_id = event['requestContext']['authorizer']['user_id']
@@ -578,9 +578,10 @@ def lambda_handler(event, context):
     organization = Organization.from_schema_repo(
         metadata["mdf"].get("organizations", "MDF Open"))
     print("######", organization)
+    print("Depends ", globus_dependent_token)
     print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
     automate_manager.submit(metadata, organization, globus_dependent_token[
-        'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
+        'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'], user_id)
 
     return {
         'statusCode': 202,
