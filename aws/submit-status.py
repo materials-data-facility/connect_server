@@ -1,6 +1,7 @@
 import json
 from dynamo_manager import DynamoManager
-
+from automate_manager import AutomateManager
+from utils import get_secret
 
 CONFIG = {
     "ADMIN_GROUP_ID": "5fc63928-3752-11e8-9c6f-0e00fd09bf20",
@@ -34,14 +35,19 @@ CONFIG = {
     "DYNAMO_CURATION_TABLE": "dev-curation-alpha-1"
 }
 
-def lambda_handler(event, context):
 
+def lambda_handler(event, context):
     dynamo_manager = DynamoManager(CONFIG)
+    automate_manager = AutomateManager(get_secret())
 
     print(event)
     source_id = event['pathParameters']['source_id']
+    status_rec = dynamo_manager.for_source_id(source_id)
+    print(status_rec)
+
+    print(automate_manager.get_log(status_rec['action_id']))
 
     return {
         'statusCode': 200,
-        'body': json.dumps(f'Hello from {source_id}!')
+        'body': json.dumps(automate_manager.get_status(status_rec['action_id']))
     }

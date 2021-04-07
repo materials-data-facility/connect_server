@@ -105,6 +105,13 @@ class AutomateManager:
 
         print(automate_rec)
         print("Flow is ", self.flow)
-        flow_run = self.flow.run_flow(automate_rec)
+        flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id])
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())
+        return flow_run.action_id
+
+    def get_status(self, action_id: str):
+        return self.flow.get_status(action_id)
+
+    def get_log(self, action_id: str):
+        return self.flow.get_flow_logs(action_id)

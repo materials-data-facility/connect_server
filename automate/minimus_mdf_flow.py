@@ -21,6 +21,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                     "Comment": "Temporarily add write permissions for the submitting user",
                     "Type": "Action",
                     "ActionUrl": "https://actions.globus.org/transfer/set_permission",
+                    "ExceptionOnActionFailure": False,
                     "Parameters": {
                         "operation": "CREATE",
                         "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
@@ -30,6 +31,13 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                         "permissions": "rw"
                     },
                     "ResultPath": "$.UserPermissionResult",
+                    "Catch": [
+                        {
+                            "ErrorEquals": ["ActionFailedException", "States.Runtime"],
+                            "Next": "FailUserPermission"
+                        }
+                    ],
+
                     "Next": "UserTransfer"
                 },
                 "UserTransfer": {
@@ -48,9 +56,22 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                     "Next": "UndoUserPermissions"
                 },
                 "UndoUserPermissions": {
-                    "Type": "Pass",
-                    "Parameters": {},
+                    "Comment": "Remove temporary write permissions for the submitting user",
+                    "Type": "Action",
+                    "ActionUrl": "https://actions.globus.org/transfer/set_permission",
+                    "ExceptionOnActionFailure": False,
+                    "Parameters": {
+                        "operation": "DELETE",
+                        "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                        "rule_id.$": "$.UserPermissionResult.details.access_id"
+                    },
                     "ResultPath": "$.UndoUserPermissionResult",
+                    "Catch": [
+                        {
+                            "ErrorEquals": ["ActionFailedException", "States.Runtime"],
+                            "Next": "FailUserPermission"
+                        }
+                    ],
                     "Next": "CheckUserTransfer"
                 },
                 "CheckUserTransfer": {
@@ -69,6 +90,15 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                     "Parameters": {
                         "title": "MDF Submission Failed",
                         "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserTransferResult.details`"
+                    },
+                    "ResultPath": "$.FinalState",
+                    "Next": "ChooseNotifyUserEnd"
+                },
+                "FailUserPermission": {
+                    "Type": "ExpressionEval",
+                    "Parameters": {
+                        "title": "MDF Permission Settings Failed",
+                        "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserPermissionResult.details`"
                     },
                     "ResultPath": "$.FinalState",
                     "Next": "ChooseNotifyUserEnd"

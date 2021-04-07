@@ -1,6 +1,7 @@
 import globus_sdk
 import boto3
 
+
 def get_secret():
     secret_name = "Globus"
     region_name = "us-east-1"
@@ -19,7 +20,8 @@ def get_secret():
     return eval(get_secret_value_response['SecretString'])
 
 
-def generate_policy(principalId, effect, resource, message="", name=None, identities=[], user_id=None, dependent_token=None):
+def generate_policy(principalId, effect, resource, message="", name=None, identities=[],
+                    user_id=None, dependent_token=None):
     authResponse = {}
     authResponse['principalId'] = principalId
     if effect and resource:
@@ -51,19 +53,24 @@ def lambda_handler(event, context):
     token = event['headers']['Authorization'].replace("Bearer ", "")
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
-    dependent_token = auth_client.oauth2_get_dependent_tokens(token)
-    print("Dependent token ", dependent_token)
+    try:
+        dependent_token = auth_client.oauth2_get_dependent_tokens(token)
+        print("Dependent token ", dependent_token)
 
-    if not auth_res:
-        return generate_policy(None, 'Deny', event['methodArn'], message='User not found')
+        if not auth_res:
+            return generate_policy(None, 'Deny', event['methodArn'],
+                                   message='User not found')
 
-    if not auth_res['active']:
+        if not auth_res['active']:
+            return generate_policy(None, 'Deny', event['methodArn'],
+                                   message='User account not active')
+
+        print("auth_res", auth_res)
+        return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
+                               name=auth_res["name"],
+                               identities=auth_res["identities_set"],
+                               user_id=auth_res['sub'],
+                               dependent_token=dependent_token)
+    except:
         return generate_policy(None, 'Deny', event['methodArn'],
-                               message='User account not active')
-
-    print("auth_res", auth_res)
-    return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
-                           name=auth_res["name"],
-                           identities=auth_res["identities_set"],
-                           user_id=auth_res['sub'],
-                           dependent_token=dependent_token)
+                               message='Invalid auth token')

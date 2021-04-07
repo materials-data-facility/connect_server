@@ -554,6 +554,18 @@ def lambda_handler(event, context):
 
     print("status ", status_info)
 
+    automate_manager = AutomateManager(get_secret())
+    organization = Organization.from_schema_repo(
+        metadata["mdf"].get("organizations", "MDF Open"))
+    print("######", organization)
+    print("Depends ", globus_dependent_token)
+    print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
+    action_id = automate_manager.submit(metadata, organization,
+                                        globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
+                                        user_id)
+
+    status_info['action_id'] = action_id
+
     try:
         status_res = dynamo_manager.create_status(status_info)
     except Exception as e:
@@ -573,15 +585,6 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps(status_res)
         }
-
-    automate_manager = AutomateManager(get_secret())
-    organization = Organization.from_schema_repo(
-        metadata["mdf"].get("organizations", "MDF Open"))
-    print("######", organization)
-    print("Depends ", globus_dependent_token)
-    print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
-    automate_manager.submit(metadata, organization, globus_dependent_token[
-        'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'], user_id)
 
     return {
         'statusCode': 202,

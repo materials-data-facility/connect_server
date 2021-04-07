@@ -124,8 +124,9 @@ class GlobusAutomateFlow:
         self.runAsScopes = self.saved_flow['globus_auth_scopes_by_RunAs']
         print(self.runAsScopes)
 
-    def run_flow(self, flow_input: dict):
-        flow_res = self.flows_client.run_flow(self.flow_id, self.flow_scope, flow_input)
+    def run_flow(self, flow_input: dict, monitor_by: list = None):
+        flow_res = self.flows_client.run_flow(self.flow_id, self.flow_scope,
+                                              flow_input, monitor_by=monitor_by)
         return FlowAction(self, flow_res.data['action_id'])
 
     def save_flow(self, path):

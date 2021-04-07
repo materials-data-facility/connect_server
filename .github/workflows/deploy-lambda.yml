@@ -80,6 +80,7 @@ jobs:
          zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py \
              ./utils.py ./dynamo_manager.py ./automate_manager.py \
              ./globus_automate_flow.py ./flow_action.py ./organization.py \
+             ./globus_auth_manager.py \
             ./mdf_flow_info.json
          zip -r submit-dataset.zip ./schemas
          rm ./lambda_function.py
@@ -93,7 +94,8 @@ jobs:
          zip submit-status.zip ./lambda_function.py ./source_id_manager.py \
              ./utils.py ./dynamo_manager.py ./automate_manager.py \
              ./globus_automate_flow.py ./flow_action.py ./organization.py \
-            ./mdf_flow_info.json
+             ./globus_auth_manager.py \
+             ./mdf_flow_info.json
          zip -r submit-status.zip ./schemas
          rm ./lambda_function.py
          aws lambda update-function-code --function-name submit-status --zip-file fileb://./submit-status.zip
