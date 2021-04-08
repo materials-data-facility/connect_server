@@ -7,6 +7,7 @@ import os
 import boto3
 import jsonschema
 from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Key
 
 logger = logging.getLogger(__name__)
 
@@ -347,5 +348,9 @@ class DynamoManager:
 
     def for_source_id(self, source_id):
         table = self.get_dmo_table("status")
-        print("Table name", table)
-        return None
+        response = table['table'].query(
+            KeyConditionExpression=Key('source_id').eq(source_id))
+        assert "Items" in response
+        assert len(response['Items']) == 1
+
+        return response['Items'][0]
