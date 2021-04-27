@@ -37,7 +37,7 @@ CONFIG = {
 
 
 def lambda_handler(event, context):
-    dynamo_manager = DynamoManager(CONFIG)
+    dynamo_manager = DynamoManager()
     automate_manager = AutomateManager(get_secret())
 
     print(event)

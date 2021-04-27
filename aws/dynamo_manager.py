@@ -42,11 +42,11 @@ class DynamoManager:
         ("ingest_cleanup", "Post-processing cleanup")
     )
 
-    def __init__(self, config):
+    def __init__(self):
         self.dmo_client = boto3.resource('dynamodb', region_name="us-east-1")
         self.dmo_tables = {
-            "status": config["DYNAMO_STATUS_TABLE"],
-            "curation": config["DYNAMO_CURATION_TABLE"]
+            "status": os.environ["DYNAMO_STATUS_TABLE"],
+            "curation": os.environ["DYNAMO_CURATION_TABLE"]
         }
 
         # Load status schema

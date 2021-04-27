@@ -90,8 +90,8 @@ def lambda_handler(event, context):
     print("globus_dependent_token ", globus_dependent_token)
     access_token = event['headers']['Authorization']
 
-    dynamo_manager = DynamoManager(CONFIG)
-    sourceid_manager = SourceIDManager(dynamo_manager, CONFIG)
+    dynamo_manager = DynamoManager()
+    sourceid_manager = SourceIDManager(dynamo_manager)
 
     try:
         metadata = json.loads(event['body'], )
@@ -271,7 +271,7 @@ def lambda_handler(event, context):
     metadata["mdf"]["source_id"] = source_id
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = source_id_info["search_version"]
-
+    metadata["mdf"]["record_type"] = "dataset"
     # Fetch custom block descriptors, cast values to str, turn _description => _desc
     new_custom = {}
     for key, val in metadata.pop("custom", {}).items():
@@ -540,6 +540,7 @@ def lambda_handler(event, context):
         else:
             sub_conf["storage_acl"] = sub_conf["acl"]
 
+    metadata['curation'] = sub_conf['curation']
     status_info = {
         "source_id": source_id,
         "submission_time": datetime.utcnow().isoformat("T") + "Z",

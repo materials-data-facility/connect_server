@@ -38,12 +38,12 @@ class SourceIDManager:
         "with"
     ]
 
-    def __init__(self, dynamo_manager, config):
+    def __init__(self, dynamo_manager):
         self.dyanamo_manager = dynamo_manager
-        self.api_scope = config["API_SCOPE"]
-        self.api_scope_id = config["API_SCOPE_ID"]
-        self.extract_group_id = config["EXTRACT_GROUP_ID"]
-        self.admin_group_id = config["ADMIN_GROUP_ID"]
+        self.api_scope = os.environ["API_SCOPE"]
+        self.api_scope_id = os.environ["API_SCOPE_ID"]
+        self.extract_group_id = os.environ["EXTRACT_GROUP_ID"]
+        self.admin_group_id = os.environ["ADMIN_GROUP_ID"]
 
     def split_source_id(self, source_id):
         """Retrieve the source_name and version information from a source_id.

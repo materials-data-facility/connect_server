@@ -1,3 +1,5 @@
+import os
+
 import globus_sdk
 from globus_automate_client import FlowsClient
 from urllib.parse import urlparse
@@ -60,11 +62,16 @@ class AutomateManager:
         print(self.flows_client)
         self.flow.set_client(self.flows_client)
 
+        self.email_access_key = globus_secrets['SES_ACCESS_KEY']
+        self.email_secret = globus_secrets['SES_SECRET']
+
     def submit(self, mdf_rec, organization, submitting_user_token, submitting_user_id):
         destination_parsed = urlparse(organization.data_destinations[0])
         print(destination_parsed)
 
         assert destination_parsed.scheme == 'globus'
+
+        do_curation = mdf_rec.get("curation")
 
         automate_rec = {
             "mdf_portal_link": "https://example.com/example_link",
@@ -87,17 +94,24 @@ class AutomateManager:
             "dataset_acl": [
                 "urn:globus:auth:identity:117e8833-68f5-4cb2-afb3-05b25db69be1"
             ],
-            "search_index": "aeccc263-f083-45f5-ab1d-08ee702b3384",
+            "search_index": "ab71134d-0b36-473d-aa7e-7b19b2124c88",
             "group_by_dir": True,
             "mdf_storage_ep": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
             "mdf_dataset_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
-            "dataset_mdata": {},
+            "dataset_mdata": mdf_rec,
             "validator_params": {},
             "feedstock_https_domain": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
-            "curation_input": False,
+            "curation_input": do_curation,
             "mdf_publish": False,
             "citrine": False,
             "mrr": False,
+            "path": "/~/<username>/<data-directory>",
+            "admin_email": "bengal1@illinois.edu",
+            "_private_email_credentials": {
+                "aws_access_key_id": self.email_access_key,
+                "aws_secret_access_key": self.email_secret,
+                "region_name": "us-east-1"
+            },
             "_tokens": {
                 'SubmittingUser': submitting_user_token['access_token']
             }
