@@ -3,6 +3,14 @@ import urllib
 
 import boto3
 
+GLOBUS_LINK_FORMS = [
+    "^https:\/\/www\.globus\.org\/app\/transfer",
+    # noqa: W605 (invalid escape char '\/')
+    "^https:\/\/app\.globus\.org\/file-manager",  # noqa: W605
+    "^https:\/\/app\.globus\.org\/transfer",  # noqa: W605
+    "^https:\/\/.*globus.*(?=.*origin_id)(?=.*origin_path)",  # noqa: W605
+    "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
+]
 
 def normalize_globus_uri(location, config):
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
@@ -19,7 +27,7 @@ def normalize_globus_uri(location, config):
     """
     loc_info = urllib.parse.urlparse(location)
     # Globus Web App link into globus:// form
-    if any([re.search(pattern, location) for pattern in config["GLOBUS_LINK_FORMS"]]):
+    if any([re.search(pattern, location) for pattern in GLOBUS_LINK_FORMS]):
         data_info = urllib.parse.unquote(loc_info.query)
         # EP ID is in origin or dest
         ep_start = data_info.find("origin_id=")
