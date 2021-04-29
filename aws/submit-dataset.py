@@ -542,7 +542,7 @@ def lambda_handler(event, context):
     print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
     action_id = automate_manager.submit(metadata, organization,
                                         globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
-                                        user_id)
+                                        user_id, sub_conf['data_sources'], sub_conf['curation'])
 
     status_info['action_id'] = action_id
 

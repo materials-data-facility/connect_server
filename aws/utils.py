@@ -1,5 +1,6 @@
 import re
 import urllib
+from urllib import parse
 
 import boto3
 
@@ -11,6 +12,7 @@ GLOBUS_LINK_FORMS = [
     "^https:\/\/.*globus.*(?=.*origin_id)(?=.*origin_path)",  # noqa: W605
     "^https:\/\/.*globus.*(?=.*destination_id)(?=.*destination_path)"  # noqa: W605
 ]
+
 
 def normalize_globus_uri(location, config):
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.

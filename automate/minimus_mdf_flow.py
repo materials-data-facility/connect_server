@@ -186,6 +186,15 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
                         ],
                         "content.$": "$.dataset_mdata"
                     },
+                    "Next": "SubmissionSuccess"
+                },
+                "SubmissionSuccess": {
+                    "Type": "ExpressionEval",
+                    "Parameters": {
+                        "title": "Submission Ingested Successfully",
+                        "message.=": "'Submission Flow succeeded. Your submission (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
+                    },
+                    "ResultPath": "$.FinalState",
                     "Next": "ChooseNotifyUserEnd"
                 },
                 "FailUserTransfer": {

@@ -1,4 +1,5 @@
 import os
+from urllib import parse
 
 import globus_sdk
 from globus_automate_client import FlowsClient
@@ -7,6 +8,7 @@ from urllib.parse import urlparse
 from globus_sdk import ClientCredentialsAuthorizer, AccessTokenAuthorizer
 
 from globus_automate_flow import GlobusAutomateFlow
+from utils import normalize_globus_uri
 
 globus_secrets = None
 mdf_flow = None
@@ -65,30 +67,22 @@ class AutomateManager:
         self.email_access_key = globus_secrets['SES_ACCESS_KEY']
         self.email_secret = globus_secrets['SES_SECRET']
 
-    def submit(self, mdf_rec, organization, submitting_user_token, submitting_user_id):
+    def submit(self, mdf_rec, organization,
+               submitting_user_token, submitting_user_id,
+               data_sources, do_curation):
         destination_parsed = urlparse(organization.data_destinations[0])
         print(destination_parsed)
+        print("Fromt ", normalize_globus_uri(data_sources[0]))
 
         assert destination_parsed.scheme == 'globus'
 
-        do_curation = mdf_rec.get("curation")
-
         automate_rec = {
             "mdf_portal_link": "https://example.com/example_link",
-            "user_transfer_inputs":
-                {
-                    "destination_endpoint_id": destination_parsed.netloc,
-                    "label": "MDF Flow Test Transfer1",
-                    "source_endpoint_id": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
-                    "submitting-user-id": submitting_user_id,
-                    "transfer_items": [
-                        {
-                            "destination_path": destination_parsed.path,
-                            "recursive": True,
-                            "source_path": "/MDF/mdf_connect/test_files/canonical_datasets/dft/"
-                        }
-                    ]
-                },
+            "user_transfer_inputs": self.create_transfer_items(
+                data_sources=data_sources,
+                organization=organization,
+                submitting_user_id=submitting_user_id
+            ),
             "data_destinations": [],
             "data_permissions": {},
             "dataset_acl": [
@@ -123,6 +117,36 @@ class AutomateManager:
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())
         return flow_run.action_id
+
+    def create_transfer_items(self, data_sources, organization, submitting_user_id):
+        destination_parsed = urlparse(organization.data_destinations[0])
+
+        user_transfer_inputs = {"destination_endpoint_id": destination_parsed.netloc,
+                                "label": "MDF Flow Test Transfer1",
+                                "source_endpoint_id": None,
+                                "submitting-user-id": submitting_user_id,
+                                "transfer_items": []
+                                }
+
+        for data_source_url in data_sources:
+            transfer_params = parse.parse_qs(parse.urlparse(data_source_url).query)
+            if "destination_id" in transfer_params and "destination_path" in transfer_params:
+                if not user_transfer_inputs["source_endpoint_id"]:
+                    user_transfer_inputs["source_endpoint_id"] = transfer_params['destination_id'][0]
+                else:
+                    if user_transfer_inputs["source_endpoint_id"] != transfer_params['destination_id'][0]:
+                        raise ValueError(
+                            "All datasets must come from the same globus endpoint")
+                user_transfer_inputs['transfer_items'].append(
+                    {
+                        "destination_path": destination_parsed.path,
+                        "recursive": True,
+                        "source_path": transfer_params['destination_path'][0]
+                    }
+                )
+            else:
+                raise ValueError("Globus destination URI must include endpoint ID and path")
+        return user_transfer_inputs
 
     def get_status(self, action_id: str):
         return self.flow.get_status(action_id)
