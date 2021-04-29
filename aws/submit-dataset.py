@@ -405,8 +405,8 @@ def lambda_handler(event, context):
     # If Publishing, canonical data location is Publish location
     elif sub_conf["services"].get("mdf_publish"):
         sub_conf["canon_destination"] = utils.normalize_globus_uri(
-            sub_conf["services"]["mdf_publish"]
-            ["publication_location"], CONFIG)
+            sub_conf["services"]["mdf_publish"]["publication_location"]
+        )
         # Transfer into source_id dir
         sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
                                                      source_id + "/")
@@ -422,7 +422,7 @@ def lambda_handler(event, context):
     # Transfer into source_id dir
     final_dests = []
     for dest in sub_conf["data_destinations"]:
-        norm_dest = utils.normalize_globus_uri(dest, CONFIG)
+        norm_dest = utils.normalize_globus_uri(dest)
         final_dests.append(os.path.join(norm_dest, source_id + "/"))
     sub_conf["data_destinations"] = final_dests
 

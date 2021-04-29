@@ -71,9 +71,6 @@ class AutomateManager:
                submitting_user_token, submitting_user_id,
                data_sources, do_curation):
         destination_parsed = urlparse(organization.data_destinations[0])
-        print(destination_parsed)
-        print("Fromt ", normalize_globus_uri(data_sources[0]))
-
         assert destination_parsed.scheme == 'globus'
 
         automate_rec = {

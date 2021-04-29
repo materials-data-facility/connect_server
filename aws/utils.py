@@ -14,7 +14,7 @@ GLOBUS_LINK_FORMS = [
 ]
 
 
-def normalize_globus_uri(location, config):
+def normalize_globus_uri(location):
     """Normalize a Globus Web App link or Google Drive URI into a globus:// URI.
     For Google Drive URIs, the file(s) must be shared with
     materialsdatafacility@gmail.com.
@@ -85,11 +85,6 @@ def normalize_globus_uri(location, config):
 
     return new_location
 
-def make_globus_app_link(globus_uri, config):
-    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri, config))
-    globus_link = config["TRANSFER_WEB_APP_LINK"] \
-        .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
-    return globus_link
 
 def get_secret():
     secret_name = "Globus"
