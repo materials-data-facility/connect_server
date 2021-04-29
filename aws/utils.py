@@ -86,6 +86,13 @@ def normalize_globus_uri(location):
     return new_location
 
 
+def make_globus_app_link(globus_uri, config):
+    globus_uri_info = urllib.parse.urlparse(normalize_globus_uri(globus_uri, config))
+    globus_link = config["TRANSFER_WEB_APP_LINK"] \
+        .format(globus_uri_info.netloc, urllib.parse.quote(globus_uri_info.path))
+    return globus_link
+
+
 def get_secret():
     secret_name = "Globus"
     region_name = "us-east-1"
