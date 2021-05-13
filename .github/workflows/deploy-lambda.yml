@@ -12,16 +12,11 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  test:
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-    #does this mean that the files in my github repo are accessible by this YAML file?
     - uses: actions/checkout@v2
 
     # Check out the schema repo to package up the JSON schemae with function
@@ -32,13 +27,34 @@ jobs:
         ref: automate
         path: schemas
 
-
-      #installs a version of python, but I need this if deploying to a severless Python Lambda?
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: '3.7'
 
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip wheel
+        pip install -r aws/requirements.txt
+        pip list
+    - name: Check for vulnerabilities in libraries
+      run: |
+        pip install safety
+        pip freeze | safety check
+
+    - name: Lint with Flake8
+      run: |
+        pip install flake8
+        flake8
+
+    - name: Test with pytest
+      run: |
+        pip install pytest pytest-mock
+        python -m pytest aws/tests
+
+  publish:
+    runs-on: ubuntu-latest
+    steps:
     #credentials to connect to AWS
     - name: Configure AWS credentials from Production account
       uses: aws-actions/configure-aws-credentials@v1

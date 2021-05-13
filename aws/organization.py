@@ -19,6 +19,11 @@ class Organization:
         pass
 
     @classmethod
+    def from_json_doc(cls, json_doc):
+        object_name = namedtuple("Organization", json_doc.keys())(*json_doc.values())
+        return object_name
+
+    @classmethod
     def from_schema_repo(cls, canonical_name):
         schema_path = "./schemas/schemas"
         with open(os.path.join(schema_path, "..", "connect_aux_data", "organizations.json")) as org_schema:

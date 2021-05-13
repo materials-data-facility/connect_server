@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 from globus_sdk import ClientCredentialsAuthorizer, AccessTokenAuthorizer
 
 from globus_automate_flow import GlobusAutomateFlow
-from utils import normalize_globus_uri
 
 globus_secrets = None
 mdf_flow = None
@@ -135,18 +134,28 @@ class AutomateManager:
 
         for data_source_url in data_sources:
             transfer_params = parse.parse_qs(parse.urlparse(data_source_url).query)
-            if "destination_id" in transfer_params and "destination_path" in transfer_params:
+
+            # Standardize the URL since user's could have created a link from the
+            # left (origin) or right (destination) side of the Globus File browser
+            # We want standard origin terminology
+            if "destination_id" in transfer_params:
+                transfer_params["origin_id"] = transfer_params['destination_id']
+
+            if "destination_path" in transfer_params:
+                transfer_params['origin_path'] = transfer_params['destination_path']
+
+            if "origin_id" in transfer_params and "origin_path" in transfer_params:
                 if not user_transfer_inputs["source_endpoint_id"]:
-                    user_transfer_inputs["source_endpoint_id"] = transfer_params['destination_id'][0]
+                    user_transfer_inputs["source_endpoint_id"] = transfer_params['origin_id'][0]
                 else:
-                    if user_transfer_inputs["source_endpoint_id"] != transfer_params['destination_id'][0]:
+                    if user_transfer_inputs["source_endpoint_id"] != transfer_params['origin_id'][0]:
                         raise ValueError(
                             "All datasets must come from the same globus endpoint")
                 user_transfer_inputs['transfer_items'].append(
                     {
                         "destination_path": destination_parsed.path,
                         "recursive": True,
-                        "source_path": transfer_params['destination_path'][0]
+                        "source_path": transfer_params['origin_path'][0]
                     }
                 )
             else:
