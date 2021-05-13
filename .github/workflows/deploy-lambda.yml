@@ -45,7 +45,7 @@ jobs:
     - name: Test with pytest
       run: |
         pip install pytest pytest-mock
-        python -m pytest aws/tests
+        PYTHONPATH=aws python -m pytest aws/tests
 
   publish:
     runs-on: ubuntu-latest
