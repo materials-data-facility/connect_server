@@ -535,6 +535,8 @@ def lambda_handler(event, context):
     print("status ", status_info)
 
     automate_manager = AutomateManager(get_secret())
+    automate_manager.authenticate()
+
     organization = Organization.from_schema_repo(
         metadata["mdf"].get("organizations", "MDF Open"))
     print("######", organization)

@@ -7,6 +7,7 @@ from utils import get_secret
 def lambda_handler(event, context):
     dynamo_manager = DynamoManager()
     automate_manager = AutomateManager(get_secret())
+    automate_manager.authenticate()
 
     print(event)
     source_id = event['pathParameters']['source_id']

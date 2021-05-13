@@ -26,15 +26,26 @@ def authorizer_callback(*args, **kwargs):
 class AutomateManager:
 
     def __init__(self, secrets):
-        global globus_secrets, mdf_flow, tokens
-        globus_secrets = secrets
+        # Globals needed for the authorizer_callback
+        global tokens, mdf_flow
+
+        tokens = None
+        mdf_flow = None
 
         self.flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json")
         mdf_flow = self.flow
 
+        self.flows_client = None
+        self.email_access_key = secrets['SES_ACCESS_KEY']
+        self.email_secret = secrets['SES_SECRET']
+
+        self.api_client_id = secrets['API_CLIENT_ID']
+        self.api_client_secret = secrets['API_CLIENT_SECRET']
+
+    def authenticate(self):
+        global tokens
         conf_client = globus_sdk.ConfidentialAppAuthClient(
-            globus_secrets['API_CLIENT_ID'],
-            globus_secrets['API_CLIENT_SECRET'])
+            self.api_client_id, self.api_client_secret)
 
         requested_scopes = [
             "https://auth.globus.org/scopes/eec9b274-0c81-4334-bdc2-54e90e689b9a/manage_flows",
@@ -57,15 +68,12 @@ class AutomateManager:
         )
 
         self.flows_client = FlowsClient.new_client(
-            client_id=globus_secrets['API_CLIENT_ID'],
+            client_id=self.api_client_id,
             authorizer_callback=authorizer_callback,
             authorizer=cca)
 
         print(self.flows_client)
         self.flow.set_client(self.flows_client)
-
-        self.email_access_key = globus_secrets['SES_ACCESS_KEY']
-        self.email_secret = globus_secrets['SES_SECRET']
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id,
