@@ -165,7 +165,7 @@ def authenticate_token(token, groups, require_all=False):
     # However, the GlobusID "username" is not the email-like address, just the prefix.
     user_usernames = set([iden["username"].replace("@globusid.org", "")
                           for iden in auth_client.get_identities(
-                                                    ids=auth_res["identities_set"])["identities"]])
+        ids=auth_res["identities_set"])["identities"]])
     auth_succeeded = False
     missing_groups = []  # Used for require_all compliance
     group_roles = []
@@ -352,7 +352,7 @@ def make_source_id(title, author, test=False, index=None, sanitize_only=False):
         "offset": 0
     }
     old_search = mdf_toolbox.gmeta_pop(search_client.post_search(
-                                            mdf_toolbox.translate_index(index), old_q))
+        mdf_toolbox.translate_index(index), old_q))
     if len(old_search) == 0:
         search_version = 1
     elif len(old_search) == 1:
@@ -463,16 +463,19 @@ def clean_start():
     all_tasks = transfer_client.endpoint_manager_task_list(num_results=None,
                                                            filter_status="ACTIVE,INACTIVE",
                                                            filter_endpoint=CONFIG["LOCAL_EP"])
+
+    # Terminate active Transfers, skip if the list is empty
+    # Sending an empty list to `endpoint_manager_cancel_tasks` leads to a Globus error
     all_ids = [task["task_id"] for task in all_tasks]
-    # Terminate active Transfers
-    cancel_res = transfer_client.endpoint_manager_cancel_tasks(all_ids,
-                                                               CONFIG["TRANSFER_CANCEL_MSG"])
-    # Wait for all Transfers to be terminated
-    if not cancel_res["done"]:
-        while not transfer_client.endpoint_manager_cancel_status(cancel_res["id"])["done"]:
-            logger.debug("Waiting for all active Transfers to cancel")
-            time.sleep(CONFIG["CANCEL_WAIT_TIME"])
-    logger.debug("Active Transfer tasks cancelled")
+    if all_ids:
+        cancel_res = transfer_client.endpoint_manager_cancel_tasks(all_ids,
+                                                                   CONFIG["TRANSFER_CANCEL_MSG"])
+        # Wait for all Transfers to be terminated
+        if not cancel_res["done"]:
+            while not transfer_client.endpoint_manager_cancel_status(cancel_res["id"])["done"]:
+                logger.debug("Waiting for all active Transfers to cancel")
+                time.sleep(CONFIG["CANCEL_WAIT_TIME"])
+        logger.debug("Active Transfer tasks cancelled")
 
     # Delete data, feedstock, service_data
     logger.debug("Deleting old Connect files")
@@ -672,10 +675,10 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
 
                     # Transfer locally
                     transfer = mdf_toolbox.custom_transfer(
-                                    tc, loc_info.netloc, local_ep,
-                                    [(loc_info.path, transfer_path)],
-                                    interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                                    inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                        tc, loc_info.netloc, local_ep,
+                        [(loc_info.path, transfer_path)],
+                        interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                        inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
                     for event in transfer:
                         if not event["success"]:
                             logger.info("Transfer is_error: {} - {}"
@@ -694,7 +697,7 @@ def download_data(transfer_client, source_loc, local_ep, local_path,
                     if acl_res is not None:
                         try:
                             acl_del = admin_client.delete_endpoint_acl_rule(
-                                                        local_ep, acl_res["access_id"])
+                                local_ep, acl_res["access_id"])
                         except Exception as e:
                             logger.critical("ACL rule deletion exception for '{}': {}"
                                             .format(acl_res, repr(e)))
@@ -942,10 +945,10 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
                     raise ValueError("Internal permissions error")
 
             transfer = mdf_toolbox.custom_transfer(
-                            data_client or transfer_client, storage_info.netloc,
-                            backup_info.netloc, [(storage_info.path, backup_info.path)],
-                            interval=CONFIG["TRANSFER_PING_INTERVAL"],
-                            inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
+                data_client or transfer_client, storage_info.netloc,
+                backup_info.netloc, [(storage_info.path, backup_info.path)],
+                interval=CONFIG["TRANSFER_PING_INTERVAL"],
+                inactivity_time=CONFIG["TRANSFER_DEADLINE"], notify=False)
             for event in transfer:
                 if not event["success"]:
                     logger.info("Transfer is_error: {} - {}"
@@ -962,8 +965,8 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
             if data_user_acl_res is not None:
                 try:
                     data_user_acl_del = transfer_client.delete_endpoint_acl_rule(
-                                                            backup_info.netloc,
-                                                            data_user_acl_res["access_id"])
+                        backup_info.netloc,
+                        data_user_acl_res["access_id"])
                 except Exception as e:
                     logger.critical("ACL rule deletion exception for '{}': {}"
                                     .format(data_user_acl_res, repr(e)))
@@ -979,7 +982,7 @@ def backup_data(transfer_client, storage_loc, backup_locs, acl=None,
                 for acl_set in acl_res:
                     try:
                         acl_del = transfer_client.delete_endpoint_acl_rule(
-                                                    backup_info.netloc, acl_set["access_id"])
+                            backup_info.netloc, acl_set["access_id"])
                         if not acl_del.get("code") == "Deleted":
                             raise ValueError("ACL rule not deleted: '{}'"
                                              .format(acl_del.get("code")))
@@ -1315,7 +1318,7 @@ def citrine_upload(citrine_data, api_key, mdf_dataset, previous_id=None,
         "cit_ds_id": cit_ds_id,
         "success_count": success,
         "failure_count": failed
-        }
+    }
 
 
 def cancel_submission(source_id, wait=True):
@@ -1386,8 +1389,8 @@ def cancel_submission(source_id, wait=True):
             while old_read_table("status", source_id)["status"]["active"]:
                 os.kill(current_status["pid"], 0)  # Triggers ProcessLookupError on failure
                 logger.info("Waiting for submission {} (PID {}) to cancel".format(
-                                                                            source_id,
-                                                                            current_status["pid"]))
+                    source_id,
+                    current_status["pid"]))
                 time.sleep(CONFIG["CANCEL_WAIT_TIME"])
         except ProcessLookupError:
             # Process is dead
@@ -1601,11 +1604,11 @@ def old_read_table(table_name, source_id):
         return {
             "success": False,
             "error": "ID {} not found in {} database".format(source_id, table_name)
-            }
+        }
     return {
         "success": True,
         "status": entry
-        }
+    }
 
 
 def scan_table(table_name, fields=None, filters=None):
@@ -1916,7 +1919,7 @@ def update_status(source_id, step, code, text=None, link=None, except_on_fail=Fa
         return {
             "success": True,
             "status": status
-            }
+        }
 
 
 def modify_status_entry(source_id, modifications, except_on_fail=False):
@@ -1967,13 +1970,13 @@ def modify_status_entry(source_id, modifications, except_on_fail=False):
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         logger.info("[{}]{}: Modified: '{}'".format(status["pid"], source_id, modifications))
         return {
             "success": True,
             "status": status
-            }
+        }
 
 
 def translate_status(status):
@@ -2099,7 +2102,7 @@ def translate_status(status):
         "test": status["test"],
         "active": status["active"],
         "original_submission": status["original_submission"]
-        }
+    }
 
 
 def create_curation_task(task):
@@ -2186,7 +2189,7 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": "Table already created"
-            }
+        }
     # If misc/other exception, cannot create table
     elif tbl_res["error"] != "Table does not exist or is not active":
         return tbl_res
@@ -2198,24 +2201,24 @@ def initialize_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": "Table concurrently created"
-            }
+        }
     except Exception as e:
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
 
     tbl_res2 = old_get_dmo_table(table_name, client)
     if not tbl_res2["success"]:
         return {
             "success": False,
             "error": "Unable to create table: {}".format(tbl_res2["error"])
-            }
+        }
     else:
         return {
             "success": True,
             "table": tbl_res2["table"]
-            }
+        }
 
 
 def get_dmo_table(table_name, client=DMO_CLIENT):
@@ -2241,17 +2244,17 @@ def old_get_dmo_table(table_name, client=DMO_CLIENT):
         return {
             "success": False,
             "error": "Table does not exist or is not active"
-            }
+        }
     except Exception as e:
         return {
             "success": False,
             "error": repr(e)
-            }
+        }
     else:
         return {
             "success": True,
             "table": table
-            }
+        }
 
 
 def submit_to_queue(entry):
