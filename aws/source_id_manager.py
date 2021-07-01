@@ -7,8 +7,6 @@ import mdf_toolbox
 import re
 import logging
 
-from utils import get_secret
-
 logger = logging.getLogger(__name__)
 
 
@@ -38,12 +36,8 @@ class SourceIDManager:
         "with"
     ]
 
-    def __init__(self, dynamo_manager):
-        self.dyanamo_manager = dynamo_manager
-        self.api_scope = os.environ["API_SCOPE"]
-        self.api_scope_id = os.environ["API_SCOPE_ID"]
-        self.extract_group_id = os.environ["EXTRACT_GROUP_ID"]
-        self.admin_group_id = os.environ["ADMIN_GROUP_ID"]
+    def __init__(self):
+        pass
 
     def split_source_id(self, source_id):
         """Retrieve the source_name and version information from a source_id.
@@ -85,10 +79,60 @@ class SourceIDManager:
             "submission_version": int(submission_version)
         }
 
+    def make_source_name(self, title, author, is_test):
 
+        def clean_string(value):
+            tokens = [t for t in value.strip().replace("_", " ").split() if t]
+            value_clean = []
+
+            for token in tokens:
+                # Clean token is lowercase and alphanumeric
+                clean_token = "".join([char for
+                                       char in token.lower()
+                                       if char.isalnum() and char.isascii()])
+                if clean_token and clean_token not in self.delete_words:
+                    value_clean.append(clean_token)
+            return value_clean
+
+        # Clean title tokens
+        title_clean = clean_string(title)
+        author_word = clean_string(author)
+
+        # Remove author_word from title, if exists (e.g. from previous make_source_id())
+        while author_word in title_clean:
+            title_clean.remove(author_word)
+
+        # Select words from title for source_name
+        # Use up to the first two words + last word
+        if len(title_clean) >= 1:
+            word1 = title_clean[0]
+        else:
+            # Must have at least one word
+            raise ValueError("Title '{}' invalid: Must have at least one word that is not "
+                             "the author name (the following words do not count: '{}')"
+                             .format(title, self.delete_words))
+        if len(title_clean) >= 2:
+            word2 = title_clean[1]
+        else:
+            word2 = ""
+        if len(title_clean) >= 3:
+            word3 = title_clean[-1]
+        else:
+            word3 = ""
+
+        source_name = "{}_{}_{}_{}".format(author_word, word1, word2, word3).strip("_")
+
+        # Add test flag if necessary
+        if is_test:
+            source_name = "_test_" + source_name
+
+        return source_name
+
+    # SourceID is the primary key - we could make this a uuid
+    # Could be datasetID? is in Dyanamo DB and Search records
+    # There will be lots of places where you do string.split('_v') to get version
     def make_source_id(self, title, author, index, is_test, sanitize_only=False):
         """Make a source name out of a title."""
-
         # Remove any existing version number from title
         title = self.split_source_id(title)["source_name"]
 
@@ -156,6 +200,16 @@ class SourceIDManager:
                                                            'API_CLIENT_ID'],
                                                        client_secret=globus_secrets[
                                                            'API_CLIENT_SECRET'])['search']
+
+        # Parent record with DOI -
+        #   Version records with their own DOIs
+        #   Examples of this are ArXiV and Zenodo
+        # Looking up the parent record DOI would take you to a landing page which shows latest metadata,
+        # but list all available versions.
+        # Also be able to visit the DOI of the version
+        # parent: doi 10.1057/xyz   UUID1
+        # version: 10.1057/xyz#v1   UUID2 (links between made with metadata) parent: UUID1
+        # Only original submitter can submit a change
 
         old_q = {
             "q": "mdf.source_name:{} AND mdf.resource_type:dataset".format(source_name),

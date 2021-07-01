@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import urllib
+import uuid
 from copy import deepcopy
 from datetime import datetime
 
@@ -111,10 +112,13 @@ def lambda_handler(event, context):
         }
 
     # If this is an incremental update, fetch the original submission
+    # Just update the metadata
+    # @todo
+    # data locations should be empty. incremental_update --> update_metadata. @todo check client too
     if metadata.get("incremental_update"):
         # source_name and title cannot be updated
         metadata.get("mdf", {}).pop("source_name", None)
-        metadata.get("dc", {}).pop("titles", None)
+        metadata.get("dc", {}).pop("titles", None) # Why can't title be changed?
 
         # update must be True
         if not metadata.get("update"):
@@ -125,6 +129,7 @@ def lambda_handler(event, context):
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
+    # i.e. default to Dataset
     if not metadata.get("dc") or not isinstance(metadata["dc"], dict):
         metadata["dc"] = {}
     if not metadata["dc"].get("resourceType"):
@@ -136,7 +141,7 @@ def lambda_handler(event, context):
         except Exception:
             pass
 
-    # Move tags to dc.subjects
+    # Move tags to dc.subjects - this is to simplify the specification of tags UX feature
     if metadata.get("tags"):
         tags = metadata.pop("tags", [])
         if not isinstance(tags, list):
@@ -153,8 +158,8 @@ def lambda_handler(event, context):
         print("---->", validate_err)
         return validate_err
 
-    # Pull out configuration fields from metadata into sub_conf, set defaults where appropriate
-    sub_conf = {
+    # Pull out configuration fields from metadata into submission_conf, set defaults where appropriate
+    submission_conf = {
         "data_sources": metadata.pop("data_sources"),
         "data_destinations": metadata.pop("data_destinations", []),
         "curation": metadata.pop("curation", False),
@@ -170,21 +175,26 @@ def lambda_handler(event, context):
         "submitter": name
     }
 
-    sub_title = metadata["dc"]["titles"][0]["title"]
+    submission_title = metadata["dc"]["titles"][0]["title"]
 
     try:
         # author_name is first author familyName, first author creatorName,
         # or submitter
         author_name = metadata["dc"]["creators"][0].get(
             "familyName", metadata["dc"]["creators"][0].get("creatorName", name))
+
+        #
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
-        is_test = sub_conf["test"]
-        source_id_info = sourceid_manager.make_source_id(
-            existing_source_name or sub_title, author_name,
-            is_test=is_test,
-            index=(CONFIG["INGEST_TEST_INDEX"] if is_test else CONFIG["INGEST_INDEX"]),
-            sanitize_only=bool(existing_source_name))
-        print("SourceID Info ", source_id_info)
+        is_test = submission_conf["test"]
+
+        if not existing_source_name:
+            source_name = uuid.uuid4()
+            existing_record = None
+            version = None
+        else:
+            existing_record = dynamo_manager.get_current_version(existing_source_name)
+            source_name = existing_source_name
+            version = existing_record['version']
     except Exception as e:
         return {
             'statusCode': 400,
@@ -195,86 +205,76 @@ def lambda_handler(event, context):
                 })
         }
 
-    source_id = source_id_info["source_id"]
-    source_name = source_id_info["source_name"]
-    if (len(source_id_info["user_id_list"]) > 0
-            and not any([uid in source_id_info["user_id_list"] for uid in identities])):
+    if existing_record and not any([uid == existing_record['user_id'] for uid in identities]):
         return {
             'statusCode': 400,
             'body': json.dumps(
                 {
                     "success": False,
-                    "error": ("Your source_name or title has been submitted previously "
-                              "by another user. Please change your source_name to "
-                              "correct this error.")
+                    "error": "Only the submitting user is allowed to update this record"
                 })
         }
 
     # Verify update flag is correct
     # update == False but version > 1
-    if not sub_conf["update"] and (source_id_info["search_version"] > 1
-                                   or source_id_info["submission_version"] > 1):
+    if existing_record and not submission_conf["update"]:
         return {
             'statusCode': 400,
             'body': json.dumps(
                 {
                     "success": False,
                     "error": (
-                        "This dataset has already been submitted, but this submission is not "
-                        "marked as an update.\nIf you are updating a previously submitted "
-                        "dataset, please resubmit with 'update=True'.\nIf you are submitting "
-                        "a new dataset, please change the source_name.")
+                        "This dataset has already been submitted, but this submission is "
+                        "not marked as an update.")
                 })
         }
-
     # update == True but version == 1
-    elif sub_conf["update"] and (source_id_info["search_version"] == 1
-                                 and source_id_info["submission_version"] == 1):
+    elif submission_conf["update"] and not existing_record:
         return {
             'statusCode': 400,
             'body': json.dumps(
                 {
                     "success": False,
                     "error": (
-                        "This dataset has not already been submitted, but this submission is "
-                        "marked as an update.\nIf you are updating a previously submitted "
-                        "dataset, please verify that your source_name is correct.\nIf you "
-                        "are submitting a new dataset, please resubmit with 'update=False'.")
+                        "This dataset has not already been submitted, but this "
+                        "submission is marked as an update.\nIf you are updating a "
+                        "previously submitted dataset, please verify that your "
+                        "source_name is correct.\nIf you are submitting a new dataset, "
+                        "please resubmit with 'update=False'.")
                 })
         }
-
-    print("Source ID", source_id_info)
 
     # Set appropriate metadata
     if not metadata.get("mdf"):
         metadata["mdf"] = {}
-    metadata["mdf"]["source_id"] = source_id
+    metadata["mdf"]["source_id"] = source_name
     metadata["mdf"]["source_name"] = source_name
-    metadata["mdf"]["version"] = source_id_info["search_version"]
+    metadata["mdf"]["version"] = DynamoManager.increment_record_version(version)
 
     # Fetch custom block descriptors, cast values to str, turn _description => _desc
-    new_custom = {}
-    for key, val in metadata.pop("custom", {}).items():
-        if key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = str(val)
-        else:
-            new_custom[key] = str(val)
-    for key, val in metadata.pop("custom_desc", {}).items():
-        if key.endswith("_desc"):
-            new_custom[key] = str(val)
-        elif key.endswith("_description"):
-            new_custom[key[:-len("ription")]] = str(val)
-        else:
-            new_custom[key + "_desc"] = str(val)
-    if new_custom:
-        metadata["custom"] = new_custom
+    # @BenB edited
+    # new_custom = {}
+    # for key, val in metadata.pop("custom", {}).items():
+    #     if key.endswith("_description"):
+    #         new_custom[key[:-len("ription")]] = str(val)
+    #     else:
+    #         new_custom[key] = str(val)
+    # for key, val in metadata.pop("custom_desc", {}).items():
+    #     if key.endswith("_desc"):
+    #         new_custom[key] = str(val)
+    #     elif key.endswith("_description"):
+    #         new_custom[key[:-len("ription")]] = str(val)
+    #     else:
+    #         new_custom[key + "_desc"] = str(val)
+    # if new_custom:
+    #     metadata["custom"] = new_custom
 
     # Get organization rules to apply
     if metadata["mdf"].get("organizations"):
         try:
-            metadata["mdf"]["organizations"], sub_conf = \
+            metadata["mdf"]["organizations"], submission_conf = \
                 sourceid_manager.fetch_org_rules(metadata["mdf"]["organizations"],
-                                                 sub_conf)
+                                                 submission_conf)
         except ValueError as e:
             logger.info(
                 "Invalid organizations: {}".format(metadata["mdf"]["organizations"]))
@@ -289,19 +289,21 @@ def lambda_handler(event, context):
 
         # Pull out DC fields from org metadata
         # rightsList (license)
-        if sub_conf.get("rightsList"):
+        if submission_conf.get("rightsList"):
             if not metadata["dc"].get("rightsList"):
                 metadata["dc"]["rightsList"] = []
-            metadata["dc"]["rightsList"] += sub_conf.pop("rightsList")
+            metadata["dc"]["rightsList"] += submission_conf.pop("rightsList")
         # fundingReferences
-        if sub_conf.get("fundingReferences"):
+        if submission_conf.get("fundingReferences"):
             if not metadata["dc"].get("fundingReferences"):
                 metadata["dc"]["fundingReferences"] = []
-            metadata["dc"]["fundingReferences"] += sub_conf.pop("fundingReferences")
+            metadata["dc"]["fundingReferences"] += submission_conf.pop("fundingReferences")
 
+    ### Move this to the start of the operation
+    # @Ben Or make this its own function that checks auth status against a group ID
     # Check that user is in appropriate org group(s), if applicable
-    if sub_conf.get("permission_groups"):
-        for group_uuid in sub_conf["permission_groups"]:
+    if submission_conf.get("permission_groups"):
+        for group_uuid in submission_conf["permission_groups"]:
             try:
                 group_res = sourceid_manager.authenticate_token(access_token, group_uuid)
             except Exception as e:
@@ -323,72 +325,84 @@ def lambda_handler(event, context):
                 }
 
     # If ACL includes "public", no other entries needed
-    if "public" in sub_conf["acl"]:
-        sub_conf["acl"] = ["public"]
+    # @Ben this is an assumption that the base dir permission is public
+    # Don't use dataset ACL any more - rely on globus endpoint ACL instead
+    if "public" in submission_conf["acl"]:
+        submission_conf["acl"] = ["public"]
     # Otherwise, make sure Connect admins have permission, also deduplicate
     else:
-        sub_conf["acl"].append(CONFIG["ADMIN_GROUP_ID"])
-        sub_conf["acl"] = list(set(sub_conf["acl"]))
+        submission_conf["acl"].append(CONFIG["ADMIN_GROUP_ID"])
+        submission_conf["acl"] = list(set(submission_conf["acl"]))
     # Set correct ACL in metadata
-    if "public" in sub_conf["dataset_acl"] or "public" in sub_conf["acl"]:
-        sub_conf["dataset_acl"] = ["public"]
+    if "public" in submission_conf["dataset_acl"] or "public" in submission_conf["acl"]:
+        submission_conf["dataset_acl"] = ["public"]
     else:
-        sub_conf["dataset_acl"] = list(set(sub_conf["dataset_acl"] + sub_conf["acl"]))
+        submission_conf["dataset_acl"] = list(set(submission_conf["dataset_acl"] + submission_conf["acl"]))
 
-    metadata["mdf"]["acl"] = sub_conf["dataset_acl"]
+    metadata["mdf"]["acl"] = submission_conf["dataset_acl"]
 
     # Set defaults for services if parameters not set or test flag overrides
     # Test defaults
-    if sub_conf["test"]:
+    if submission_conf["test"]:
         # MDF Search
-        sub_conf["services"]["mdf_search"] = {
+        submission_conf["services"]["mdf_search"] = {
             "index": CONFIG["INGEST_TEST_INDEX"]
         }
         # MDF Publish
-        if sub_conf["services"].get("mdf_publish") is True:
-            sub_conf["services"]["mdf_publish"] = {
+        # @Ben If you get rid of this, you have to make sure you have a data location specified by org
+        # Mint DOI with https://globus-automate-client.readthedocs.io/en/latest/globus_action_providers.html#datacite-doi-minting
+        if submission_conf["services"].get("mdf_publish") is True:
+            submission_conf["services"]["mdf_publish"] = {
                 "publication_location": ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_PATH"],
-                                                              source_id)))
+                                                              source_name,
+                                                              metadata["mdf"]["version"])))
             }
-        if sub_conf["services"].get("mdf_publish"):
-            sub_conf["services"]["mdf_publish"]["doi_test"] = True
+        if submission_conf["services"].get("mdf_publish"):
+            submission_conf["services"]["mdf_publish"]["doi_test"] = True
         # Citrine
-        if sub_conf["services"].get("citrine"):
-            sub_conf["services"]["citrine"] = {
+        # @Ben this can probably be a separate flow
+        if submission_conf["services"].get("citrine"):
+            submission_conf["services"]["citrine"] = {
                 "public": False
             }
         # MRR
-        if sub_conf["services"].get("mrr"):
-            sub_conf["services"]["mrr"] = {
+        # @Ben this can probably be a separate flow
+        if submission_conf["services"].get("mrr"):
+            submission_conf["services"]["mrr"] = {
                 "test": True
             }
     # Non-test defaults
     else:
         # MDF Publish
-        if sub_conf["services"].get("mdf_publish") is True:
-            sub_conf["services"]["mdf_publish"] = {
+        # @Ben this is not needed if we check for a data destination in the org
+        if submission_conf["services"].get("mdf_publish") is True:
+            submission_conf["services"]["mdf_publish"] = {
                 "publication_location": ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_PATH"],
-                                                              source_id)))
+                                                              source_name,
+                                                              metadata["mdf"]["version"])))
             }
-        if sub_conf["services"].get("mdf_publish"):
-            sub_conf["services"]["mdf_publish"]["doi_test"] = CONFIG["DEFAULT_DOI_TEST"]
+        if submission_conf["services"].get("mdf_publish"):
+            submission_conf["services"]["mdf_publish"]["doi_test"] = CONFIG["DEFAULT_DOI_TEST"]
         # Citrine
-        if sub_conf["services"].get("citrine") is True:
-            sub_conf["services"]["citrine"] = {
+        # @Ben this can probably be a separate flow
+        if submission_conf["services"].get("citrine") is True:
+            submission_conf["services"]["citrine"] = {
                 "public": CONFIG["DEFAULT_CITRINATION_PUBLIC"]
             }
         # MRR
-        if sub_conf["services"].get("mrr") is True:
-            sub_conf["services"]["mrr"] = {
+        # @Ben this can probably be a separate flow
+        if submission_conf["services"].get("mrr") is True:
+            submission_conf["services"]["mrr"] = {
                 "test": CONFIG["DEFAULT_MRR_TEST"]
             }
 
     # Must be Publishing if not extracting
-    if sub_conf["no_extract"] and not sub_conf["services"].get("mdf_publish"):
+    # Obsolete? @Ben yes
+    if submission_conf["no_extract"] and not submission_conf["services"].get("mdf_publish"):
         return {
             'statusCode': 400,
             'body': json.dumps(
@@ -403,37 +417,44 @@ def lambda_handler(event, context):
         }
 
     # If Publishing, canonical data location is Publish location
-    elif sub_conf["services"].get("mdf_publish"):
-        sub_conf["canon_destination"] = utils.normalize_globus_uri(
-            sub_conf["services"]["mdf_publish"]["publication_location"]
+    # @Ben change canonical to primary. Define primary data location as the first specified data location in an org
+    elif submission_conf["services"].get("mdf_publish"):
+        submission_conf["canon_destination"] = utils.normalize_globus_uri(
+            submission_conf["services"]["mdf_publish"]["publication_location"]
         )
         # Transfer into source_id dir
-        sub_conf["canon_destination"] = os.path.join(sub_conf["canon_destination"],
-                                                     source_id + "/")
+        submission_conf["canon_destination"] = os.path.join(submission_conf["canon_destination"],
+                                                            source_name,
+                                                            metadata["mdf"]["version"] + "/")
     # Otherwise (not Publishing), canon destination is backup
     else:
-        sub_conf["canon_destination"] = ("globus://{}{}/"
+        submission_conf["canon_destination"] = ("globus://{}{}/"
                                          .format(CONFIG["BACKUP_EP"],
                                                  os.path.join(CONFIG["BACKUP_PATH"],
-                                                              source_id)))
+                                                              source_name,
+                                                              metadata["mdf"]["version"])))
     # Remove canon dest from data_destinations (canon dest transferred to separately)
-    if sub_conf["canon_destination"] in sub_conf["data_destinations"]:
-        sub_conf["data_destinations"].remove(sub_conf["canon_destination"])
+    if submission_conf["canon_destination"] in submission_conf["data_destinations"]:
+        submission_conf["data_destinations"].remove(submission_conf["canon_destination"])
     # Transfer into source_id dir
     final_dests = []
-    for dest in sub_conf["data_destinations"]:
+    for dest in submission_conf["data_destinations"]:
         norm_dest = utils.normalize_globus_uri(dest)
-        final_dests.append(os.path.join(norm_dest, source_id + "/"))
-    sub_conf["data_destinations"] = final_dests
+        final_dests.append(os.path.join(norm_dest, source_name,
+                                        metadata["mdf"]["version"] + "/"))
+    submission_conf["data_destinations"] = final_dests
 
     # Add canon dest to metadata
     metadata["data"] = {
-        "endpoint_path": sub_conf["canon_destination"],
-        "link": utils.make_globus_app_link(sub_conf["canon_destination"], CONFIG)
+        "endpoint_path": submission_conf["canon_destination"],
+        "link": utils.make_globus_app_link(submission_conf["canon_destination"], CONFIG)
     }
+
+    # This can be removed - will become links in the new schema
     if metadata.get("external_uri"):
         metadata["data"]["external_uri"] = metadata.pop("external_uri")
 
+    # @Ben Below likely not needed if we assume dir creation on org creation
     # Determine storage_acl to set on canon destination
     # Default is the base acl, but if dataset and dest are already public, set None
     # If not backing up dataset, storage_acl should be default (also doesn't matter)
@@ -443,7 +464,7 @@ def lambda_handler(event, context):
             mdf_tc = mdf_toolbox.confidential_login(services="transfer",
                                                     **CONFIG["GLOBUS_CREDS"])["transfer"]
             # Get EP + path from canon dest
-            canon_loc = urllib.parse.urlparse(sub_conf["canon_destination"])
+            canon_loc = urllib.parse.urlparse(submission_conf["canon_destination"])
             # Get full list of ACLs (there is no search-by-path)
             acl_list = mdf_tc.endpoint_acl_list(canon_loc.netloc)
             # Get list of paths to match
@@ -497,10 +518,10 @@ def lambda_handler(event, context):
                 break
 
         # If the dir is public and dataset is public, do not set a storage_acl
-        if public_type and "public" in sub_conf["acl"]:
-            sub_conf["storage_acl"] = None
+        if public_type and "public" in submission_conf["acl"]:
+            submission_conf["storage_acl"] = None
         # If the dir is public and the dataset is not public, error
-        elif public_type and "public" not in sub_conf["acl"]:
+        elif public_type and "public" not in submission_conf["acl"]:
             return {
                 'statusCode': 400,
                 'body': json.dumps(
@@ -509,7 +530,7 @@ def lambda_handler(event, context):
                         "error": (
                             "Your submission has a non-public base ACL ({}), but the primary "
                             "storage location for your data is public (path '{}' on endpoint "
-                            "'{}' is set to {} access)").format(sub_conf["acl"],
+                            "'{}' is set to {} access)").format(submission_conf["acl"],
                                                                 public_dir,
                                                                 canon_loc.netloc,
                                                                 public_type)
@@ -518,17 +539,19 @@ def lambda_handler(event, context):
 
         # If the dir is not public, set the storage_acl to the base acl
         else:
-            sub_conf["storage_acl"] = sub_conf["acl"]
+            submission_conf["storage_acl"] = submission_conf["acl"]
+# @Ben Above likely not needed if we assume dir creation on org creation
 
     status_info = {
-        "source_id": source_id,
+        "source_id": source_name,
+        "version": version,
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         "submitter": name,
-        "title": sub_title,
+        "title": submission_title,
         "user_id": user_id,
         "user_email": user_email,
-        "acl": sub_conf["acl"],
-        "test": sub_conf["test"],
+        "acl": submission_conf["acl"],
+        "test": submission_conf["test"],
         "original_submission": json.dumps(md_copy)
     }
 
@@ -544,7 +567,7 @@ def lambda_handler(event, context):
     print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
     action_id = automate_manager.submit(metadata, organization,
                                         globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
-                                        user_id, sub_conf['data_sources'], sub_conf['curation'])
+                                        user_id, submission_conf['data_sources'], submission_conf['curation'])
 
     status_info['action_id'] = action_id
 
@@ -573,6 +596,6 @@ def lambda_handler(event, context):
         'body': json.dumps(
             {
                 "success": True,
-                'source_id': source_id
+                'source_id': source_name
             })
     }

@@ -77,6 +77,7 @@ class AutomateManager:
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id,
                data_sources, do_curation):
+        # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
 
@@ -93,16 +94,24 @@ class AutomateManager:
                 "urn:globus:auth:identity:117e8833-68f5-4cb2-afb3-05b25db69be1"
             ],
             "search_index": "ab71134d-0b36-473d-aa7e-7b19b2124c88",
+            # @Ben group_by_dir This will be an XTract flow option
             "group_by_dir": True,
             "mdf_storage_ep": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
             "mdf_dataset_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
             "dataset_mdata": mdf_rec,
             "validator_params": {},
+            # Maybe not needed?
             "feedstock_https_domain": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
+
             "curation_input": do_curation,
+            #@Ben Change to something like get_doi: True
             "mdf_publish": False,
+            # @Ben this will default to False.
             "citrine": False,
+            # @Ben this will default to True as long as the data are public. That will be in a separate flow
             "mrr": False,
+
+            # Is this actually used?
             "path": "/~/<username>/<data-directory>",
             "admin_email": "bengal1@illinois.edu",
             "_private_email_credentials": {
@@ -135,6 +144,8 @@ class AutomateManager:
         for data_source_url in data_sources:
             transfer_params = parse.parse_qs(parse.urlparse(data_source_url).query)
 
+            # @TODO
+            # This should also handle the google drive URL mapping (See utils.py:67)
             # Standardize the URL since user's could have created a link from the
             # left (origin) or right (destination) side of the Globus File browser
             # We want standard origin terminology

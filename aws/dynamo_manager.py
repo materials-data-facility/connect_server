@@ -44,17 +44,61 @@ class DynamoManager:
 
     def __init__(self):
         self.dmo_client = boto3.resource('dynamodb', region_name="us-east-1")
+        self.status_table = self.dmo_client.Table(os.environ["DYNAMO_STATUS_TABLE"])
+
         self.dmo_tables = {
             "status": os.environ["DYNAMO_STATUS_TABLE"],
             "curation": os.environ["DYNAMO_CURATION_TABLE"]
         }
 
         # Load status schema
-        schema_path = "./schemas/schemas"
+        schema_path = os.environ.get('SCHEMA_PATH', "./schemas/schemas")
         with open(os.path.join(schema_path, "internal_status.json")) as schema_file:
             self.schema = json.load(schema_file)
 
         self.resolver = jsonschema.RefResolver(base_uri="file://{}/{}/".format(os.getcwd(), schema_path), referrer=self.schema)
+
+    def get_current_version(self, source_name):
+        done = False
+        start_key = None
+        scan_kwargs = {
+            'KeyConditionExpression': Key('source_name').eq(source_name)
+        }
+
+        versions = {}
+
+        while not done:
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
+            response = self.status_table.query(**scan_kwargs)
+
+            # Make a dict of versions
+            versions.update({str(x['version']): x for x in response['Items']})
+
+            start_key = response.get('LastEvaluatedKey', None)
+            done = start_key is None
+
+        if not versions:
+            return None
+
+        version_numbers = sorted(versions.keys(),
+                                 key=lambda x: [int(i) if i.isdigit() else i for i in
+                                                x.split('.')])
+
+        latest = version_numbers[-1]
+        return versions[latest]
+
+    @staticmethod
+    def increment_record_version(current_version):
+        if not current_version:
+            return "1.0"
+
+        try:
+            major, minor = current_version.split('.')
+            minor = str(int(minor)+1)
+            return '.'.join([major, minor])
+        except ValueError:
+            return None
 
     def get_dmo_table(self, table_name):
         # For compatibility with legacy utils in this file
