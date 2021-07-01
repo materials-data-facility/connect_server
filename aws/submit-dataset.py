@@ -544,7 +544,7 @@ def lambda_handler(event, context):
 
     status_info = {
         "source_id": source_name,
-        "version": version,
+        "version": metadata["mdf"]["version"],
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         "submitter": name,
         "title": submission_title,
@@ -555,7 +555,7 @@ def lambda_handler(event, context):
         "original_submission": json.dumps(md_copy)
     }
 
-    print("status ", status_info)
+    print("status info", status_info)
 
     automate_manager = AutomateManager(get_secret())
     automate_manager.authenticate()
