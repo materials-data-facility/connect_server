@@ -72,7 +72,7 @@ def lambda_handler(event, context):
     access_token = event['headers']['Authorization']
 
     dynamo_manager = DynamoManager()
-    sourceid_manager = SourceIDManager(dynamo_manager)
+    sourceid_manager = SourceIDManager()
 
     try:
         metadata = json.loads(event['body'], )
@@ -188,7 +188,7 @@ def lambda_handler(event, context):
         is_test = submission_conf["test"]
 
         if not existing_source_name:
-            source_name = uuid.uuid4()
+            source_name = str(uuid.uuid4())
             existing_record = None
             version = None
         else:
