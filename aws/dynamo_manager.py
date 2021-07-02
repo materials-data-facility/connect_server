@@ -331,7 +331,7 @@ class DynamoManager:
                 "success": True
             }
 
-    def read_status_record(self, table_name, source_id, version):
+    def read_status_record(self, source_id, version):
         # Compatibility for legacy utils in this file
         tbl_res = self.get_dmo_table("status")
         if not tbl_res["success"]:
