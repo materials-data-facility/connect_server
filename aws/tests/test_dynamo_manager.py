@@ -44,6 +44,27 @@ class TestDynamoManager:
         assert query_calls[0][1]['KeyConditionExpression'] == Key('source_id').eq(
             'test_submission')
 
+    def test_get_current_version_not_exist(self, mocker):
+        mock_dynamo = mocker.Mock()
+        mock_table = mocker.Mock()
+        mock_dynamo.Table = mocker.Mock(return_value=mock_table)
+
+        batch1 = {
+            "Items": [
+            ],
+            'LastEvaluatedKey': None
+        }
+
+        mock_table.query = mocker.Mock(side_effect=[batch1])
+        mock_boto = mocker.patch('dynamo_manager.boto3')
+        mock_boto.resource = mocker.Mock(return_value=mock_dynamo)
+
+        os.environ["DYNAMO_STATUS_TABLE"] = 'test_table'
+        os.environ["DYNAMO_CURATION_TABLE"] = 'test_curation_table'
+        dynamo_manager = DynamoManager()
+        record = dynamo_manager.get_current_version("test_submission")
+        assert not record
+
     def test_increment_record_version(self):
         assert DynamoManager.increment_record_version("1.1") == "1.2"
         assert DynamoManager.increment_record_version("1.12") == "1.13"

@@ -69,6 +69,7 @@ def lambda_handler(event, context):
     globus_dependent_token = eval(depends)
     print("name ", name, "identities", identities)
     print("globus_dependent_token ", globus_dependent_token)
+
     access_token = event['headers']['Authorization']
 
     dynamo_manager = DynamoManager()
@@ -111,6 +112,7 @@ def lambda_handler(event, context):
                 })
         }
 
+    print("+++Metadata+++", metadata)
     # If this is an incremental update, fetch the original submission
     # Just update the metadata
     # @todo
@@ -185,6 +187,7 @@ def lambda_handler(event, context):
 
         #
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
+        print("++++++++existing_source+++++++", existing_source_name)
         is_test = submission_conf["test"]
 
         if not existing_source_name:
@@ -194,8 +197,9 @@ def lambda_handler(event, context):
         else:
             existing_record = dynamo_manager.get_current_version(existing_source_name)
             source_name = existing_source_name
-            version = existing_record['version']
+            version = existing_record['version'] if existing_record else None
     except Exception as e:
+        print(e)
         return {
             'statusCode': 400,
             'body': json.dumps(
@@ -596,6 +600,7 @@ def lambda_handler(event, context):
         'body': json.dumps(
             {
                 "success": True,
-                'source_id': source_name
+                'source_id': source_name,
+                'version': version
             })
     }

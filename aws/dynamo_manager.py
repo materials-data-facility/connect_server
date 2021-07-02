@@ -333,22 +333,14 @@ class DynamoManager:
 
     def read_status_record(self, table_name, source_id, version):
         # Compatibility for legacy utils in this file
-        tbl_res = self.get_dmo_table(table_name)
+        tbl_res = self.get_dmo_table("status")
         if not tbl_res["success"]:
             return tbl_res
         table = tbl_res["table"]
 
         entry = table.get_item(Key={"source_id": source_id, 'version': version},
                                ConsistentRead=True).get("Item")
-        if not entry:
-            return {
-                "success": False,
-                "error": "ID {} not found in {} database".format(source_id, table_name)
-            }
-        return {
-            "success": True,
-            "status": entry
-        }
+        return entry
 
     def create_status(self, status):
         tbl_res = self.get_dmo_table("status")
@@ -371,7 +363,7 @@ class DynamoManager:
             return status_valid
 
         # Check that status does not already exist
-        if self.read_status_record("status", status["source_id"], status['version'])["success"]:
+        if self.read_status_record(status["source_id"], status['version']):
             return {
                 "success": False,
                 "error": "ID {} already exists in status database".format(status["source_id"])
