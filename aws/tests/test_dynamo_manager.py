@@ -41,7 +41,7 @@ class TestDynamoManager:
         assert 'ExclusiveStartKey' not in query_calls[0][1]
         assert 'ExclusiveStartKey' in query_calls[1][1]
         assert query_calls[1][1]['ExclusiveStartKey'] == '3'
-        assert query_calls[0][1]['KeyConditionExpression'] == Key('source_name').eq(
+        assert query_calls[0][1]['KeyConditionExpression'] == Key('source_id').eq(
             'test_submission')
 
     def test_increment_record_version(self):
