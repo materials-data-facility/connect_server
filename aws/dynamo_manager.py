@@ -58,11 +58,11 @@ class DynamoManager:
 
         self.resolver = jsonschema.RefResolver(base_uri="file://{}/{}/".format(os.getcwd(), schema_path), referrer=self.schema)
 
-    def get_current_version(self, source_name):
+    def get_current_version(self, source_id):
         done = False
         start_key = None
         scan_kwargs = {
-            'KeyConditionExpression': Key('source_name').eq(source_name)
+            'KeyConditionExpression': Key('source_id').eq(source_id)
         }
 
         versions = {}
@@ -371,7 +371,7 @@ class DynamoManager:
             return status_valid
 
         # Check that status does not already exist
-        if self.read_status_record("status", status["source_id"])["success"]:
+        if self.read_status_record("status", status["source_id"], status['version'])["success"]:
             return {
                 "success": False,
                 "error": "ID {} already exists in status database".format(status["source_id"])
