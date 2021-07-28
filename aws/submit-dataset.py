@@ -113,6 +113,11 @@ def lambda_handler(event, context):
         }
 
     print("+++Metadata+++", metadata)
+
+    organization = Organization.from_schema_repo(
+        metadata["mdf"].get("organizations", "MDF Open"))
+    print("######", organization)
+
     # If this is an incremental update, fetch the original submission
     # Just update the metadata
     # @todo
@@ -564,9 +569,6 @@ def lambda_handler(event, context):
     automate_manager = AutomateManager(get_secret())
     automate_manager.authenticate()
 
-    organization = Organization.from_schema_repo(
-        metadata["mdf"].get("organizations", "MDF Open"))
-    print("######", organization)
     print("Depends ", globus_dependent_token)
     print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
     action_id = automate_manager.submit(metadata, organization,
