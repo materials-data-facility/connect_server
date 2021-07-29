@@ -1,3 +1,12 @@
 [submodule "mdf_connect_server/config/schemas"]
 	path = mdf_connect_server/config/schemas
 	url = https://github.com/materials-data-facility/data-schemas.git
+[submodule "aws/tests/data-schemas"]
+	path = aws/tests/data-schemas
+	url = https://github.com/materials-data-facility/data-schemas.git
+[submodule "schemas"]
+	path = aws/tests/data-schemas
+	url = https://github.com/materials-data-facility/data-schemas.git
+[submodule "aws/tests/schemas"]
+	path = aws/tests/schemas
+	url = https://github.com/materials-data-facility/data-schemas.git

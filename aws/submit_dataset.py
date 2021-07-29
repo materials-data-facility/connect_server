@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import traceback
 import urllib
 import uuid
 from copy import deepcopy
@@ -114,8 +115,13 @@ def lambda_handler(event, context):
 
     print("+++Metadata+++", metadata)
 
-    organization = Organization.from_schema_repo(
-        metadata["mdf"].get("organizations", "MDF Open"))
+    org_cannonical_name = metadata["mdf"].get("organizations", "MDF Open")
+    # MDF Connect Client needs to only allow one organization. Til then, we just
+    # take the first one
+    if type(org_cannonical_name) == list:
+        org_cannonical_name = org_cannonical_name[0]
+
+    organization = Organization.from_schema_repo(org_cannonical_name)
     print("######", organization)
 
     # If this is an incremental update, fetch the original submission
@@ -204,7 +210,7 @@ def lambda_handler(event, context):
             source_name = existing_source_name
             version = existing_record['version'] if existing_record else None
     except Exception as e:
-        print(e)
+        traceback.print_exc()
         return {
             'statusCode': 400,
             'body': json.dumps(
@@ -571,9 +577,11 @@ def lambda_handler(event, context):
 
     print("Depends ", globus_dependent_token)
     print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
-    action_id = automate_manager.submit(metadata, organization,
-                                        globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
-                                        user_id, submission_conf['data_sources'], submission_conf['curation'])
+    action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
+                                        submitting_user_token=globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
+                                        submitting_user_id=user_id,
+                                        data_sources=submission_conf['data_sources'],
+                                        do_curation=submission_conf['curation'])
 
     status_info['action_id'] = action_id
 

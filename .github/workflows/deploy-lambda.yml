@@ -83,7 +83,7 @@ jobs:
 
     - name: Upload Submit Dataset Function
       run: |
-         cp aws/submit-dataset.py ./lambda_function.py
+         cp aws/submit_dataset.py ./lambda_function.py
          cp aws/*.py .
          cp aws/mdf_flow_info.json .
          zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py \
@@ -97,7 +97,7 @@ jobs:
 
     - name: Upload Submission Status Function
       run: |
-         cp aws/submit-status.py ./lambda_function.py
+         cp aws/submit_status.py ./lambda_function.py
          cp aws/*.py .
          cp aws/mdf_flow_info.json .
          zip submit-status.zip ./lambda_function.py ./source_id_manager.py \
