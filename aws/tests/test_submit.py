@@ -1,22 +1,11 @@
 import json
-from unittest import mock
-from unittest.mock import patch
 
-import pytest
-from pytest_bdd import scenario, given, when, then
-
-from aws.submit_dataset import lambda_handler
-from mdf_connect_client import MDFConnectClient
+from pytest_bdd import scenario, given, then, parsers
 
 
-@pytest.fixture
-@mock.patch('mdf_connect_client.mdfcc.mdf_toolbox.login')
-def mdf(_):
-    mdf = MDFConnectClient()
-    mdf.create_dc_block(title="How to make a dataset", authors=['Bob Dobolina'])
-    mdf.add_data_source("https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F")
-    return mdf
-
+@scenario('submit_dataset.feature', 'Submit Dataset With Provided source_id')
+def test_publish_provided_source_id():
+    pass
 
 @scenario('submit_dataset.feature', 'Submit Dataset')
 def test_publish():
@@ -27,44 +16,20 @@ def test_update_other_users_record():
     pass
 
 
-@given("I'm authenticated with MDF", target_fixture='mdf_environment')
-def authenticated_with_globus(mocker):
-    dynamo_manager = mocker.Mock()
-    dynamo_manager.create_status = mocker.Mock(return_value={
-        'success': True
-    })
-
-    automate_manager = mocker.Mock()
-    automate_manager.submit = mocker.Mock(return_value='action-id-1')
-
-    environment = {
-        'dynamo_manager': dynamo_manager,
-        'automate_manager': automate_manager,
-        'authorizer': {
-            'identities': "['me']",
-            'user_id': 'my-id',
-            'principalId': 'principal@foo.com',
-            'name': 'Bob Dobolina',
-            'globus_dependent_token': "{'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab': '12sdfkj23-8j'}"
-        }
-    }
-    return environment
+@scenario('submit_dataset.feature', 'Attempt to add a record with an existing source_id')
+def test_add_record_with_existing_source_id():
+    pass
 
 
-@given('I have a new MDF dataset to submit', target_fixture='mdf_submission')
-def mdf_datset(mdf, mdf_environment, mocker):
-    mdf.update = False
-    mdf.set_source_name("my dataset")
-
-    # No existing record
-    mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value=None)
-
-    return mdf.get_submission()
+@scenario('submit_dataset.feature', 'Update a submitted dataset')
+def test_update_existing_record():
+    pass
 
 
 @given('I have an update to another users record', target_fixture='mdf_submission')
 def mdf_other_user_datset(mdf, mdf_environment, mocker):
     mdf.set_source_name("my dataset")
+    mdf_environment['source_id'] = 'my dataset'
 
     # Existing record in dynamo with a different user ID
     mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
@@ -75,45 +40,54 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
     return mdf.get_submission()
 
 
-@when('I submit the dataset', target_fixture='submit_result')
-def submit_dataset(mdf_environment, mdf_submission, mocker):
-    dynamo_manager_class = mocker.Mock(return_value=mdf_environment['dynamo_manager'])
-    dynamo_manager_class.increment_record_version = mocker.Mock(return_value='1.1')
+@given('I have an update for an existing dataset', target_fixture='mdf_submission')
+def mdf_other_user_datset(mdf, mdf_environment, mocker):
+    mdf.set_source_name("my dataset")
+    mdf_environment['source_id'] = 'my dataset'
+    mdf.update = True
 
-    automate_manager_class = mocker.Mock(return_value=mdf_environment['automate_manager'])
-    mocker.patch('aws.submit_dataset.get_secret')
+    # Existing record in dynamo with a same user ID
+    mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
+        'version': '1.0',
+        'user_id': 'me'
+    })
 
-    with patch('aws.submit_dataset.DynamoManager', new=dynamo_manager_class), \
-            patch('aws.submit_dataset.AutomateManager', new=automate_manager_class):
-        return lambda_handler({
-            'requestContext': {'authorizer': mdf_environment['authorizer']},
-            'headers': {'Authorization': 'Bearer 1209hkehjwerkhjre'},
-            'body': json.dumps(mdf_submission)
-        }, None)
+    return mdf.get_submission()
 
 
-@then('a dynamo record should be created')
-def check_dynamo_record(mdf_environment):
-    dynamo_manager = mdf_environment['dynamo_manager']
-    dynamo_manager.create_status.assert_called()
-    dynamo_record = dynamo_manager.create_status.call_args[0][0]
-    assert dynamo_record['source_id'] == 'my dataset'
-    assert dynamo_record['action_id'] == 'action-id-1'
+@given("I provide the source_id", target_fixture='mdf_submission')
+def provided_source_id(mdf, mdf_environment):
+    mdf.set_source_name("my dataset")
+    mdf_environment['source_id'] = 'my dataset'
+    return mdf.get_submission()
 
-@then('an automate flow started')
-def check_dynamo_record(mdf_environment):
-    automate_manager = mdf_environment['automate_manager']
-    automate_manager.submit.assert_called()
-    automate_record = automate_manager.submit.call_args[1]
-    assert automate_record['submitting_user_id'] == 'my-id'
-    assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
 
-@then('I should receive a success result')
-def no_error(submit_result):
+@given('I have a new MDF dataset to submit with a source_id that already exists',
+       target_fixture='mdf_submission')
+def mdf_other_user_datset(mdf, mdf_environment, mocker):
+    mdf.set_source_name("my dataset")
+    mdf_environment['source_id'] = 'my dataset'
+
+    # Existing record in dynamo with a different user ID
+    mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
+        'version': '1.0',
+        'user_id': 'me'
+    })
+
+    return mdf.get_submission()
+
+
+
+
+
+@then('I should receive a success result with the provided source_id')
+@then('I should receive a success result with the generated uuid')
+def no_error(submit_result, mdf_environment):
     print("---------->", submit_result)
     assert submit_result['statusCode'] == 202
     body = json.loads(submit_result['body'])
     assert body['success']
+    assert body['source_id'] == mdf_environment['source_id']
 
 
 @then('I should receive a failure result')
@@ -127,3 +101,13 @@ def no_error(submit_result):
 @then('the article should be published')
 def article_published(submit_result):
     assert True
+
+
+@then(parsers.parse("the dynamo record should be version {version_num}"))
+def dyanmo_record_version(version_num, dynamo_record):
+    assert dynamo_record['version'] == version_num
+
+
+@then("the data destination should be the Petrel MDF directory")
+def check_data_dest(automate_record):
+    print("Autaomte", automate_record)

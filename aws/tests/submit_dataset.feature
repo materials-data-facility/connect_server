@@ -6,14 +6,41 @@ Feature: Submit Dataset
         And I have a new MDF dataset to submit
         When I submit the dataset
 
-        Then a dynamo record should be created
+        Then a dynamo record should be created with the generated uuid
+        And the dynamo record should be version 1.0
         And an automate flow started
-        And I should receive a success result
+        And the data destination should be the Petrel MDF directory
+        And I should receive a success result with the generated uuid
+
+    Scenario: Submit Dataset With Provided source_id
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit
+        And I provide the source_id
+        When I submit the dataset
+
+        Then a dynamo record should be created with the provided source_id
+        And the dynamo record should be version 1.0
+        And an automate flow started
+        And I should receive a success result with the provided source_id
 
     Scenario: Attempt to update another users record
         Given I'm authenticated with MDF
         And I have an update to another users record
+        When I submit the dataset
+        Then I should receive a failure result
 
+    Scenario: Attempt to add a record with an existing source_id
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit with a source_id that already exists
+        When I submit the dataset
+        Then I should receive a failure result
+
+    Scenario: Update a submitted dataset
+        Given I'm authenticated with MDF
+        And I have an update for an existing dataset
         When I submit the dataset
 
-        Then I should receive a failure result
+        Then a dynamo record should be created with the original source_id
+        And the dynamo record should be version 1.1
+        And an automate flow started
+        And I should receive a success result
