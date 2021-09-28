@@ -45,7 +45,8 @@ jobs:
 
     - name: Test with pytest
       run: |
-        pip install pytest pytest-mock pytest-bdd==4.1.0
+        pip install -r aws/requirement.txt
+        pip install -r aws/tests/requirements-test.txt
         PYTHONPATH=aws python -m pytest aws/tests
 
     #credentials to connect to AWS
