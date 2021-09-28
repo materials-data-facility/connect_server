@@ -1,6 +1,6 @@
 pytest
 pytest-mock
 pytest-bdd==4.1.0
-mdf-connect-client
+git+https://github.com/materials-data-facility/connect_client.git@v0.4.0-dev
 jsonschema>=2.6.0
 boto3
