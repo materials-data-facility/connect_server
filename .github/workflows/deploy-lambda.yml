@@ -45,7 +45,7 @@ jobs:
 
     - name: Test with pytest
       run: |
-        pip install -r aws/requirement.txt
+        pip install -r aws/requirements.txt
         pip install -r aws/tests/requirements-test.txt
         PYTHONPATH=aws python -m pytest aws/tests
 
