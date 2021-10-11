@@ -13,7 +13,7 @@ globus_secrets = None
 mdf_flow = None
 tokens = None
 MANAGE_FLOWS_SCOPE = "https://auth.globus.org/scopes/eec9b274-0c81-4334-bdc2-54e90e689b9a/manage_flows"
-
+test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
 
 def authorizer_callback(*args, **kwargs):
     auth = AccessTokenAuthorizer(
@@ -76,7 +76,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id,
-               data_sources, do_curation):
+               data_sources, do_curation, is_test=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -86,7 +86,8 @@ class AutomateManager:
             "user_transfer_inputs": self.create_transfer_items(
                 data_sources=data_sources,
                 organization=organization,
-                submitting_user_id=submitting_user_id
+                submitting_user_id=submitting_user_id,
+                test_submit=is_test
             ),
             "data_destinations": [],
             "data_permissions": {},
@@ -131,8 +132,11 @@ class AutomateManager:
         print("Status is ", flow_run.get_status())
         return flow_run.action_id
 
-    def create_transfer_items(self, data_sources, organization, submitting_user_id):
-        destination_parsed = urlparse(organization.data_destinations[0])
+    def create_transfer_items(self, data_sources, organization,
+                              submitting_user_id, test_submit=False):
+
+        destination_parsed = urlparse(organization.data_destinations[0]) \
+            if not test_submit  else test_data_destination
 
         user_transfer_inputs = {"destination_endpoint_id": destination_parsed.netloc,
                                 "label": "MDF Flow Test Transfer1",

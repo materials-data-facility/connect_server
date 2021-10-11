@@ -24,14 +24,19 @@ class Organization:
         return object_name
 
     @classmethod
-    def from_schema_repo(cls, canonical_name):
+    def from_schema_repo(cls, org_name):
         schema_path = "./schemas/schemas"
 
         with open(os.path.join(schema_path, "..", "connect_aux_data", "organizations.json")) as org_schema:
             orgs = json.load(org_schema)
-            filtered_orgs = list(filter(lambda org: org['canonical_name'] == canonical_name, orgs))
+            filtered_orgs = list(filter(lambda org: org['canonical_name'] == org_name, orgs))
+
             if not filtered_orgs:
-                raise OrganizationException(f"Organization {canonical_name} not found")
+                filtered_orgs = list(
+                    filter(lambda org: 'aliases' in org and org_name in org['aliases'], orgs))
+
+            if not filtered_orgs:
+                raise OrganizationException(f"Organization {org_name} not found")
 
             if len(filtered_orgs) > 1:
                 raise OrganizationException("Organization database contains duplicates")

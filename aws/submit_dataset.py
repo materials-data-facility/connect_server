@@ -284,36 +284,6 @@ def lambda_handler(event, context):
     # if new_custom:
     #     metadata["custom"] = new_custom
 
-    # Get organization rules to apply
-    if metadata["mdf"].get("organizations"):
-        try:
-            metadata["mdf"]["organizations"], submission_conf = \
-                sourceid_manager.fetch_org_rules(metadata["mdf"]["organizations"],
-                                                 submission_conf)
-        except ValueError as e:
-            logger.info(
-                "Invalid organizations: {}".format(metadata["mdf"]["organizations"]))
-            return {
-                'statusCode': 400,
-                'body': json.dumps(
-                    {
-                        "success": False,
-                        "error": str(e)
-                    })
-            }
-
-        # Pull out DC fields from org metadata
-        # rightsList (license)
-        if submission_conf.get("rightsList"):
-            if not metadata["dc"].get("rightsList"):
-                metadata["dc"]["rightsList"] = []
-            metadata["dc"]["rightsList"] += submission_conf.pop("rightsList")
-        # fundingReferences
-        if submission_conf.get("fundingReferences"):
-            if not metadata["dc"].get("fundingReferences"):
-                metadata["dc"]["fundingReferences"] = []
-            metadata["dc"]["fundingReferences"] += submission_conf.pop("fundingReferences")
-
     ### Move this to the start of the operation
     # @Ben Or make this its own function that checks auth status against a group ID
     # Check that user is in appropriate org group(s), if applicable
@@ -581,7 +551,8 @@ def lambda_handler(event, context):
                                         submitting_user_token=globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
                                         submitting_user_id=user_id,
                                         data_sources=submission_conf['data_sources'],
-                                        do_curation=submission_conf['curation'])
+                                        do_curation=submission_conf['curation'],
+                                        is_test=is_test)
 
     status_info['action_id'] = action_id
 

@@ -5,13 +5,30 @@ from pytest_bdd import scenario, given, then, parsers
 def test_submit_test_dataset():
     pass
 
+@scenario('publish.feature', 'Submit Dataset for Organization')
+def test_submit_dataset_for_org():
+    pass
+
 
 @given('I mark the dataset as test', target_fixture='mdf_submission')
-def mdf_other_user_datset(mdf, mdf_submission):
+def mdf_other_user_datset(mdf):
     mdf.set_test(True)
     return mdf.get_submission()
 
+
+@then(parsers.parse("the automate flow will send the files to mdf_connect/test_files"))
+def dyanmo_record_version(automate_record):
+    assert automate_record['is_test']
+
 @then(parsers.parse("the only data destinations should be {destination}"))
-def dyanmo_record_version(destination, automate_record):
-    print("Dest--<",destination)
-    assert len(automate_record['data_sources']) == 1
+def dyanmo_record_version(automate_record):
+    dest_org = automate_record['organization']
+    print("dest org", dest_org)
+    assert len(dest_org.data_destinations) == 1
+
+
+@given("I set the organization to VERDE", target_fixture='mdf_submission')
+def set_org_verde(mdf):
+    mdf.add_organization("VERDE")
+    return mdf.get_submission()
+
