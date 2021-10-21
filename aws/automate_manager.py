@@ -125,8 +125,6 @@ class AutomateManager:
                 'SubmittingUser': submitting_user_token['access_token']
             }
         }
-
-        print(automate_rec)
         print("Flow is ", self.flow)
         flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id])
         print("Result is ", flow_run.action_id)
