@@ -26,6 +26,11 @@ def test_update_existing_record():
     pass
 
 
+@scenario('submit_dataset.feature', 'Submit Dataset for Organization')
+def test_update_metadata_only():
+    pass
+
+
 @given('I have an update to another users record', target_fixture='mdf_submission')
 def mdf_other_user_datset(mdf, mdf_environment, mocker):
     mdf.set_source_name("my dataset")
@@ -77,6 +82,26 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
     return mdf.get_submission()
 
 
+@given('I have a metadata only update for an existing dataset', target_fixture='mdf_submission')
+def mdf_other_user_datset(mdf, mdf_environment, mocker):
+    mdf.set_source_name("my dataset")
+    mdf_environment['source_id'] = 'my dataset'
+    mdf.update = True
+    mdf_environment['update_meta_only'] = True
+    print("THISISTHEENVIORMENT")
+    print(mdf_environment)
+
+    # Existing record in dynamo with a same user ID
+    mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
+        'version': '1.0',
+        'user_id': 'me'
+    })
+
+    return mdf.get_submission()
+
+
+
+
 
 
 
@@ -111,3 +136,13 @@ def dyanmo_record_version(version_num, dynamo_record):
 @then("the data destination should be the Petrel MDF directory")
 def check_data_dest(automate_record):
     print("Autaomte", automate_record)
+
+@then('an automate flow started that skips the file transfer', target_fixture="automate_record")
+def check_skip_file_transfer(mdf_environment):
+    automate_manager = mdf_environment['automate_manager']
+    automate_manager.submit.assert_called()
+    automate_record = automate_manager.submit.call_args[1]
+    assert automate_record['submitting_user_id'] == 'my-id'
+    assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
+    assert automate_record['update_meta_only']
+    return automate_record

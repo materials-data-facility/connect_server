@@ -99,3 +99,20 @@ class TestAutomateManager:
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
         assert result['transfer_items'][0]['destination_path'] == '/MDF/mdf_connect/test_files/deleteme_contents/'
         print(result)
+
+    @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
+    def test_update_meta_only(self, mock_automate, secrets, organization, mocker):
+        mock_flow = mocker.Mock()
+        mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
+        manager = AutomateManager(secrets)
+
+        data_sources = [
+            "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
+        ]
+        user_token = {'access_token':'1234567890'}
+        _ = manager.submit(mdf_rec=None, organization=organization,
+               submitting_user_token=user_token, submitting_user_id = "12-33-55",
+               data_sources = data_sources, do_curation=None, is_test=False, update_meta_only = True)
+
+        mock_flow.run_flow.assert_called()
+        print(mock_flow.run_flow.call_args[0])
