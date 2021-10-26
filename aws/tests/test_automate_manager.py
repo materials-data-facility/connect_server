@@ -115,4 +115,4 @@ class TestAutomateManager:
                data_sources = data_sources, do_curation=None, is_test=False, update_meta_only = True)
 
         mock_flow.run_flow.assert_called()
-        print(mock_flow.run_flow.call_args[0])
+        assert(mock_flow.run_flow.call_args[0]['update_meta_only'] == True
