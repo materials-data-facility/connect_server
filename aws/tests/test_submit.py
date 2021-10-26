@@ -26,7 +26,7 @@ def test_update_existing_record():
     pass
 
 
-@scenario('submit_dataset.feature', 'Submit Dataset for Organization')
+@scenario('submit_dataset.feature', 'Update metadata only for a submitted dataset')
 def test_update_metadata_only():
     pass
 
