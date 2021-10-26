@@ -45,7 +45,7 @@ Feature: Submit Dataset
         And an automate flow started
         And I should receive a success result
 
-    Scenario: Submit Dataset for Organization
+    Scenario: Update metadata only for a submitted dataset
         Given I'm authenticated with MDF
         And I have a metadata only update for an existing dataset
         When I submit the dataset
