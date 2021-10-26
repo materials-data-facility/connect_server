@@ -24,7 +24,7 @@ jobs:
       uses: actions/checkout@v2
       with:
         repository: materials-data-facility/data-schemas
-        ref: automate
+        ref: meta_only
         path: schemas
 
     - name: Set up Python
