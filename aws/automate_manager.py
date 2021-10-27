@@ -76,7 +76,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id,
-               data_sources, do_curation, is_test=False):
+               data_sources, do_curation, is_test=False, update_meta_only=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -111,6 +111,7 @@ class AutomateManager:
             "citrine": False,
             # @Ben this will default to True as long as the data are public. That will be in a separate flow
             "mrr": False,
+            "update_meta_only": update_meta_only,
 
             # Is this actually used?
             "path": "/~/<username>/<data-directory>",
@@ -124,8 +125,6 @@ class AutomateManager:
                 'SubmittingUser': submitting_user_token['access_token']
             }
         }
-
-        print(automate_rec)
         print("Flow is ", self.flow)
         flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id])
         print("Result is ", flow_run.action_id)
