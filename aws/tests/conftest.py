@@ -95,7 +95,7 @@ def check_automate_submission(mdf_environment):
     automate_record = automate_manager.submit.call_args[1]
     assert automate_record['submitting_user_id'] == 'my-id'
     assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
-    assert automate_record['update_meta_only'] == False
+    assert not automate_record['update_meta_only']
     return automate_record
 
 
