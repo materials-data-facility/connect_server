@@ -548,9 +548,9 @@ def lambda_handler(event, context):
     automate_manager.authenticate()
 
     print("Depends ", globus_dependent_token)
-    print("Token", globus_dependent_token['70ab973f-da3f-49bb-9475-b1416aa588f8'])
+    print("Token", globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'])
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
-                                        submitting_user_token=globus_dependent_token['70ab973f-da3f-49bb-9475-b1416aa588f8'],
+                                        submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
                                         submitting_user_id=user_id,
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
