@@ -9,6 +9,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
         administered_by=flow_permissions,
+        input_schema={},
 
         flow_definition={
             "StartAt": "StartSubmission",

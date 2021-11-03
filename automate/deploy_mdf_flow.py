@@ -19,7 +19,7 @@ with open(".mdfsecrets", 'r') as f:
     }]
 
 
-native_app_id = "417301b1-5101-456a-8a27-423e71a2ae26"  # Premade native app ID
+native_app_id = "e6128bac-8f6a-4b19-adf8-716ed9c4d56c"  # MDF Automate Client app ID
 flows_client = globus_automate_client.create_flows_client(native_app_id)
 globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
@@ -46,8 +46,8 @@ mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
 #                                                 sender_email=config['sender_email'],
 #                                                 flow_permissions=config['flow_permissions']),
 #                                             globus_auth=globus_auth)
-#
-# mdf_flow.save_flow("mdf_flow_info.json")
+
+mdf_flow.save_flow("mdf_flow_info.json")
 print("scope = ", mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
 
 print("MDF Flow deployed", mdf_flow)
