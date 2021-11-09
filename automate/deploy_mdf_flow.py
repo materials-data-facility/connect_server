@@ -2,6 +2,7 @@ import json
 import sys
 
 import globus_automate_client
+import globus_sdk
 
 import minimus_mdf_flow  # NOQA
 from globus_auth_manager import GlobusAuthManager
@@ -20,6 +21,7 @@ with open(".mdfsecrets", 'r') as f:
 
 
 native_app_id = "e6128bac-8f6a-4b19-adf8-716ed9c4d56c"  # MDF Automate Client app ID
+
 flows_client = globus_automate_client.create_flows_client(native_app_id)
 globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
@@ -30,7 +32,11 @@ with open("mdf_flow_config.json") as f:
 
 flow_def = minimus_mdf_flow.flow_def(smtp_send_credentials=smtp_send_credentials,
                                      sender_email=config['sender_email'],
-                                     flow_permissions=config['flow_permissions'])
+                                     flow_permissions=config['flow_permissions'],
+                                     administered_by=[
+                                         'urn:globus:auth:identity:2400d618-4c18-479d-b8bf-32b7497cc673'
+                                         # Ethan
+                                     ])
 print(flow_def.flow_definition)
 mdf_flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json",
                                                  client=flows_client,
@@ -38,7 +44,10 @@ mdf_flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json",
 mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
     smtp_send_credentials=smtp_send_credentials,
     sender_email=config['sender_email'],
-    flow_permissions=config['flow_permissions']))
+    flow_permissions=config['flow_permissions'],
+    administered_by=[
+        'urn:globus:auth:identity:2400d618-4c18-479d-b8bf-32b7497cc673'  # Ethan
+    ]))
 
 # mdf_flow = GlobusAutomateFlow.from_flow_def(flows_client,
 #                                             flow_def=minimus_mdf_flow.flow_def(
