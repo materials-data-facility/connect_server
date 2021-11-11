@@ -10,7 +10,7 @@ Feature: Submit Dataset
         And the dynamo record should be version 1.0
         And an automate flow started
         And the data destination should be the Petrel MDF directory
-        And I should receive a success result with the generated uuid
+        And I should receive a success result with the generated uuid and version 1.0
 
     Scenario: Submit Dataset With Provided source_id
         Given I'm authenticated with MDF
@@ -21,7 +21,7 @@ Feature: Submit Dataset
         Then a dynamo record should be created with the provided source_id
         And the dynamo record should be version 1.0
         And an automate flow started
-        And I should receive a success result with the provided source_id
+        And I should receive a success result with the generated uuid and version 1.0
 
     Scenario: Attempt to update another users record
         Given I'm authenticated with MDF
@@ -43,6 +43,15 @@ Feature: Submit Dataset
         Then a dynamo record should be created with the original source_id
         And the dynamo record should be version 1.1
         And an automate flow started
+        And I should receive a success result with the generated uuid and version 1.1
+
+    Scenario: Update metadata only for a submitted dataset
+        Given I'm authenticated with MDF
+        And I have a metadata only update for an existing dataset
+        When I submit the dataset
+        Then a dynamo record should be created with the original source_id
+        And the dynamo record should be version 1.1
+        And an automate flow started that skips the file transfer
         And I should receive a success result
 
     Scenario: Update metadata only for a submitted dataset

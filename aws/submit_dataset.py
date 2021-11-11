@@ -115,7 +115,7 @@ def lambda_handler(event, context):
 
     print("+++Metadata+++", metadata)
 
-    org_cannonical_name = metadata["mdf"].get("organizations", "MDF Open")
+    org_cannonical_name = metadata.get("mdf", {}).get("organizations", "MDF Open")
     # MDF Connect Client needs to only allow one organization. Til then, we just
     # take the first one
     if type(org_cannonical_name) == list:
@@ -548,9 +548,9 @@ def lambda_handler(event, context):
     automate_manager.authenticate()
 
     print("Depends ", globus_dependent_token)
-    print("Token", globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'])
+    print("Token", globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'])
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
-                                        submitting_user_token=globus_dependent_token['ce2aca7c-6de8-4b57-b0a0-dcca83a232ab'],
+                                        submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
                                         submitting_user_id=user_id,
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
@@ -585,6 +585,6 @@ def lambda_handler(event, context):
             {
                 "success": True,
                 'source_id': source_name,
-                'version': version
+                'version': status_info['version']
             })
     }

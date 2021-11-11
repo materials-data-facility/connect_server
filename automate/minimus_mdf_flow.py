@@ -2,13 +2,14 @@ import action_providers
 from globus_automate_flow import GlobusAutomateFlowDef
 
 
-def flow_def(smtp_send_credentials, sender_email, flow_permissions):
+def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by):
     return GlobusAutomateFlowDef(
         title="Transfer Loop Flow",
         description="Perform multiple Globus Transfers",
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
-        administered_by=flow_permissions,
+        administered_by=administered_by,
+        input_schema={},
 
         flow_definition={
             "StartAt": "StartSubmission",

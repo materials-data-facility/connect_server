@@ -1,0 +1,84 @@
+{
+	"info": {
+		"_postman_id": "66d9b9d7-215e-45b3-bffd-62943ee6eeed",
+		"name": "MDF Connect",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Submit",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"dc\": {\n        \"titles\": [\n            {\n                \"title\": \"Curation Fail Dataset Take3\"\n            }\n        ],\n        \"creators\": [\n            {\n                \"creatorName\": \"jgaff\",\n                \"familyName\": \"\",\n                \"givenName\": \"jgaff\",\n                \"affiliations\": [\n                    \"UChicago\"\n                ]\n            }\n        ],\n        \"publisher\": \"Materials Data Facility\",\n        \"publicationYear\": \"2021\",\n        \"resourceType\": {\n            \"resourceTypeGeneral\": \"Dataset\",\n            \"resourceType\": \"Dataset\"\n        }\n    },\n    \"mdf\":{\n        \"source_name\": \"this_is_a_test\"\n    },\n    \"data_sources\": [\n        \"https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F\"\n    ],\n    \"test\": true,\n    \"update\": true,\n    \"curation\": false\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{host}}/submit",
+					"host": [
+						"{{host}}"
+					],
+					"path": [
+						"submit"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "SubmitEmpty",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": ""
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "status",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{host}}/status/this_is_a_test",
+					"host": [
+						"{{host}}"
+					],
+					"path": [
+						"status",
+						"this_is_a_test"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}

@@ -95,8 +95,7 @@ class GlobusAutomateFlow:
             administered_by=flow_def.administered_by,
             # TODO: Make rough schema outline into JSONSchema
             input_schema=flow_def.input_schema,
-            validate_definition=True,
-            validate_input_schema=True
+            validate_definition=True
         )
         self.flow_id = flow_deploy_res["id"]
         self.flow_scope = flow_deploy_res["globus_auth_scope"]
@@ -115,8 +114,7 @@ class GlobusAutomateFlow:
             administered_by=mdf_flow_def.administered_by,
             # TODO: Make rough schema outline into JSONSchema
             input_schema=mdf_flow_def.input_schema,
-            validate_definition=True,
-            validate_input_schema=True
+            validate_definition=True
         )
         self.flow_id = flow_deploy_res["id"]
         self.flow_scope = flow_deploy_res["globus_auth_scope"]

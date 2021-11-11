@@ -36,7 +36,7 @@ def authenticated_with_globus(mocker):
             'user_id': 'my-id',
             'principalId': 'principal@foo.com',
             'name': 'Bob Dobolina',
-            'globus_dependent_token': "{'ce2aca7c-6de8-4b57-b0a0-dcca83a232ab': '12sdfkj23-8j'}"
+            'globus_dependent_token': "{'0c7ee169-cefc-4a23-81e1-dc323307c863': '12sdfkj23-8j'}"
         }
     }
     return environment

@@ -8,7 +8,7 @@ def test_publish_provided_source_id():
     pass
 
 @scenario('submit_dataset.feature', 'Submit Dataset')
-def test_publish():
+def test_submit():
     pass
 
 @scenario('submit_dataset.feature', 'Attempt to update another users record')
@@ -113,6 +113,16 @@ def no_error(submit_result, mdf_environment):
     body = json.loads(submit_result['body'])
     assert body['success']
     assert body['source_id'] == mdf_environment['source_id']
+
+
+@then(parsers.parse('I should receive a success result with the generated uuid and version {version}'))
+def no_error_with_version(submit_result, mdf_environment, version):
+    print("---------->", submit_result)
+    assert submit_result['statusCode'] == 202
+    body = json.loads(submit_result['body'])
+    assert body['success']
+    assert body['source_id'] == mdf_environment['source_id']
+    assert body['version'] == version
 
 
 @then('I should receive a failure result')
