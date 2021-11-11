@@ -15,7 +15,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions):
             "States": {
                 "StartSubmission": {
                     "Type": "Pass",
-                    "Next": "UserPermissions"
+                    "Next": "Check Metadata Only"
                 },
                 "Check Metadata Only":{
                     "Comemnt": "Checks whether flow just updates the metadata",
