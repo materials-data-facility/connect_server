@@ -29,7 +29,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         }
                     ],
                     "Default": "UserPermissions"
-                }
+                },
                 "UserPermissions": {
                     "Comment": "Temporarily add write permissions for the submitting user",
                     "Type": "Action",
