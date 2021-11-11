@@ -585,6 +585,6 @@ def lambda_handler(event, context):
             {
                 "success": True,
                 'source_id': source_name,
-                'version': version
+                'version': status_info['version']
             })
     }
