@@ -16,8 +16,19 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
             "States": {
                 "StartSubmission": {
                     "Type": "Pass",
-                    "Next": "UserPermissions"
+                    "Next": "Check Metadata Only"
                 },
+                "Check Metadata Only":{
+                    "Comemnt": "Checks whether flow just updates the metadata",
+                    "Type": "Choice",
+                    "Choices": [
+                        {
+                        "Variable": "$.update_meta_only",
+                        "BooleanEquals": True,
+                        "Next": "ChooseCuration "
+                        }
+                    ],
+                    "Default": "UserPermissions"
                 "UserPermissions": {
                     "Comment": "Temporarily add write permissions for the submitting user",
                     "Type": "Action",
