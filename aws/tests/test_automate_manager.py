@@ -101,7 +101,7 @@ class TestAutomateManager:
         print(result)
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
-    def test_update_meta_only(self, mock_automate, secrets, organization, mocker):
+    def test_update_metadata_only(self, mock_automate, secrets, organization, mocker):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
         manager = AutomateManager(secrets)
@@ -112,7 +112,7 @@ class TestAutomateManager:
         user_token = {'access_token':'1234567890'}
         _ = manager.submit(mdf_rec=None, organization=organization,
                submitting_user_token=user_token, submitting_user_id = "12-33-55",
-               data_sources = data_sources, do_curation=None, is_test=False, update_meta_only = True)
+               data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = True)
 
         mock_flow.run_flow.assert_called()
-        assert(mock_flow.run_flow.call_args[0][0]['update_meta_only'])
+        assert(mock_flow.run_flow.call_args[0][0]['update_metadata_only'])

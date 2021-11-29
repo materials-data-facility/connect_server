@@ -87,7 +87,7 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
     mdf.set_source_name("my dataset")
     mdf_environment['source_id'] = 'my dataset'
     mdf.update = True
-    mdf_environment['update_meta_only'] = True
+    mdf_environment['update_metadata_only'] = True
     mdf.set_update_metadata_only(True)
 
 
@@ -160,5 +160,5 @@ def check_skip_file_transfer(mdf_environment):
     print(mdf_environment)
     assert automate_record['submitting_user_id'] == 'my-id'
     assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
-    assert automate_record['update_meta_only']
+    assert automate_record['update_metadata_only']
     return automate_record
