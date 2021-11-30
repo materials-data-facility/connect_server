@@ -19,13 +19,13 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                     "Next": "Check Metadata Only"
                 },
                 "Check Metadata Only":{
-                    "Comemnt": "Checks whether flow just updates the metadata",
+                    "Comment": "Checks whether flow just updates the metadata",
                     "Type": "Choice",
                     "Choices": [
                         {
-                        "Variable": "$.update_meta_only",
+                        "Variable": "$.update_metadata_only",
                         "BooleanEquals": True,
-                        "Next": "ChooseCuration "
+                        "Next": "ChooseCuration"
                         }
                     ],
                     "Default": "UserPermissions"

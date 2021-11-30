@@ -186,7 +186,7 @@ def lambda_handler(event, context):
         "extraction_config": metadata.pop("extraction_config", {}),
         "no_extract": metadata.pop("no_extract", False),  # Pass-through flag
         "submitter": name,
-        "update_meta_only": metadata.pop("update_meta_only", False)
+        "update_metadata_only": metadata.pop("update_metadata_only", False)
     }
 
     submission_title = metadata["dc"]["titles"][0]["title"]
@@ -539,7 +539,7 @@ def lambda_handler(event, context):
         "acl": submission_conf["acl"],
         "test": submission_conf["test"],
         "original_submission": json.dumps(md_copy),
-        "update_meta_only": submission_conf["update_meta_only"]
+        "update_metadata_only": submission_conf["update_metadata_only"]
     }
 
     print("status info", status_info)
@@ -555,7 +555,7 @@ def lambda_handler(event, context):
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
                                         is_test=is_test,
-                                        update_meta_only= submission_conf['update_meta_only'])
+                                        update_metadata_only= submission_conf['update_metadata_only'])
 
     status_info['action_id'] = action_id
 
