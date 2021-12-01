@@ -126,7 +126,7 @@ class AutomateManager:
             }
         }
         print("Flow is ", self.flow)
-        flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id])
+        flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id, "5fc63928-3752-11e8-9c6f-0e00fd09bf20"])
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())
         return flow_run.action_id
