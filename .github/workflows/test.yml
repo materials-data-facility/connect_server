@@ -8,7 +8,7 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  test_and_publish:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -45,6 +45,11 @@ jobs:
         pip install -r aws/tests/requirements-test.txt
         PYTHONPATH=aws python -m pytest aws/tests
 
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
     #credentials to connect to AWS
     - name: Configure AWS credentials from Production account
       uses: aws-actions/configure-aws-credentials@v1
