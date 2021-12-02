@@ -55,3 +55,12 @@ jobs:
         profile_name: default
         project_name: MDFConnect
         runtime: python3.7
+
+    - name: Determine which instance of lambda function to update
+      run: |
+        echo "action_state=yellow" >> $GITHUB_ENV
+
+    - name: Use the value
+      id: step_two
+      run: |
+        echo "${{ env.action_state }}" # This will output 'yellow'
