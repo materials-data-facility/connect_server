@@ -83,6 +83,22 @@ jobs:
         echo "status_function ${{ env.status_function_name }}"
         echo ${{github.ref}}
 
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2
+
+    # Check out the schema repo to package up the JSON schemae with function
+    - name: Checkout schema repo
+      uses: actions/checkout@v2
+      with:
+        repository: materials-data-facility/data-schemas
+        ref: automate
+        path: schemas
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.7'
+
     - name: Create dependency layer
       run: |
          python -m pip install --upgrade pip
