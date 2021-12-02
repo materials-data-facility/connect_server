@@ -111,3 +111,38 @@ jobs:
          aws lambda publish-layer-version --layer-name ${{ env.layer_name }} --zip-file fileb://./globusLayer.zip --compatible-runtimes python3.6 python3.7 > layer_info.json
          cat layer_info.json
          LAYER_VERSION=$(jq ".Version" layer_info.json)
+
+    - name: Upload Globus Auth Function
+      run: |
+         cp aws/globus-auth.py ./lambda_function.py
+         zip globus_auth.zip ./lambda_function.py
+         rm ./lambda_function.py
+         aws lambda update-function-code --function-name ${{ env.auth_function_name }} --zip-file fileb://./globus_auth.zip
+
+    - name: Upload Submit Dataset Function
+      run: |
+         cp aws/submit_dataset.py ./lambda_function.py
+         cp aws/*.py .
+         cp aws/mdf_flow_info.json .
+         zip submit-dataset.zip ./lambda_function.py ./source_id_manager.py \
+             ./utils.py ./dynamo_manager.py ./automate_manager.py \
+             ./globus_automate_flow.py ./flow_action.py ./organization.py \
+             ./globus_auth_manager.py \
+            ./mdf_flow_info.json
+         zip -r submit-dataset.zip ./schemas
+         rm ./lambda_function.py
+         aws lambda update-function-code --function-name ${{ env.submit_function_name }} --zip-file fileb://./submit-dataset.zip
+
+    - name: Upload Submission Status Function
+      run: |
+         cp aws/submit_status.py ./lambda_function.py
+         cp aws/*.py .
+         cp aws/mdf_flow_info.json .
+         zip submit-status.zip ./lambda_function.py ./source_id_manager.py \
+             ./utils.py ./dynamo_manager.py ./automate_manager.py \
+             ./globus_automate_flow.py ./flow_action.py ./organization.py \
+             ./globus_auth_manager.py \
+             ./mdf_flow_info.json
+         zip -r submit-status.zip ./schemas
+         rm ./lambda_function.py
+         aws lambda update-function-code --function-name ${{ env.status_function_name }} --zip-file fileb://./submit-status.zip
