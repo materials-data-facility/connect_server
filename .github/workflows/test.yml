@@ -56,9 +56,15 @@ jobs:
         project_name: MDFConnect
         runtime: python3.7
 
-    - name: Determine which instance of lambda function to update
+    - name: Set up lambda environment for changes to development branch
+      if: ${{ github.event_name == 'push' && ${GITHUB_REF##*/} != 'serverless' }}
       run: |
         echo "action_state=yellow" >> $GITHUB_ENV
+
+    - name: Set up lambda environment for changes to integration test branch
+      if: ${{ github.event_name == 'push' && ${GITHUB_REF##*/} == 'serverless' }}
+      run: |
+        echo "action_state=green" >> $GITHUB_ENV
 
     - name: Use the value
       id: step_two
