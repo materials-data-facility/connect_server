@@ -76,7 +76,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id,
-               data_sources, do_curation, is_test=False, update_metadata_only=False):
+               data_sources, do_curation, is_test=False, update_metadata_only=False, monitor_by_id):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -126,7 +126,7 @@ class AutomateManager:
             }
         }
         print("Flow is ", self.flow)
-        flow_run = self.flow.run_flow(automate_rec, monitor_by=[submitting_user_id, "5fc63928-3752-11e8-9c6f-0e00fd09bf20"])
+        flow_run = self.flow.run_flow(automate_rec, monitor_by=monitor_by_id)
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())
         return flow_run.action_id
