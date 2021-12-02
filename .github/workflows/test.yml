@@ -57,12 +57,12 @@ jobs:
         runtime: python3.7
 
     - name: Set up lambda environment for changes to development branch
-      if: ${{ github.event_name == 'push' && ${GITHUB_REF##*/} != 'serverless' }}
+      if: ${{ github.event_name == 'push' && github.ref != 'refs/heads/serverless' }}
       run: |
         echo "action_state=yellow" >> $GITHUB_ENV
 
     - name: Set up lambda environment for changes to integration test branch
-      if: ${{ github.event_name == 'push' && '${GITHUB_REF##*/}' == 'serverless' }}
+      if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/serverless' }}
       run: |
         echo "action_state=green" >> $GITHUB_ENV
 
