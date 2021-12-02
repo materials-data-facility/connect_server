@@ -82,3 +82,16 @@ jobs:
         echo "submit_function ${{ env.submit_function_name }}"
         echo "status_function ${{ env.status_function_name }}"
         echo ${{github.ref}}
+
+    - name: Create dependency layer
+      run: |
+         python -m pip install --upgrade pip
+         mkdir python
+         #install all dependencies as defined by requirements.txt in the aws directory
+         pip3 install --use-deprecated=legacy-resolver  -r aws/requirements.txt -t ./python
+
+         #zip files into current directory
+         zip -r globusLayer.zip ./python
+         aws lambda publish-layer-version --layer-name ${{ env.layer_name }} --zip-file fileb://./globusLayer.zip --compatible-runtimes python3.6 python3.7 > layer_info.json
+         cat layer_info.json
+         LAYER_VERSION=$(jq ".Version" layer_info.json)
