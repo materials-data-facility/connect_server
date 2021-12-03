@@ -75,8 +75,8 @@ class AutomateManager:
         self.flow.set_client(self.flows_client)
 
     def submit(self, mdf_rec, organization,
-               submitting_user_token, submitting_user_id,
-               data_sources, do_curation, is_test=False, update_metadata_only=False, monitor_by_id):
+               submitting_user_token, submitting_user_id, monitor_by_id,
+               data_sources, do_curation, is_test=False, update_metadata_only=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
