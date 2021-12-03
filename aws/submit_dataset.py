@@ -554,7 +554,7 @@ def lambda_handler(event, context):
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
                                         submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
                                         submitting_user_id=user_id,
-                                        monitor_by_id=[user_id, "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, 'urn:globus:groupos:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20'],
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
                                         is_test=is_test,
