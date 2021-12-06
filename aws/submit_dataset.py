@@ -280,7 +280,7 @@ def lambda_handler(event, context):
     #         new_custom[key] = str(val)
     #     elif key.endswith("_description"):
     #         new_custom[key[:-len("ription")]] = str(val)
-    #     else:
+    #     else: 
     #         new_custom[key + "_desc"] = str(val)
     # if new_custom:
     #     metadata["custom"] = new_custom
@@ -549,13 +549,17 @@ def lambda_handler(event, context):
 
     print("Depends ", globus_dependent_token)
     print("Token", globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'])
+
+    # Passes to submit with magic UUID that allows mdf admins to monitor flows in progress
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
                                         submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
                                         submitting_user_id=user_id,
+                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, 'urn:globus:groupos:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20'],
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
                                         is_test=is_test,
-                                        update_metadata_only= submission_conf['update_metadata_only'])
+                                        update_metadata_only= submission_conf['update_metadata_only']
+                                        )
 
     status_info['action_id'] = action_id
 
