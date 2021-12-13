@@ -13,8 +13,12 @@ class TestAutomateManager:
             "SES_ACCESS_KEY": "123-55",
             "SES_SECRET": "shhh",
             "API_CLIENT_ID": "55-321",
-            "API_CLIENT_SECRET": "hhhhs"
+            "API_CLIENT_SECRET": "hhhhs",
+            "DATACITE_USERNAME": "GLOBUS.JCPTEST",
+            "DATACITE_PASSWORD": "DatacitePruyne401",
+            "DATACITE_PREFIX": "10.80206"
         }
+    
 
     @pytest.fixture
     def organization(self):

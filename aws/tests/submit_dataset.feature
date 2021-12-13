@@ -72,4 +72,4 @@ Feature: Submit Dataset
         And the dynamo record should be version 1.0
         And an automate flow started with a true mint DOI flag
         And the data destination should be the Petrel MDF directory
-        And I should receive a success result with the generated uuid and version 1.0 blah
+        And I should receive a success result with the generated uuid and version 1.0
