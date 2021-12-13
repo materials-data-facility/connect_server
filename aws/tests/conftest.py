@@ -61,6 +61,8 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
     else:
         dynamo_manager_class.increment_record_version = mocker.Mock(return_value='1.0')
 
+    print(64)
+    print(mdf_environment)
     automate_manager_class = mocker.Mock(return_value=mdf_environment['automate_manager'])
     mocker.patch('aws.submit_dataset.get_secret')
     mock_uuid = mocker.patch('aws.submit_dataset.uuid.uuid4')
@@ -81,8 +83,10 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
 @then('a dynamo record should be created', target_fixture="dynamo_record")
 def check_dynamo_record(mdf_environment):
     dynamo_manager = mdf_environment['dynamo_manager']
+    print(86, dynamo_manager)
     dynamo_manager.create_status.assert_called()
     dynamo_record = dynamo_manager.create_status.call_args[0][0]
+    print(dynamo_record)
     assert dynamo_record['source_id'] == mdf_environment['source_id']
     assert dynamo_record['action_id'] == 'action-id-1'
     return dynamo_record

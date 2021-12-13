@@ -105,7 +105,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         {
                             "Variable": "$.curation_input",
                             "BooleanEquals": False,
-                            "Next": "SearchIngest"
+                            "Next": "NeedDOI"
                         }
                     ],
                     "Default": "SendCurationEmail"
@@ -176,7 +176,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         {
                             "Variable": "$.CurateResult.details.name",
                             "StringEquals": "accepted",
-                            "Next": "SearchIngest"
+                            "Next": "NeedDOI"
                         },
                         {
                             "Variable": "$.CurateResult.details.name",
@@ -185,6 +185,45 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         }
                     ],
                     "Default": "ExceptionState"
+                },
+                "NeedDOI":{
+                    "Comment": "Checks whether flow needs to mint a DOI",
+                    "Type": "Choice",
+                    "Choices": [
+                        {
+                        "Variable": "$.mint_doi",
+                        "BooleanEquals": True,
+                        "Next": "MintDOI"
+                        }
+                    ],
+                    "Default": "SearchIngest"
+                },
+                "MintDOI": {
+                    "Type": "Action",
+                    "ActionUrl": "https://actions.globus.org/datacite/mint/basic_auth",
+                    "ExceptionOnActionFailure": True,
+                    "ResultPath": "$.DoiResult",
+                    "Parameters": {
+                        "as_test": "$.dataset_mdata.test",
+                        "username": "$._datacite_username",
+                        "password": "$._datacite_password",
+                        "Doi": {
+                            "type": "dois",
+                            "attributes": {
+                                "prefix": "$._datacite_prefix",
+                                "creators": [
+                                    {
+                                        "name": "$.dataset_mdata.creators[0].creatorName"
+                                    }
+                                ],
+                                "titles": "$.dataset_mdata.titles",
+                                "publisher": "$.dataset_mdata.publisher",
+                                "publicationYear": ".dataset_mdata.publicationYear"
+                            }
+                        }
+                        
+                    },
+                    "Next": "SearchIngest"
                 },
                 "SearchIngest":{
                     "Type": "Action",

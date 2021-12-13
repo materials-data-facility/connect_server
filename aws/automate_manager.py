@@ -41,6 +41,10 @@ class AutomateManager:
         self.api_client_id = secrets['API_CLIENT_ID']
         self.api_client_secret = secrets['API_CLIENT_SECRET']
 
+        self.datacite_username = secrets['DATACITE_USERNAME']
+        self.datacite_password  =secrets['DATACITE_PASSWORD']
+        self.datacite_prefix = secrets['DATACITE_PREFIX']
+
     def authenticate(self):
         global tokens
         conf_client = globus_sdk.ConfidentialAppAuthClient(
@@ -76,7 +80,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id, monitor_by_id,
-               data_sources, do_curation, is_test=False, update_metadata_only=False):
+               data_sources, do_curation, is_test=False, update_metadata_only=False, mint_doi=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -112,6 +116,7 @@ class AutomateManager:
             # @Ben this will default to True as long as the data are public. That will be in a separate flow
             "mrr": False,
             "update_metadata_only": update_metadata_only,
+            "mint_doi": mint_doi,
 
             # Is this actually used?
             "path": "/~/<username>/<data-directory>",
@@ -121,6 +126,9 @@ class AutomateManager:
                 "aws_secret_access_key": self.email_secret,
                 "region_name": "us-east-1"
             },
+            "_datacite_username": self.datacite_username,
+            "_datacite_password": self.datacite_password,
+            "_datacite_prefix": self.datacite_prefix,
             "_tokens": {
                 'SubmittingUser': submitting_user_token['access_token']
             }

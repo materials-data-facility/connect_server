@@ -62,3 +62,14 @@ Feature: Submit Dataset
         And the dynamo record should be version 1.1
         And an automate flow started that skips the file transfer
         And I should receive a success result
+
+    Scenario: Submit Dataset and mint DOI
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit for an organization that mints DOIs
+        When I submit the dataset
+
+        Then a dynamo record should be created with the generated uuid
+        And the dynamo record should be version 1.0
+        And an automate flow started with a true mint DOI flag
+        And the data destination should be the Petrel MDF directory
+        And I should receive a success result with the generated uuid and version 1.0 blah
