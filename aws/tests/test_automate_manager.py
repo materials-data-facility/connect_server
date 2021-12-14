@@ -14,9 +14,9 @@ class TestAutomateManager:
             "SES_SECRET": "shhh",
             "API_CLIENT_ID": "55-321",
             "API_CLIENT_SECRET": "hhhhs",
-            "DATACITE_USERNAME": "GLOBUS.JCPTEST",
-            "DATACITE_PASSWORD": "DatacitePruyne401",
-            "DATACITE_PREFIX": "10.80206"
+            "DATACITE_USERNAME": "datacite_test_usrname_1234",
+            "DATACITE_PASSWORD": "datacite_test_passwrd_1234",
+            "DATACITE_PREFIX": "10.12345"
         }
     
 
