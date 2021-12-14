@@ -40,6 +40,27 @@ class TestAutomateManager:
             ]
         })
 
+    @pytest.fixture
+    def organization_mint_doi(self):
+        return Organization.from_json_doc({
+            "canonical_name": "MDF Open",
+            "aliases": [
+                "Open"
+            ],
+            "description": "A template for open and published data.",
+            "permission_groups": [
+                "cc192dca-3751-11e8-90c1-0a7c735d220a"
+            ],
+            "acl": [
+                "public"
+            ],
+            "curation": True,
+            "mint_doi": True,
+            "data_destinations": [
+                "globus://82f1b5c6-6e9b-11e5-ba47-22000b92c6ec/mdf_open/"
+            ]
+        })
+
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items(self, _, secrets, organization):
@@ -123,7 +144,7 @@ class TestAutomateManager:
     
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
-    def test_mint_doi(self, mock_automate, secrets, organization, mocker):
+    def test_mint_doi(self, mock_automate, secrets, organization_mint_doi, mocker):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
         manager = AutomateManager(secrets)
@@ -132,7 +153,7 @@ class TestAutomateManager:
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
         ]
         user_token = {'access_token':'1234567890'}
-        _ = manager.submit(mdf_rec=None, organization=organization,
+        _ = manager.submit(mdf_rec=None, organization=organization_mint_doi,
                submitting_user_token=user_token, submitting_user_id = "12-33-55", monitor_by_id=["12-33-55", "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
                data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = False, mint_doi=True)
 

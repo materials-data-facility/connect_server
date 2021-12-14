@@ -84,10 +84,6 @@ def mdf_datset(mdf, mdf_environment, mocker):
     mdf_environment['source_id'] = fake_uuid
     mdf.set_mint_doi(True)
     mdf_environment['mint_doi'] = True
-    
-    print(87)
-    print(mdf_environment)
-    print(mdf)
 
     return mdf.get_submission()
 
