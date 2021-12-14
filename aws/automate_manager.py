@@ -42,7 +42,7 @@ class AutomateManager:
         self.api_client_secret = secrets['API_CLIENT_SECRET']
 
         self.datacite_username = secrets['DATACITE_USERNAME']
-        self.datacite_password  =secrets['DATACITE_PASSWORD']
+        self.datacite_password = secrets['DATACITE_PASSWORD']
         self.datacite_prefix = secrets['DATACITE_PREFIX']
 
     def authenticate(self):
@@ -134,6 +134,7 @@ class AutomateManager:
             }
         }
         print("Flow is ", self.flow)
+        print("Automate_rec is ", automate_rec)
         flow_run = self.flow.run_flow(automate_rec, monitor_by=monitor_by_id)
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())

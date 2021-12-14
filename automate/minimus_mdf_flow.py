@@ -204,21 +204,21 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                     "ExceptionOnActionFailure": True,
                     "ResultPath": "$.DoiResult",
                     "Parameters": {
-                        "as_test": "$.dataset_mdata.test",
-                        "username": "$._datacite_username",
-                        "password": "$._datacite_password",
+                        "as_test.$": "$.dataset_mdata.test",
+                        "username.$": "$._datacite_username",
+                        "password.$": "$._datacite_password",
                         "Doi": {
                             "type": "dois",
                             "attributes": {
-                                "prefix": "$._datacite_prefix",
+                                "prefix.$": "$._datacite_prefix",
                                 "creators": [
                                     {
-                                        "name": "$.dataset_mdata.creators[0].creatorName"
+                                        "name.$": "$.dataset_mdata.creators[0].creatorName"
                                     }
                                 ],
-                                "titles": "$.dataset_mdata.titles",
-                                "publisher": "$.dataset_mdata.publisher",
-                                "publicationYear": ".dataset_mdata.publicationYear"
+                                "titles.$": "$.dataset_mdata.titles",
+                                "publisher.$": "$.dataset_mdata.publisher",
+                                "publicationYear.$": "$.dataset_mdata.publicationYear"
                             }
                         }
                         

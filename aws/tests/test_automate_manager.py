@@ -159,3 +159,4 @@ class TestAutomateManager:
 
         mock_flow.run_flow.assert_called()
         assert(mock_flow.run_flow.call_args[0][0]['mint_doi'])
+        assert(False)
