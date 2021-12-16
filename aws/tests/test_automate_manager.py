@@ -35,6 +35,7 @@ class TestAutomateManager:
                 "public"
             ],
             "curation": True,
+            "mint_doi": False,
             "data_destinations": [
                 "globus://82f1b5c6-6e9b-11e5-ba47-22000b92c6ec/mdf_open/"
             ]
@@ -47,7 +48,7 @@ class TestAutomateManager:
             "aliases": [
                 "Open"
             ],
-            "description": "A template for open and published data.",
+            "description": "A template for open and published data that mints dois.",
             "permission_groups": [
                 "cc192dca-3751-11e8-90c1-0a7c735d220a"
             ],
@@ -155,8 +156,8 @@ class TestAutomateManager:
         user_token = {'access_token':'1234567890'}
         _ = manager.submit(mdf_rec=None, organization=organization_mint_doi,
                submitting_user_token=user_token, submitting_user_id = "12-33-55", monitor_by_id=["12-33-55", "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
-               data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = False, mint_doi=True)
+               data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = False)
 
         mock_flow.run_flow.assert_called()
         assert(mock_flow.run_flow.call_args[0][0]['mint_doi'])
-        assert(False)
+

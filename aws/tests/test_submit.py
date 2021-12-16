@@ -76,14 +76,15 @@ def provided_source_id(mdf, mdf_environment):
         target_fixture='mdf_submission')
 def mdf_datset(mdf, mdf_environment, mocker):
     mdf.update = False
-
+    mdf.add_organization("MDF Open")
+    print("MDF")
+    print(mdf)
+    print(mdf_environment)
     # No existing record
     mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value=None)
-
+    print(mdf_environment)
     # No provided source_id so use a uuid
     mdf_environment['source_id'] = fake_uuid
-    mdf.set_mint_doi(True)
-    mdf_environment['mint_doi'] = True
 
     return mdf.get_submission()
 
@@ -198,15 +199,5 @@ def check_skip_file_transfer(mdf_environment):
     print(mdf_environment)
     assert automate_record['submitting_user_id'] == 'my-id'
     assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
-    assert automate_record['mint_doi']
+    assert automate_record['organization'].mint_doi
     return automate_record
-
-@then(parsers.parse('I should receive a success result with the generated uuid, a DOI, and version {version}'))
-def no_error_with_version(submit_result, mdf_environment, version):
-    print("---------->", submit_result)
-    assert submit_result['statusCode'] == 202
-    body = json.loads(submit_result['body'])
-    print(213, body)
-    assert body['success']
-    assert body['source_id'] == mdf_environment['source_id']
-    assert body['version'] == version

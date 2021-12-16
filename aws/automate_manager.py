@@ -80,7 +80,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id, monitor_by_id,
-               data_sources, do_curation, is_test=False, update_metadata_only=False, mint_doi=False):
+               data_sources, do_curation, is_test=False, update_metadata_only=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -116,7 +116,7 @@ class AutomateManager:
             # @Ben this will default to True as long as the data are public. That will be in a separate flow
             "mrr": False,
             "update_metadata_only": update_metadata_only,
-            "mint_doi": mint_doi,
+            "mint_doi": organization.mint_doi,
 
             # Is this actually used?
             "path": "/~/<username>/<data-directory>",
