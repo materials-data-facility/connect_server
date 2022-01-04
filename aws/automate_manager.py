@@ -128,7 +128,8 @@ class AutomateManager:
             },
             "_datacite_username": self.datacite_username,
             "_datacite_password": self.datacite_password,
-            "_datacite_prefix": self.datacite_prefix,
+            "datacite_prefix": self.datacite_prefix,
+            "datacite_as_test": is_test,
             "_tokens": {
                 'SubmittingUser': submitting_user_token['access_token']
             }
