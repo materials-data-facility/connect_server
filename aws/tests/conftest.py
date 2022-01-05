@@ -1,4 +1,5 @@
 import json
+import os
 from unittest import mock
 from unittest.mock import patch
 
@@ -71,6 +72,8 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
     else:
         dynamo_manager_class.increment_record_version = mocker.Mock(return_value='1.0')
 
+    os.environ['RUN_AS_SCOPE'] = '0c7ee169-cefc-4a23-81e1-dc323307c863'
+    os.environ['MONITOR_BY_GROUP'] = 'urn:groups:my-group'
     print(64)
     print(mdf_environment)
     automate_manager_class = mocker.Mock(return_value=mdf_environment['automate_manager'])

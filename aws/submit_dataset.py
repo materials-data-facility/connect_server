@@ -51,6 +51,8 @@ def lambda_handler(event, context):
     print("name ", name, "identities", identities)
     print("globus_dependent_token ", globus_dependent_token)
 
+    run_as_scope = os.environ["RUN_AS_SCOPE"]
+    monitor_by_group = os.environ['MONITOR_BY_GROUP']
     access_token = event['headers']['Authorization']
 
     dynamo_manager = DynamoManager()
@@ -293,14 +295,11 @@ def lambda_handler(event, context):
     automate_manager = AutomateManager(get_secret())
     automate_manager.authenticate()
 
-    print("Depends ", globus_dependent_token)
-    print("Token", globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'])
-
     # Passes to submit with magic UUID that allows mdf admins to monitor flows in progress
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
-                                        submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
+                                        submitting_user_token=globus_dependent_token[run_as_scope],
                                         submitting_user_id=user_id,
-                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, 'urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20'],
+                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
                                         is_test=is_test,
