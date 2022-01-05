@@ -91,7 +91,8 @@ class AutomateManager:
                 data_sources=data_sources,
                 organization=organization,
                 submitting_user_id=submitting_user_id,
-                test_submit=is_test
+                test_submit=is_test,
+                label=f'MDF Dataset Transfer {mdf_rec["mdf"]["source_id"]}'
             ),
             "data_destinations": [],
             "data_permissions": {},
@@ -144,13 +145,14 @@ class AutomateManager:
         return flow_run.action_id
 
     def create_transfer_items(self, data_sources, organization,
-                              submitting_user_id, test_submit=False):
+                              submitting_user_id, test_submit=False,
+                              label="MDF Transfer"):
 
         destination_parsed = urlparse(organization.data_destinations[0]) \
             if not test_submit  else test_data_destination
 
         user_transfer_inputs = {"destination_endpoint_id": destination_parsed.netloc,
-                                "label": "MDF Flow Test Transfer1",
+                                "label": label,
                                 "source_endpoint_id": None,
                                 "submitting-user-id": submitting_user_id,
                                 "transfer_items": []
