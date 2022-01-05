@@ -136,7 +136,9 @@ class AutomateManager:
         }
         print("Flow is ", self.flow)
         print("Automate_rec is ", automate_rec)
-        flow_run = self.flow.run_flow(automate_rec, monitor_by=monitor_by_id)
+        flow_run = self.flow.run_flow(automate_rec,
+                                      monitor_by=monitor_by_id,
+                                      label=f'MDF Submission {mdf_rec["mdf"]["source_id"]}')
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())
         return flow_run.action_id
