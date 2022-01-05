@@ -4,8 +4,8 @@ from globus_automate_flow import GlobusAutomateFlowDef
 
 def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by):
     return GlobusAutomateFlowDef(
-        title="Transfer Loop Flow",
-        description="Perform multiple Globus Transfers",
+        title="MDF Ingest Flow",
+        description="Ingest Materials Data Facility Submissions",
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
         administered_by=administered_by,
@@ -105,7 +105,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         {
                             "Variable": "$.curation_input",
                             "BooleanEquals": False,
-                            "Next": "SearchIngest"
+                            "Next": "NeedDOI"
                         }
                     ],
                     "Default": "SendCurationEmail"
@@ -176,7 +176,7 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         {
                             "Variable": "$.CurateResult.details.name",
                             "StringEquals": "accepted",
-                            "Next": "SearchIngest"
+                            "Next": "NeedDOI"
                         },
                         {
                             "Variable": "$.CurateResult.details.name",
@@ -185,6 +185,57 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                         }
                     ],
                     "Default": "ExceptionState"
+                },
+                "NeedDOI":{
+                    "Comment": "Checks whether flow needs to mint a DOI",
+                    "Type": "Choice",
+                    "Choices": [
+                        {
+                        "Variable": "$.mint_doi",
+                        "BooleanEquals": True,
+                        "Next": "MintDOI"
+                        }
+                    ],
+                    "Default": "SearchIngest"
+                },
+                "MintDOI": {
+                    "Type": "Action",
+                    "ActionUrl": "https://actions.globus.org/datacite/mint/basic_auth",
+                    "ExceptionOnActionFailure": True,
+                    "ResultPath": "$.DoiResult",
+                    "Parameters": {
+                        "as_test.$": "$.datacite_as_test",
+                        "username.$": "$._datacite_username",
+                        "password.$": "$._datacite_password",
+                        "Doi": {
+                            "id.$":"$.datacite_prefix",
+                            "type": "dois",
+                            "attributes": {
+                                "prefix.$": "$.datacite_prefix",
+                                "creators.$": "$.dataset_mdata.dc.creators",
+                                "titles.$": "$.dataset_mdata.dc.titles",
+                                "publisher.$": "$.dataset_mdata.dc.publisher",
+                                "publicationYear.$": "$.dataset_mdata.dc.publicationYear",
+                                "url.$":"$.mdf_portal_link"
+                            }
+                        },
+                        "__Private_Parameters": [
+                            "username",
+                            "password"
+                        ]
+                    },
+                    "Next": "AddDoiToSearchRecord"
+                },
+                "AddDoiToSearchRecord": {
+                    "Type": "ExpressionEval",
+                    "ResultPath": "$.dataset_mdata.dc",
+                    "Parameters": {
+                        "identifier":{
+                            "identifierType": "DOI",
+                            "identifier.$": "$.DoiResult.details.data.attributes.doi"
+                        }
+                    },
+                    "Next": "SearchIngest",
                 },
                 "SearchIngest":{
                     "Type": "Action",

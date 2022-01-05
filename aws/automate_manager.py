@@ -41,6 +41,10 @@ class AutomateManager:
         self.api_client_id = secrets['API_CLIENT_ID']
         self.api_client_secret = secrets['API_CLIENT_SECRET']
 
+        self.datacite_username = secrets['DATACITE_USERNAME']
+        self.datacite_password = secrets['DATACITE_PASSWORD']
+        self.datacite_prefix = secrets['DATACITE_PREFIX']
+
     def authenticate(self):
         global tokens
         conf_client = globus_sdk.ConfidentialAppAuthClient(
@@ -112,6 +116,7 @@ class AutomateManager:
             # @Ben this will default to True as long as the data are public. That will be in a separate flow
             "mrr": False,
             "update_metadata_only": update_metadata_only,
+            "mint_doi": organization.mint_doi,
 
             # Is this actually used?
             "path": "/~/<username>/<data-directory>",
@@ -121,11 +126,16 @@ class AutomateManager:
                 "aws_secret_access_key": self.email_secret,
                 "region_name": "us-east-1"
             },
+            "_datacite_username": self.datacite_username,
+            "_datacite_password": self.datacite_password,
+            "datacite_prefix": self.datacite_prefix,
+            "datacite_as_test": is_test,
             "_tokens": {
                 'SubmittingUser': submitting_user_token['access_token']
             }
         }
         print("Flow is ", self.flow)
+        print("Automate_rec is ", automate_rec)
         flow_run = self.flow.run_flow(automate_rec, monitor_by=monitor_by_id)
         print("Result is ", flow_run.action_id)
         print("Status is ", flow_run.get_status())

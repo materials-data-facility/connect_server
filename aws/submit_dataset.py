@@ -186,7 +186,7 @@ def lambda_handler(event, context):
         "extraction_config": metadata.pop("extraction_config", {}),
         "no_extract": metadata.pop("no_extract", False),  # Pass-through flag
         "submitter": name,
-        "update_metadata_only": metadata.pop("update_metadata_only", False)
+        "update_metadata_only": metadata.pop("update_metadata_only", False),
     }
 
     submission_title = metadata["dc"]["titles"][0]["title"]
@@ -321,7 +321,7 @@ def lambda_handler(event, context):
         "acl": submission_conf["acl"],
         "test": submission_conf["test"],
         "original_submission": json.dumps(md_copy),
-        "update_metadata_only": submission_conf["update_metadata_only"]
+        "update_metadata_only": submission_conf["update_metadata_only"],
     }
 
     print("status info", status_info)
@@ -336,11 +336,11 @@ def lambda_handler(event, context):
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
                                         submitting_user_token=globus_dependent_token['0c7ee169-cefc-4a23-81e1-dc323307c863'],
                                         submitting_user_id=user_id,
-                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, 'urn:globus:groupos:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20'],
+                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, 'urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20'],
                                         data_sources=submission_conf['data_sources'],
                                         do_curation=submission_conf['curation'],
                                         is_test=is_test,
-                                        update_metadata_only= submission_conf['update_metadata_only']
+                                        update_metadata_only=submission_conf['update_metadata_only'],
                                         )
 
     status_info['action_id'] = action_id
