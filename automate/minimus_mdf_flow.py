@@ -4,8 +4,8 @@ from globus_automate_flow import GlobusAutomateFlowDef
 
 def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by):
     return GlobusAutomateFlowDef(
-        title="Transfer Loop Flow",
-        description="Perform multiple Globus Transfers",
+        title="MDF Ingest Flow",
+        description="Ingest Materials Data Facility Submissions",
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
         administered_by=administered_by,
@@ -204,26 +204,38 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                     "ExceptionOnActionFailure": True,
                     "ResultPath": "$.DoiResult",
                     "Parameters": {
-                        "as_test.$": "$.dataset_mdata.test",
+                        "as_test.$": "$.datacite_as_test",
                         "username.$": "$._datacite_username",
                         "password.$": "$._datacite_password",
                         "Doi": {
+                            "id.$":"$.datacite_prefix",
                             "type": "dois",
                             "attributes": {
-                                "prefix.$": "$._datacite_prefix",
-                                "creators": [
-                                    {
-                                        "name.$": "$.dataset_mdata.creators[0].creatorName"
-                                    }
-                                ],
-                                "titles.$": "$.dataset_mdata.titles",
-                                "publisher.$": "$.dataset_mdata.publisher",
-                                "publicationYear.$": "$.dataset_mdata.publicationYear"
+                                "prefix.$": "$.datacite_prefix",
+                                "creators.$": "$.dataset_mdata.dc.creators",
+                                "titles.$": "$.dataset_mdata.dc.titles",
+                                "publisher.$": "$.dataset_mdata.dc.publisher",
+                                "publicationYear.$": "$.dataset_mdata.dc.publicationYear",
+                                "url.$":"$.mdf_portal_link"
                             }
-                        }
-                        
+                        },
+                        "__Private_Parameters": [
+                            "username",
+                            "password"
+                        ]
                     },
-                    "Next": "SearchIngest"
+                    "Next": "AddDoiToSearchRecord"
+                },
+                "AddDoiToSearchRecord": {
+                    "Type": "ExpressionEval",
+                    "ResultPath": "$.dataset_mdata.dc",
+                    "Parameters": {
+                        "identifier":{
+                            "identifierType": "DOI",
+                            "identifier.$": "$.DoiResult.details.data.attributes.doi"
+                        }
+                    },
+                    "Next": "SearchIngest",
                 },
                 "SearchIngest":{
                     "Type": "Action",
