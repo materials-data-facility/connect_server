@@ -18,6 +18,16 @@ def mdf(_):
     mdf.add_data_source("https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F")
     return mdf
 
+
+@pytest.fixture
+def mdf_rec():
+    return {
+        "mdf": {
+            "source_id": "123-456-7890"
+        }
+    }
+
+
 @given("I'm authenticated with MDF", target_fixture='mdf_environment')
 def authenticated_with_globus(mocker):
     dynamo_manager = mocker.Mock()
