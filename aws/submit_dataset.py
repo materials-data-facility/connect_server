@@ -2,39 +2,19 @@ import json
 import logging
 import os
 import traceback
-import urllib
 import uuid
 from copy import deepcopy
 from datetime import datetime
 
 import jsonschema
-import mdf_toolbox
 
-import utils
-from dynamo_manager import DynamoManager
 from automate_manager import AutomateManager
+from dynamo_manager import DynamoManager
 from organization import Organization
 from source_id_manager import SourceIDManager
 from utils import get_secret
 
 logger = logging.getLogger(__name__)
-
-
-class ClientException(Exception):
-    pass
-
-
-CONFIG = {
-    "BACKUP_EP": False,
-    "BACKUP_PATH": "/mdf_connect/dev/data/",
-    "DEFAULT_DOI_TEST": True,
-    "DEFAULT_CITRINATION_PUBLIC": False,
-    "DEFAULT_MRR_TEST": True,
-
-    "TRANSFER_WEB_APP_LINK": "https://app.globus.org/file-manager?origin_id={}&origin_path={}",
-    "INGEST_INDEX": "mdf-dev",
-    "INGEST_TEST_INDEX": "mdf-dev",
-}
 
 
 def validate_submission_schema(metadata):
@@ -123,22 +103,6 @@ def lambda_handler(event, context):
 
     organization = Organization.from_schema_repo(org_cannonical_name)
     print("######", organization)
-
-    # If this is an incremental update, fetch the original submission
-    # Just update the metadata
-    # @todo
-    # data locations should be empty. incremental_update --> update_metadata. @todo check client too
-    if metadata.get("incremental_update"):
-        # source_name and title cannot be updated
-        metadata.get("mdf", {}).pop("source_name", None)
-        metadata.get("dc", {}).pop("titles", None) # Why can't title be changed?
-
-        # update must be True
-        if not metadata.get("update"):
-            raise ClientException(
-                "{\"failure\":true, \"errorMessage\": \"You must be updating a submission (set update=True) when incrementally updating\"")
-        # @TODO
-        # Lookup previous submission in Dynamo
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user
