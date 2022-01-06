@@ -80,6 +80,7 @@ class AutomateManager:
 
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id, monitor_by_id,
+               search_index_uuid,
                data_sources, do_curation, is_test=False, update_metadata_only=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
@@ -93,7 +94,7 @@ class AutomateManager:
                 submitting_user_id=submitting_user_id,
                 test_submit=is_test
             ),
-            "search_index": "ab71134d-0b36-473d-aa7e-7b19b2124c88",
+            "search_index": search_index_uuid,
             # @Ben group_by_dir This will be an XTract flow option
             "group_by_dir": True,
             "dataset_mdata": mdf_rec,

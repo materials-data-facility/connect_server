@@ -74,6 +74,7 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
 
     os.environ['RUN_AS_SCOPE'] = '0c7ee169-cefc-4a23-81e1-dc323307c863'
     os.environ['MONITOR_BY_GROUP'] = 'urn:groups:my-group'
+    os.environ['SEARCH_INDEX_UUID'] = '098-765-4321'
     print(64)
     print(mdf_environment)
     automate_manager_class = mocker.Mock(return_value=mdf_environment['automate_manager'])

@@ -135,10 +135,14 @@ class TestAutomateManager:
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
         ]
-        user_token = {'access_token':'1234567890'}
+        user_token = {'access_token': '1234567890'}
         _ = manager.submit(mdf_rec=mdf_rec, organization=organization,
-               submitting_user_token=user_token, submitting_user_id = "12-33-55", monitor_by_id=["12-33-55", "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
-               data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = True)
+                           submitting_user_token=user_token,
+                           submitting_user_id="12-33-55", monitor_by_id=["12-33-55",
+                                                                         "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                           search_index_uuid="098-765-4321",
+                           data_sources=data_sources, do_curation=None, is_test=False,
+                           update_metadata_only=True)
 
         mock_flow.run_flow.assert_called()
         assert(mock_flow.run_flow.call_args[0][0]['update_metadata_only'])
@@ -153,10 +157,14 @@ class TestAutomateManager:
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
         ]
-        user_token = {'access_token':'1234567890'}
+        user_token = {'access_token': '1234567890'}
         _ = manager.submit(mdf_rec=mdf_rec, organization=organization_mint_doi,
-               submitting_user_token=user_token, submitting_user_id = "12-33-55", monitor_by_id=["12-33-55", "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
-               data_sources = data_sources, do_curation=None, is_test=False, update_metadata_only = False)
+                           submitting_user_token=user_token,
+                           submitting_user_id="12-33-55", monitor_by_id=["12-33-55",
+                                                                         "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                           search_index_uuid='098-765-4321',
+                           data_sources=data_sources, do_curation=None, is_test=False,
+                           update_metadata_only=False)
 
         mock_flow.run_flow.assert_called()
         assert(mock_flow.run_flow.call_args[0][0]['mint_doi'])
