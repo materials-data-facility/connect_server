@@ -78,6 +78,12 @@ class AutomateManager:
         print(self.flows_client)
         self.flow.set_client(self.flows_client)
 
+    def create_data_entry_for_search(self, user_transfer_inputs):
+        return {
+            "endpoint_path": f"globus://{user_transfer_inputs['destination_endpoint_id']}/{user_transfer_inputs['transfer_items'][0]['destination_path']}",
+            "link": f"https://app.globus.org/file-manager?origin_id={user_transfer_inputs['destination_endpoint_id']}&origin_path={user_transfer_inputs['transfer_items'][0]['destination_path']}"
+        }
+
     def submit(self, mdf_rec, organization,
                submitting_user_token, submitting_user_id, submitting_user_email,
                monitor_by_id,
@@ -117,6 +123,10 @@ class AutomateManager:
                 'SubmittingUser': submitting_user_token['access_token']
             }
         }
+
+        # Update the MDF Record to make it complete for search record
+        mdf_rec['data'] = self.create_data_entry_for_search(automate_rec['user_transfer_inputs'])
+
         print("Flow is ", self.flow)
         print("Automate_rec is ", automate_rec)
         flow_run = self.flow.run_flow(automate_rec,
