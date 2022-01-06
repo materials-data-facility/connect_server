@@ -277,12 +277,10 @@ def mint_doi_steps():
         },
         "AddDoiToSearchRecord": {
             "Type": "ExpressionEval",
-            "ResultPath": "$.dataset_mdata.dc",
+            "ResultPath": "$.dataset_mdata.dc.identifier",
             "Parameters": {
-                "identifier": {
-                    "identifierType": "DOI",
-                    "identifier.$": "$.DoiResult.details.data.attributes.doi"
-                }
+                "identifierType": "DOI",
+                "identifier.$": "$.DoiResult.details.data.attributes.doi"
             },
             "Next": "SearchIngest",
         },
