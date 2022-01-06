@@ -145,7 +145,7 @@ def curation_steps():
             "Parameters": {
                 "body_mimetype": "text/html",
                 "sender": "materialsdatafacility@uchicago.edu",
-                "destination": "bengal1@illinois.edu",
+                "destination": "materialsdatafacility@uchicago.edu",
                 "subject": "Materials Data Facility Curation Request",
                 "body_template": "Please either Approve or Deny the secure egress request here: $landing_page_url",
                 "body_variables": {
