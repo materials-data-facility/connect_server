@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from urllib import parse
 
 import globus_sdk
@@ -126,6 +127,10 @@ class AutomateManager:
 
         # Update the MDF Record to make it complete for search record
         mdf_rec['data'] = self.create_data_entry_for_search(automate_rec['user_transfer_inputs'])
+        # Keep consistent with earlier implementation and report Zulu time
+        mdf_rec['mdf']['ingest_date'] = datetime.now(timezone.utc) \
+            .isoformat() \
+            .replace("+00:00", "Z")
 
         print("Flow is ", self.flow)
         print("Automate_rec is ", automate_rec)
