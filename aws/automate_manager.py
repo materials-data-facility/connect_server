@@ -116,8 +116,8 @@ class AutomateManager:
                 "aws_secret_access_key": self.email_secret,
                 "region_name": "us-east-1"
             },
-            "_datacite_username": self.datacite_username,
-            "_datacite_password": self.datacite_password,
+            "_private._datacite_username": self.datacite_username,
+            "_private._datacite_password": self.datacite_password,
             "datacite_prefix": self.datacite_prefix,
             "datacite_as_test": is_test,
             "_tokens": {
