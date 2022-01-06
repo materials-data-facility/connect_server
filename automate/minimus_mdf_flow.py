@@ -340,7 +340,7 @@ def notify_user_steps(smtp_send_credentials, sender_email):
             "ExceptionOnActionFailure": True,
             "Parameters": {
                 "body_template.$": "$.FinalState.message",
-                "destination.$": "$.curation_input.author_email",
+                "destination.$": "$.submitting_user_email",
                 "send_credentials": smtp_send_credentials,
                 "__Private_Parameters": [
                     "send_credentials"
