@@ -91,37 +91,17 @@ class AutomateManager:
                 data_sources=data_sources,
                 organization=organization,
                 submitting_user_id=submitting_user_id,
-                test_submit=is_test,
-                label=f'MDF Dataset Transfer {mdf_rec["mdf"]["source_id"]}'
+                test_submit=is_test
             ),
-            "data_destinations": [],
-            "data_permissions": {},
-            "dataset_acl": [
-                "urn:globus:auth:identity:117e8833-68f5-4cb2-afb3-05b25db69be1"
-            ],
             "search_index": "ab71134d-0b36-473d-aa7e-7b19b2124c88",
             # @Ben group_by_dir This will be an XTract flow option
             "group_by_dir": True,
-            "mdf_storage_ep": "e38ee745-6d04-11e5-ba46-22000b92c6ec",
-            "mdf_dataset_path": "/MDF/mdf_connect/test_files/deleteme/data/test123/",
             "dataset_mdata": mdf_rec,
-            "validator_params": {},
-            # Maybe not needed?
-            "feedstock_https_domain": "https://e38ee745-6d04-11e5-ba46-22000b92c6ec.e.globus.org",
 
             "curation_input": do_curation,
-            #@Ben Change to something like get_doi: True
-            "mdf_publish": False,
-            # @Ben this will default to False.
-            "citrine": False,
-            # @Ben this will default to True as long as the data are public. That will be in a separate flow
-            "mrr": False,
             "update_metadata_only": update_metadata_only,
             "mint_doi": organization.mint_doi,
 
-            # Is this actually used?
-            "path": "/~/<username>/<data-directory>",
-            "admin_email": "bengal1@illinois.edu",
             "_private_email_credentials": {
                 "aws_access_key_id": self.email_access_key,
                 "aws_secret_access_key": self.email_secret,
@@ -145,14 +125,13 @@ class AutomateManager:
         return flow_run.action_id
 
     def create_transfer_items(self, data_sources, organization,
-                              submitting_user_id, test_submit=False,
-                              label="MDF Transfer"):
+                              submitting_user_id, test_submit=False):
 
         destination_parsed = urlparse(organization.data_destinations[0]) \
             if not test_submit  else test_data_destination
 
         user_transfer_inputs = {"destination_endpoint_id": destination_parsed.netloc,
-                                "label": label,
+                                "label": "MDF Flow Test Transfer1",
                                 "source_endpoint_id": None,
                                 "submitting-user-id": submitting_user_id,
                                 "transfer_items": []
