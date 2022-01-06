@@ -140,6 +140,7 @@ class TestAutomateManager:
                            submitting_user_token=user_token,
                            submitting_user_id="12-33-55", monitor_by_id=["12-33-55",
                                                                          "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                           submitting_user_email="foo@bar.com",
                            search_index_uuid="098-765-4321",
                            data_sources=data_sources, do_curation=None, is_test=False,
                            update_metadata_only=True)
@@ -162,6 +163,7 @@ class TestAutomateManager:
                            submitting_user_token=user_token,
                            submitting_user_id="12-33-55", monitor_by_id=["12-33-55",
                                                                          "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                           submitting_user_email="foo@bar.com",
                            search_index_uuid='098-765-4321',
                            data_sources=data_sources, do_curation=None, is_test=False,
                            update_metadata_only=False)

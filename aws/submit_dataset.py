@@ -301,6 +301,7 @@ def lambda_handler(event, context):
     action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
                                         submitting_user_token=globus_dependent_token[run_as_scope],
                                         submitting_user_id=user_id,
+                                        submitting_user_email=user_email,
                                         monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
                                         search_index_uuid=search_index_uuid,
                                         data_sources=submission_conf['data_sources'],
