@@ -254,8 +254,8 @@ def mint_doi_steps():
             "ResultPath": "$.DoiResult",
             "Parameters": {
                 "as_test.$": "$.datacite_as_test",
-                "username.$": "$._private._datacite_username",
-                "password.$": "$._private._datacite_password",
+                "username.$": "$._private_datacite_credentials._datacite_username",
+                "password.$": "$._private_datacite_credentials._datacite_password",
                 "Doi": {
                     "id.$": "$.datacite_prefix",
                     "type": "dois",
