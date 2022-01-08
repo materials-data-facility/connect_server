@@ -1,3 +1,4 @@
+import os
 from unittest import mock
 
 import pytest
@@ -65,6 +66,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items(self, _, secrets, organization):
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         manager = AutomateManager(secrets)
 
         data_sources = [
@@ -87,6 +89,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_from_origin(self, _, secrets, organization):
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         manager = AutomateManager(secrets)
 
         data_sources = [
@@ -107,6 +110,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_test_submit(self, _, secrets, organization):
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         manager = AutomateManager(secrets)
 
         data_sources = [
@@ -130,6 +134,7 @@ class TestAutomateManager:
     def test_update_metadata_only(self, mock_automate, secrets, organization, mocker, mdf_rec):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         manager = AutomateManager(secrets)
 
         data_sources = [
@@ -153,6 +158,7 @@ class TestAutomateManager:
     def test_mint_doi(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         manager = AutomateManager(secrets)
 
         data_sources = [

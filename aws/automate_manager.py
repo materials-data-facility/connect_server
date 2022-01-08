@@ -46,6 +46,8 @@ class AutomateManager:
         self.datacite_password = secrets['DATACITE_PASSWORD']
         self.datacite_prefix = secrets['DATACITE_PREFIX']
 
+        self.portal_url = os.environ['PORTAL_URL']
+
     def authenticate(self):
         global tokens
         conf_client = globus_sdk.ConfidentialAppAuthClient(
@@ -95,7 +97,7 @@ class AutomateManager:
         assert destination_parsed.scheme == 'globus'
 
         automate_rec = {
-            "mdf_portal_link": "https://example.com/example_link",
+            "mdf_portal_link": self.portal_url+mdf_rec["mdf"]["source_id"],
             "user_transfer_inputs": self.create_transfer_items(
                 data_sources=data_sources,
                 organization=organization,
