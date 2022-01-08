@@ -103,7 +103,7 @@ def file_transfer_steps():
                 "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserTransferResult.details`"
             },
             "ResultPath": "$.FinalState",
-            "Next": "ChooseNotifyUserEnd"
+            "Next": "NotifyUserEnd"
         },
         "FailUserPermission": {
             "Type": "ExpressionEval",
@@ -112,12 +112,12 @@ def file_transfer_steps():
                 "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserPermissionResult.details`"
             },
             "ResultPath": "$.FinalState",
-            "Next": "ChooseNotifyUserEnd"
+            "Next": "NotifyUserEnd"
         },
     }
 
 
-def curation_steps():
+def curation_steps(sender_email):
     """
     Steps for allowing an administrator to curate submissions:
         * Check to see if curation has been requested
@@ -144,7 +144,7 @@ def curation_steps():
             "ResultPath": "$.CurationEmailResult",
             "Parameters": {
                 "body_mimetype": "text/html",
-                "sender": "materialsdatafacility@uchicago.edu",
+                "sender": sender_email,
                 "destination": "materialsdatafacility@uchicago.edu",
                 "subject": "Materials Data Facility Curation Request",
                 "body_template": "Please either Approve or Deny the secure egress request here: $landing_page_url",
@@ -221,7 +221,7 @@ def curation_steps():
                 "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the ingestion process. The curator gave the following reason for rejection: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`"
             },
             "ResultPath": "$.FinalState",
-            "Next": "ChooseNotifyUserEnd"
+            "Next": "NotifyUserEnd"
         },
 
     }
@@ -308,7 +308,7 @@ def search_ingest_steps():
     }
 
 
-def notify_user_steps(smtp_send_credentials, sender_email):
+def notify_user_steps(sender_email):
     """
     Check on the final status of the submission and notify the submitting user as
     appropriate
@@ -321,18 +321,7 @@ def notify_user_steps(smtp_send_credentials, sender_email):
                 "message.=": "'Submission Flow succeeded. Your submission (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
             },
             "ResultPath": "$.FinalState",
-            "Next": "ChooseNotifyUserEnd"
-        },
-        "ChooseNotifyUserEnd": {
-            "Type": "Choice",
-            "Choices": [
-                {
-                    "Variable": "$.curation_input",
-                    "BooleanEquals": False,
-                    "Next": "EndSubmission"
-                }
-            ],
-            "Default": "NotifyUserEnd"
+            "Next": "NotifyUserEnd"
         },
         "NotifyUserEnd": {
             "Type": "Action",
@@ -341,12 +330,18 @@ def notify_user_steps(smtp_send_credentials, sender_email):
             "Parameters": {
                 "body_template.$": "$.FinalState.message",
                 "destination.$": "$.submitting_user_email",
-                "send_credentials": smtp_send_credentials,
+                "sender": sender_email,
+                "subject.$": "$.FinalState.title",
+                "send_credentials": [
+                    {
+                        "credential_method": "email",
+                        "credential_type": "ses",
+                        "credential_value.$": "$._private_email_credentials"
+                    }
+                ],
                 "__Private_Parameters": [
                     "send_credentials"
-                ],
-                "sender": sender_email,
-                "subject.$": "$.FinalState.title"
+                ]
             },
             "ResultPath": "$.NotifyUserResult",
             "WaitTime": 86400,
@@ -355,7 +350,7 @@ def notify_user_steps(smtp_send_credentials, sender_email):
     }
 
 
-def exception_state():
+def exception_state(sender_email):
     """
     Handle any general exceptions that occur as a result of the flow
     """
@@ -366,8 +361,8 @@ def exception_state():
             "ExceptionOnActionFailure": True,
             "Parameters": {
                 "body_mimetype": "text/html",
-                "sender": "materialsdatafacility@uchicago.edu",
-                "destination": "bengal1@illinois.edu",
+                "sender": sender_email,
+                "destination.$": "$.submitting_user_email",
                 "subject": "Submission Failed to Ingest",
                 "body_template.=": "'Submission ' + `$.source_id` + ' fatally errored processing in Flow '+ `$._context.action_id` + '. Please review the Flow log for details about this exception.'",
 
@@ -386,7 +381,7 @@ def exception_state():
             },
             "ResultPath": "$.ExceptionNotifyResult",
             "WaitTime": 86400,
-            "Next": "ChooseNotifyUserEnd"
+            "Next": "NotifyUserEnd"
         },
     }
 
@@ -409,11 +404,11 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
                 },
                 **check_update_metadata_only(),
                 **file_transfer_steps(),
-                **curation_steps(),
+                **curation_steps(sender_email),
                 **mint_doi_steps(),
                 **search_ingest_steps(),
-                **notify_user_steps(smtp_send_credentials, sender_email),
-                **exception_state(),
+                **notify_user_steps(sender_email),
+                **exception_state(sender_email),
 
                 "EndSubmission": {
                     "Type": "Pass",

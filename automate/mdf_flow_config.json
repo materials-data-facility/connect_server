@@ -6,8 +6,5 @@
         "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
     ],
 
-    "curation_subflow_url": "https://flows.globus.org/flows/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8",
-    "curation_subflow_scope": "https://auth.globus.org/scopes/be683de4-1ced-4bd8-9aa5-c7817dd1a9f8/flow_be683de4_1ced_4bd8_9aa5_c7817dd1a9f8_user",
-    "admin_email": "jgaff@uchicago.edu",
-    "sender_email": "materialsdatafacility@gmail.com"
+    "sender_email": "materialsdatafacility@uchicago.edu"
 }
