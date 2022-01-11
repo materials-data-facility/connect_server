@@ -46,7 +46,7 @@ class AutomateManager:
         self.datacite_password = secrets['DATACITE_PASSWORD']
         self.datacite_prefix = secrets['DATACITE_PREFIX']
 
-        self.portal_url = os.environ['PORTAL_URL']
+        self.portal_url = os.environ.get('PORTAL_URL', None)
 
     def authenticate(self):
         global tokens
