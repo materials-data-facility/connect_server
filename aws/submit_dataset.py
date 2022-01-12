@@ -43,7 +43,7 @@ def lambda_handler(event, context):
     name = event['requestContext']['authorizer']['name']
     identities = eval(event['requestContext']['authorizer']['identities'])
     user_id = event['requestContext']['authorizer']['user_id']
-    user_email = event['requestContext']['authorizer']['principalId']
+    user_email = event['requestContext']['authorizer']['user_email']
 
     depends = event['requestContext']['authorizer']['globus_dependent_token'].replace(
         'null', 'None')

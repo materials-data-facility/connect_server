@@ -21,7 +21,7 @@ def get_secret():
 
 
 def generate_policy(principalId, effect, resource, message="", name=None, identities=[],
-                    user_id=None, dependent_token=None):
+                    user_id=None, dependent_token=None, user_email=None):
     authResponse = {}
     authResponse['principalId'] = principalId
     if effect and resource:
@@ -38,7 +38,8 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
         'name': name,
         'user_id': user_id,
         'identities': str(identities),
-        'globus_dependent_token': str(dependent_token)
+        'globus_dependent_token': str(dependent_token),
+        'user_email': user_email
     }
     print("AuthResponse", authResponse)
     return authResponse
@@ -66,11 +67,14 @@ def lambda_handler(event, context):
                                    message='User account not active')
 
         print("auth_res", auth_res)
+        user_email = auth_res.get("email", "nobody@nowhere.com")
+
         return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
                                name=auth_res["name"],
                                identities=auth_res["identities_set"],
                                user_id=auth_res['sub'],
-                               dependent_token=dependent_token)
+                               dependent_token=dependent_token,
+                               user_email=user_email)
     except:
         return generate_policy(None, 'Deny', event['methodArn'],
                                message='Invalid auth token')
