@@ -297,20 +297,31 @@ def lambda_handler(event, context):
     automate_manager = AutomateManager(get_secret())
     automate_manager.authenticate()
 
-    # Passes to submit with magic UUID that allows mdf admins to monitor flows in progress
-    action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
-                                        submitting_user_token=globus_dependent_token[run_as_scope],
-                                        submitting_user_id=user_id,
-                                        submitting_user_email=user_email,
-                                        monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
-                                        search_index_uuid=search_index_uuid,
-                                        data_sources=submission_conf['data_sources'],
-                                        do_curation=submission_conf['curation'],
-                                        is_test=is_test,
-                                        update_metadata_only=submission_conf['update_metadata_only'],
-                                        )
+    try:
+        # Passes to submit with magic UUID that allows mdf admins to monitor flows in progress
+        action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
+                                            submitting_user_token=globus_dependent_token[run_as_scope],
+                                            submitting_user_id=user_id,
+                                            submitting_user_email=user_email,
+                                            monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
+                                            search_index_uuid=search_index_uuid,
+                                            data_sources=submission_conf['data_sources'],
+                                            do_curation=submission_conf['curation'],
+                                            is_test=is_test,
+                                            update_metadata_only=submission_conf['update_metadata_only'],
+                                            )
+        status_info['action_id'] = action_id
 
-    status_info['action_id'] = action_id
+    except Exception as e:
+        logger.error("Globus Automate Flow Submission exception: {}".format(e))
+        return {
+            'statusCode': 500,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": repr(e)
+                })
+        }
 
     try:
         status_res = dynamo_manager.create_status(status_info)
