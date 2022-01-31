@@ -76,7 +76,7 @@ def provided_source_id(mdf, mdf_environment):
         target_fixture='mdf_submission')
 def mdf_datset(mdf, mdf_environment, mocker):
     mdf.update = False
-    mdf.add_organization("MDF Open")
+    mdf.set_organization("MDF Open")
     print("MDF")
     print(mdf)
     print(mdf_environment)

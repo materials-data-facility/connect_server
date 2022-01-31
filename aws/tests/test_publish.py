@@ -29,6 +29,6 @@ def dyanmo_record_version(automate_record):
 
 @given("I set the organization to VERDE", target_fixture='mdf_submission')
 def set_org_verde(mdf):
-    mdf.add_organization("VERDE")
+    mdf.set_organization("VERDE")
     return mdf.get_submission()
 
