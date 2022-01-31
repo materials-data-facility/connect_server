@@ -37,7 +37,7 @@ jobs:
         pip install boto3
         pip list
     - name: Check for vulnerabilities in libraries
-      run: |p
+      run: |
         pip install safety
         pip freeze | safety check -i 40291 -i 42218 -i 42559
 
