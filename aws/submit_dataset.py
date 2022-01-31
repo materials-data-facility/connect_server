@@ -99,7 +99,7 @@ def lambda_handler(event, context):
 
     print("+++Metadata+++", metadata)
 
-    org_cannonical_name = metadata.get("mdf", {}).get("organizations", "MDF Open")
+    org_cannonical_name = metadata.get("mdf", {}).get("organization", "MDF Open")
     # MDF Connect Client needs to only allow one organization. Til then, we just
     # take the first one
     if type(org_cannonical_name) == list:
