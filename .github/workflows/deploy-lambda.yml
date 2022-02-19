@@ -45,6 +45,7 @@ jobs:
       run: |
         pip install -r aws/requirements.txt
         pip install -r aws/tests/requirements-test.txt
+        pip list
         PYTHONPATH=aws python -m pytest aws/tests
 
   publish:

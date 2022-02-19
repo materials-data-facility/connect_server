@@ -122,12 +122,12 @@ class TestAutomateManager:
                                                submitting_user_id="12-33-55",
                                                test_submit=True)
 
-        assert result['destination_endpoint_id'] == 'e38ee745-6d04-11e5-ba46-22000b92c6ec'
+        assert result['destination_endpoint_id'] == 'f10a69a9-338c-4e5b-baa1-0dc92359ab47'
         assert result['source_endpoint_id'] == 'e38ee745-6d04-11e5-ba46-22000b92c6ec'
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
-        assert result['transfer_items'][0]['destination_path'] == '/MDF/mdf_connect/test_files/deleteme_contents/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_testing/'
         print(result)
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
