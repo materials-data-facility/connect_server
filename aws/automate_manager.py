@@ -14,8 +14,8 @@ globus_secrets = None
 mdf_flow = None
 tokens = None
 MANAGE_FLOWS_SCOPE = "https://auth.globus.org/scopes/eec9b274-0c81-4334-bdc2-54e90e689b9a/manage_flows"
-test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
-
+# test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
+test_data_destination = urlparse('globus://f10a69a9-338c-4e5b-baa1-0dc92359ab47/Fmdf_testing/')
 def authorizer_callback(*args, **kwargs):
     auth = AccessTokenAuthorizer(
         tokens.by_resource_server[mdf_flow.flow_id]['access_token']
