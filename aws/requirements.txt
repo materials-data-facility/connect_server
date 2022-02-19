@@ -1,5 +1,5 @@
 jsonschema>=2.6.0
 mdf-toolbox>=0.5.0
-globus_automate_client
+globus_automate_client==0.12.3
 globus-sdk<3.0
 globus-nexus-client==0.3.0
