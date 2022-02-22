@@ -14,7 +14,7 @@ def check_update_metadata_only():
                     "Next": "ChooseCuration"
                 }
             ],
-            "Default": "UserPermissions"
+            "Default": "CreateDestinationDir"
         }
     }
 
@@ -28,6 +28,27 @@ def file_transfer_steps():
         * Remove the temporary write permission
     """
     return {
+        "CreateDestinationDir": {
+            "Comment": "Create a destination directory for the transfered data",
+            "Type": "Action",
+            "ActionUrl": "https://actions.globus.org/transfer/mkdir",
+            "ExceptionOnActionFailure": False,
+            "Parameters": {
+                "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                "path.$": "$.user_transfer_inputs.transfer_items[0].destination_path",
+            },
+            "ResultPath": "$.CreateDestinationDirResult",
+            "Catch": [
+                {
+                    "ErrorEquals": ["ActionFailedException", "States.Runtime"],
+                    "Next": "FailUserPermission"
+                }
+            ],
+
+            "Next": "UserPermissions"
+        },
+
+
         "UserPermissions": {
             "Comment": "Temporarily add write permissions for the submitting user",
             "Type": "Action",
