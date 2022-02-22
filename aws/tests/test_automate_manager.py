@@ -76,6 +76,7 @@ class TestAutomateManager:
         result = manager.create_transfer_items(data_sources=data_sources,
                                                organization=organization,
                                                submitting_user_id="12-33-55",
+                                               source_id="myTestDataset",
                                                test_submit=False)
 
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
@@ -83,7 +84,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
         print(result)
 
 
@@ -98,6 +99,7 @@ class TestAutomateManager:
 
         result = manager.create_transfer_items(data_sources=data_sources,
                                                organization=organization,
+                                               source_id="myTestDataset",
                                                submitting_user_id="12-33-55")
 
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
@@ -105,7 +107,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/exalearn-design/'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
         print(result)
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
@@ -120,6 +122,7 @@ class TestAutomateManager:
         result = manager.create_transfer_items(data_sources=data_sources,
                                                organization=organization,
                                                submitting_user_id="12-33-55",
+                                               source_id="myTestDataset",
                                                test_submit=True)
 
         assert result['destination_endpoint_id'] == 'f10a69a9-338c-4e5b-baa1-0dc92359ab47'
@@ -127,7 +130,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_testing/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_testing/myTestDataset/'
         print(result)
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)

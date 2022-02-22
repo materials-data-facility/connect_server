@@ -102,6 +102,7 @@ class AutomateManager:
                 data_sources=data_sources,
                 organization=organization,
                 submitting_user_id=submitting_user_id,
+                source_id=mdf_rec["mdf"]["source_id"],
                 test_submit=is_test
             ),
             "search_index": search_index_uuid,
@@ -146,7 +147,7 @@ class AutomateManager:
         return flow_run.action_id
 
     def create_transfer_items(self, data_sources, organization,
-                              submitting_user_id, test_submit=False):
+                              submitting_user_id, source_id, test_submit=False):
 
         destination_parsed = urlparse(organization.data_destinations[0]) \
             if not test_submit  else test_data_destination
@@ -181,7 +182,7 @@ class AutomateManager:
                             "All datasets must come from the same globus endpoint")
                 user_transfer_inputs['transfer_items'].append(
                     {
-                        "destination_path": destination_parsed.path,
+                        "destination_path": destination_parsed.path+source_id+"/",
                         "recursive": True,
                         "source_path": transfer_params['origin_path'][0]
                     }
