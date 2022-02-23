@@ -47,8 +47,7 @@ class DynamoManager:
         self.status_table = self.dmo_client.Table(os.environ["DYNAMO_STATUS_TABLE"])
 
         self.dmo_tables = {
-            "status": os.environ["DYNAMO_STATUS_TABLE"],
-            "curation": os.environ["DYNAMO_CURATION_TABLE"]
+            "status": os.environ["DYNAMO_STATUS_TABLE"]
         }
 
         # Load status schema
