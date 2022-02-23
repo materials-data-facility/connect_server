@@ -54,6 +54,7 @@ def lambda_handler(event, context):
     run_as_scope = os.environ["RUN_AS_SCOPE"]
     monitor_by_group = os.environ['MONITOR_BY_GROUP']
     search_index_uuid = os.environ['SEARCH_INDEX_UUID']
+    test_search_index_uuid = os.environ['TEST_SEARCH_INDEX_UUID']
 
     access_token = event['headers']['Authorization']
 
@@ -304,7 +305,7 @@ def lambda_handler(event, context):
                                             submitting_user_id=user_id,
                                             submitting_user_email=user_email,
                                             monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
-                                            search_index_uuid=search_index_uuid,
+                                            search_index_uuid=search_index_uuid if not is_test else test_search_index_uuid,
                                             data_sources=submission_conf['data_sources'],
                                             do_curation=submission_conf['curation'],
                                             is_test=is_test,

@@ -13,9 +13,10 @@ from globus_automate_flow import GlobusAutomateFlow
 globus_secrets = None
 mdf_flow = None
 tokens = None
-MANAGE_FLOWS_SCOPE = "https://auth.globus.org/scopes/eec9b274-0c81-4334-bdc2-54e90e689b9a/manage_flows"
+MANAGE_FLOWS_SCOPE = os.environ['MANAGE_FLOWS_SCOPE']
+TEST_DATA_DESTINATION = urlparse(os.environ['TEST_DATA_DESTINATION'])
 # test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
-test_data_destination = urlparse('globus://f10a69a9-338c-4e5b-baa1-0dc92359ab47/mdf_testing/')
+
 def authorizer_callback(*args, **kwargs):
     auth = AccessTokenAuthorizer(
         tokens.by_resource_server[mdf_flow.flow_id]['access_token']
@@ -150,7 +151,7 @@ class AutomateManager:
                               submitting_user_id, source_id, test_submit=False):
 
         destination_parsed = urlparse(organization.data_destinations[0]) \
-            if not test_submit  else test_data_destination
+            if not test_submit  else TEST_DATA_DESTINATION
 
         user_transfer_inputs = {"destination_endpoint_id": destination_parsed.netloc,
                                 "label": "MDF Flow Test Transfer1",
