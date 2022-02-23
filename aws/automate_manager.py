@@ -46,8 +46,8 @@ class AutomateManager:
 
         self.portal_url = os.environ.get('PORTAL_URL', None)
 
-        self.manage_flows_scope = os.environ['MANAGE_FLOWS_SCOPE']
-        self.test_data_destination = urlparse(os.environ['TEST_DATA_DESTINATION'])
+        self.manage_flows_scope = os.environ.get('MANAGE_FLOWS_SCOPE', None)
+        self.test_data_destination = urlparse(os.environ.get('TEST_DATA_DESTINATION', None))
         # test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
 
     def authenticate(self):
