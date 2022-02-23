@@ -39,6 +39,10 @@ def authenticated_with_globus(mocker):
     automate_manager = mocker.Mock()
     automate_manager.submit = mocker.Mock(return_value='action-id-1')
 
+    os.environ['MANAGE_FLOWS_SCOPE'] = 'https://manage.flows.scope.123'
+    os.environ['TEST_DATA_DESTINATION'] = "globus://test_data"
+    os.environ['TEST_SEARCH_INDEX_UUID'] = "https://test-search.index"
+
     environment = {
         'dynamo_manager': dynamo_manager,
         'automate_manager': automate_manager,
