@@ -171,7 +171,7 @@ class AutomateManager:
                     {
                         "destination_path": destination_parsed.path+source_id+"/",
                         "recursive": True,
-                        "source_path": parse.quote(f"{self.google_drive_root}{parsed_source.path}")
+                        "source_path": f"{self.google_drive_root}{parsed_source.path}"
                     }
                 )
             else:

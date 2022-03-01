@@ -135,7 +135,7 @@ class TestAutomateManager:
         assert result['source_endpoint_id'] == 'f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb'
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
-        assert result['transfer_items'][0]['source_path'] == '/Shared%20With%20Me/mdf/my_dataset'
+        assert result['transfer_items'][0]['source_path'] == '/Shared With Me/mdf/my_dataset'
         assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
         print(result)
 
