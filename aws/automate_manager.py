@@ -49,6 +49,7 @@ class AutomateManager:
         self.manage_flows_scope = os.environ.get('MANAGE_FLOWS_SCOPE', None)
         self.test_data_destination = urlparse(os.environ.get('TEST_DATA_DESTINATION', None))
         self.google_drive_source_endpoint = os.environ.get("GDRIVE_EP", None)
+        self.google_drive_root = os.environ.get("GDRIVE_ROOT", None)
         # test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
 
     def authenticate(self):
@@ -170,7 +171,7 @@ class AutomateManager:
                     {
                         "destination_path": destination_parsed.path+source_id+"/",
                         "recursive": True,
-                        "source_path": parsed_source.path
+                        "source_path": parse.quote(f"{self.google_drive_root}{parsed_source.path}")
                     }
                 )
             else:
