@@ -48,6 +48,7 @@ class AutomateManager:
 
         self.manage_flows_scope = os.environ.get('MANAGE_FLOWS_SCOPE', None)
         self.test_data_destination = urlparse(os.environ.get('TEST_DATA_DESTINATION', None))
+        self.google_drive_source_endpoint = os.environ.get("GDRIVE_EP", None)
         # test_data_destination = urlparse('globus://e38ee745-6d04-11e5-ba46-22000b92c6ec/MDF/mdf_connect/test_files/deleteme_contents/')
 
     def authenticate(self):
@@ -162,35 +163,47 @@ class AutomateManager:
                                 }
 
         for data_source_url in data_sources:
-            transfer_params = parse.parse_qs(parse.urlparse(data_source_url).query)
-
-            # @TODO
-            # This should also handle the google drive URL mapping (See utils.py:67)
-            # Standardize the URL since user's could have created a link from the
-            # left (origin) or right (destination) side of the Globus File browser
-            # We want standard origin terminology
-            if "destination_id" in transfer_params:
-                transfer_params["origin_id"] = transfer_params['destination_id']
-
-            if "destination_path" in transfer_params:
-                transfer_params['origin_path'] = transfer_params['destination_path']
-
-            if "origin_id" in transfer_params and "origin_path" in transfer_params:
-                if not user_transfer_inputs["source_endpoint_id"]:
-                    user_transfer_inputs["source_endpoint_id"] = transfer_params['origin_id'][0]
-                else:
-                    if user_transfer_inputs["source_endpoint_id"] != transfer_params['origin_id'][0]:
-                        raise ValueError(
-                            "All datasets must come from the same globus endpoint")
+            parsed_source = parse.urlparse(data_source_url)
+            if parsed_source.scheme in ["gdrive", "google", "googledrive"]:
+                user_transfer_inputs['source_endpoint_id'] = self.google_drive_source_endpoint
                 user_transfer_inputs['transfer_items'].append(
                     {
                         "destination_path": destination_parsed.path+source_id+"/",
                         "recursive": True,
-                        "source_path": transfer_params['origin_path'][0]
+                        "source_path": parsed_source.path
                     }
                 )
             else:
-                raise ValueError("Globus destination URI must include endpoint ID and path")
+                transfer_params = parse.parse_qs(parse.urlparse(data_source_url).query)
+
+                # @TODO
+                # This should also handle the google drive URL mapping (See utils.py:67)
+                # Standardize the URL since user's could have created a link from the
+                # left (origin) or right (destination) side of the Globus File browser
+                # We want standard origin terminology
+                if "destination_id" in transfer_params:
+                    transfer_params["origin_id"] = transfer_params['destination_id']
+
+                if "destination_path" in transfer_params:
+                    transfer_params['origin_path'] = transfer_params['destination_path']
+
+                if "origin_id" in transfer_params and "origin_path" in transfer_params:
+                    if not user_transfer_inputs["source_endpoint_id"]:
+                        user_transfer_inputs["source_endpoint_id"] = transfer_params['origin_id'][0]
+                    else:
+                        if user_transfer_inputs["source_endpoint_id"] != transfer_params['origin_id'][0]:
+                            raise ValueError(
+                                "All datasets must come from the same globus endpoint")
+                    user_transfer_inputs['transfer_items'].append(
+                        {
+                            "destination_path": destination_parsed.path+source_id+"/",
+                            "recursive": True,
+                            "source_path": transfer_params['origin_path'][0]
+                        }
+                    )
+                else:
+                    raise ValueError("Globus destination URI must include endpoint ID and path")
+
         return user_transfer_inputs
 
     def get_status(self, action_id: str):
