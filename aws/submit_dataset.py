@@ -144,7 +144,6 @@ def lambda_handler(event, context):
     submission_conf = {
         "data_sources": metadata.pop("data_sources"),
         "data_destinations": metadata.pop("data_destinations", []),
-        "curation": metadata.pop("curation", False),
         "test": metadata.pop("test", False),
         "update": metadata.pop("update", False),
         "acl": metadata.get("mdf", {}).get("acl", ["public"]),
@@ -307,7 +306,6 @@ def lambda_handler(event, context):
                                             monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
                                             search_index_uuid=search_index_uuid if not is_test else test_search_index_uuid,
                                             data_sources=submission_conf['data_sources'],
-                                            do_curation=submission_conf['curation'],
                                             is_test=is_test,
                                             update_metadata_only=submission_conf['update_metadata_only'],
                                             )

@@ -179,7 +179,7 @@ class TestAutomateManager:
                                                                          "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
                            submitting_user_email="foo@bar.com",
                            search_index_uuid="098-765-4321",
-                           data_sources=data_sources, do_curation=None, is_test=False,
+                           data_sources=data_sources, is_test=False,
                            update_metadata_only=True)
 
         mock_flow.run_flow.assert_called()
@@ -203,7 +203,7 @@ class TestAutomateManager:
                                                                          "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
                            submitting_user_email="foo@bar.com",
                            search_index_uuid='098-765-4321',
-                           data_sources=data_sources, do_curation=None, is_test=False,
+                           data_sources=data_sources, is_test=False,
                            update_metadata_only=False)
 
         mock_flow.run_flow.assert_called()

@@ -95,7 +95,7 @@ class AutomateManager:
                submitting_user_token, submitting_user_id, submitting_user_email,
                monitor_by_id,
                search_index_uuid,
-               data_sources, do_curation, is_test=False, update_metadata_only=False):
+               data_sources, is_test=False, update_metadata_only=False):
         # Needs to turn to loop to make as many copies as required by organization
         destination_parsed = urlparse(organization.data_destinations[0])
         assert destination_parsed.scheme == 'globus'
@@ -114,7 +114,7 @@ class AutomateManager:
             "group_by_dir": True,
             "dataset_mdata": mdf_rec,
             "submitting_user_email": submitting_user_email,
-            "curation_input": do_curation,
+            "curation_input": organization.curation,
             "update_metadata_only": update_metadata_only,
             "mint_doi": organization.mint_doi,
 
