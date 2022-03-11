@@ -24,7 +24,8 @@ def mdf(_):
 def mdf_rec():
     return {
         "mdf": {
-            "source_id": "123-456-7890"
+            "source_id": "123-456-7890",
+            "version": "1.0.1"
         }
     }
 

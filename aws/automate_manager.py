@@ -107,6 +107,7 @@ class AutomateManager:
                 organization=organization,
                 submitting_user_id=submitting_user_id,
                 source_id=mdf_rec["mdf"]["source_id"],
+                version=mdf_rec["mdf"]["version"],
                 test_submit=is_test
             ),
             "search_index": search_index_uuid,
@@ -151,7 +152,7 @@ class AutomateManager:
         return flow_run.action_id
 
     def create_transfer_items(self, data_sources, organization,
-                              submitting_user_id, source_id, test_submit=False):
+                              submitting_user_id, source_id, version, test_submit=False):
 
         destination_parsed = urlparse(organization.data_destinations[0]) \
             if not test_submit else self.test_data_destination
@@ -169,7 +170,7 @@ class AutomateManager:
                 user_transfer_inputs['source_endpoint_id'] = self.google_drive_source_endpoint
                 user_transfer_inputs['transfer_items'].append(
                     {
-                        "destination_path": destination_parsed.path+source_id+"/",
+                        "destination_path": destination_parsed.path+source_id+"/"+version+"/",
                         "recursive": True,
                         "source_path": f"{self.google_drive_root}{parsed_source.path}"
                     }
@@ -197,7 +198,7 @@ class AutomateManager:
                                 "All datasets must come from the same globus endpoint")
                     user_transfer_inputs['transfer_items'].append(
                         {
-                            "destination_path": destination_parsed.path+source_id+"/",
+                            "destination_path": destination_parsed.path+source_id+"/"+version+"/",
                             "recursive": True,
                             "source_path": transfer_params['origin_path'][0]
                         }

@@ -10,6 +10,7 @@ Feature: Submit Dataset
         And the dynamo record should be version 1.0
         And an automate flow started
         And the data destination should be the Petrel MDF directory
+        And the search subject should be the uuid with the version
         And I should receive a success result with the generated uuid and version 1.0
 
     Scenario: Submit Dataset With Provided source_id

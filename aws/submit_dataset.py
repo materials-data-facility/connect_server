@@ -231,9 +231,11 @@ def lambda_handler(event, context):
     # Set appropriate metadata
     if not metadata.get("mdf"):
         metadata["mdf"] = {}
+    version = DynamoManager.increment_record_version(version)
     metadata["mdf"]["source_id"] = source_name
+    metadata["mdf"]["versioned_source_id"] = f"{source_name}-{version}"
     metadata["mdf"]["source_name"] = source_name
-    metadata["mdf"]["version"] = DynamoManager.increment_record_version(version)
+    metadata["mdf"]["version"] = version
 
     # Fetch custom block descriptors, cast values to str, turn _description => _desc
     # @BenB edited

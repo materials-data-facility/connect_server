@@ -82,6 +82,7 @@ class TestAutomateManager:
                                                organization=organization,
                                                submitting_user_id="12-33-55",
                                                source_id="myTestDataset",
+                                               version="1.0.1",
                                                test_submit=False)
 
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
@@ -89,7 +90,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/1.0.1/'
         print(result)
 
 
@@ -105,6 +106,7 @@ class TestAutomateManager:
         result = manager.create_transfer_items(data_sources=data_sources,
                                                organization=organization,
                                                source_id="myTestDataset",
+                                               version="1.0.1",
                                                submitting_user_id="12-33-55")
 
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
@@ -112,7 +114,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/exalearn-design/'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/1.0.1/'
         print(result)
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
@@ -129,6 +131,7 @@ class TestAutomateManager:
         result = manager.create_transfer_items(data_sources=data_sources,
                                                organization=organization,
                                                source_id="myTestDataset",
+                                               version="1.0.1",
                                                submitting_user_id="12-33-55")
 
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
@@ -136,7 +139,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/Shared With Me/mdf/my_dataset'
-        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/'
+        assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/1.0.1/'
         print(result)
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
@@ -152,6 +155,7 @@ class TestAutomateManager:
                                                organization=organization,
                                                submitting_user_id="12-33-55",
                                                source_id="myTestDataset",
+                                               version="1.0.1",
                                                test_submit=True)
 
         assert result['destination_endpoint_id'] == 'test_data'
@@ -159,7 +163,7 @@ class TestAutomateManager:
         assert result['submitting-user-id'] == '12-33-55'
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
-        assert result['transfer_items'][0]['destination_path'] == 'myTestDataset/'
+        assert result['transfer_items'][0]['destination_path'] == 'myTestDataset/1.0.1/'
         print(result)
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
