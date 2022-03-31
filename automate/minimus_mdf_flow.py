@@ -319,7 +319,7 @@ def search_ingest_steps():
             "ResultPath": "$.SearchIngestResult",
             "Parameters": {
                 "search_index.$": "$.search_index",
-                "subject.$": "$.dataset_mdata.mdf.source_id",
+                "subject.$": "$.dataset_mdata.mdf.versioned_source_id",
                 "visible_to": [
                     "public"
                 ],
