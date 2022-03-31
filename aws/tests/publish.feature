@@ -19,4 +19,5 @@ Feature: MDF Publish
         Then a dynamo record should be created
         And an automate flow started
         And the only data destinations should be globus://82f1b5c6-6e9b-11e5-ba47-22000b92c6ec/verde/
+        And the dataset's domain should be 'materials'
         And I should receive a success result
