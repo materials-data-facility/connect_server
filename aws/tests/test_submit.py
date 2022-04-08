@@ -59,7 +59,8 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
     # Existing record in dynamo with a same user ID
     mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
         'version': '1.0',
-        'user_id': 'me'
+        'user_id': 'me',
+        'previous_versions': []
     })
 
     return mdf.get_submission()
@@ -116,7 +117,8 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
     # Existing record in dynamo with a same user ID
     mdf_environment['dynamo_manager'].get_current_version = mocker.Mock(return_value={
         'version': '1.0',
-        'user_id': 'me'
+        'user_id': 'me',
+        'previous_versions':[]
     })
 
     return mdf.get_submission()
@@ -206,3 +208,13 @@ def check_skip_file_transfer(mdf_environment):
     assert automate_record['submitting_user_token'] == '12sdfkj23-8j'
     assert automate_record['organization'].mint_doi
     return automate_record
+
+
+@then("the previous_versions field should be empty")
+def previous_versions_field_empty(dynamo_record):
+    assert dynamo_record['previous_versions'] == []
+
+
+@then("the previous_versions field should be ['my dataset-1.0']")
+def previous_versions_after_update(dynamo_record):
+    assert dynamo_record['previous_versions'] == ['my dataset-1.0']
