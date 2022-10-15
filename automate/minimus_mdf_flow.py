@@ -47,8 +47,6 @@ def file_transfer_steps():
 
             "Next": "UserPermissions"
         },
-
-
         "UserPermissions": {
             "Comment": "Temporarily add write permissions for the submitting user",
             "Type": "Action",
@@ -121,7 +119,7 @@ def file_transfer_steps():
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Submission Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserTransferResult.details`"
+                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed during transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserTransferResult.details`"
             },
             "ResultPath": "$.FinalState",
             "Next": "NotifyUserEnd"
@@ -130,7 +128,7 @@ def file_transfer_steps():
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Permission Settings Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer to MDF:\n' + `$.UserPermissionResult.details`"
+                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserPermissionResult.details`"
             },
             "ResultPath": "$.FinalState",
             "Next": "NotifyUserEnd"
@@ -168,8 +166,8 @@ def curation_steps(sender_email):
                 "sender": sender_email,
                 "destination": "blaiszik@uchicago.edu",
                 # "destination": "materialsdatafacility@uchicago.edu",
-                "subject": "Materials Data Facility Curation Request",
-                "body_template": "Please either Approve or Deny the secure egress request here: $landing_page_url",
+                "subject": "Materials Data Facility Dataset Curation Request",
+                "body_template": "Please either Approve or Deny the dataset publication request here: $landing_page_url",
                 "body_variables": {
                     "landing_page_url.=": "'https://actions.globus.org/weboption/landing_page/' + `$._context.action_id`"
                 }, "notification_method": "any",
@@ -206,13 +204,13 @@ def curation_steps(sender_email):
                         "name": "accepted",
                         "description": "Accept dataset",
                         "url_suffix.=": "`$._context.action_id` + '_approve'",
-                        "completed_message": "Indexing of dataset submission will commence"
+                        "completed_message": "Thank you! The dataset has been accepted for publication and processing will proceed."
                     },
                     {
                         "name": "rejected",
                         "description": "Reject Dataset",
                         "url_suffix.=": "`$._context.action_id` + '_deny'",
-                        "completed_message": "Submission has been cancelled"
+                        "completed_message": "The dataset has been rejected and will not proceed."
                     }
                 ]
             },
@@ -240,7 +238,7 @@ def curation_steps(sender_email):
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Submission Rejected",
-                "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the ingestion process. The curator gave the following reason for rejection: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`"
+                "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the publication process. The curator gave the following reason: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`"
             },
             "ResultPath": "$.FinalState",
             "Next": "NotifyUserEnd"
@@ -339,8 +337,8 @@ def notify_user_steps(sender_email):
         "SubmissionSuccess": {
             "Type": "ExpressionEval",
             "Parameters": {
-                "title": "Submission Ingested Successfully",
-                "message.=": "'Submission Flow succeeded. Your submission (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
+                "title": "Dataset Accepted for Publication in the Materials Data Facility",
+                "message.=": "'Publication succeeded! Your publication (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
             },
             "ResultPath": "$.FinalState",
             "Next": "NotifyUserEnd"
