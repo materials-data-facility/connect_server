@@ -174,10 +174,13 @@ def lambda_handler(event, context):
             source_name = str(uuid.uuid4())
             existing_record = None
             version = None
+            previous_versions = []
         else:
             existing_record = dynamo_manager.get_current_version(existing_source_name)
             source_name = existing_source_name
             version = existing_record['version'] if existing_record else None
+            previous_versions = existing_record['previous_versions'] + [
+                f"{source_name}-{version}"] if existing_record else []
     except Exception as e:
         traceback.print_exc()
         return {
@@ -189,7 +192,8 @@ def lambda_handler(event, context):
                 })
         }
 
-    if existing_record and not any([uid == existing_record['user_id'] for uid in identities]):
+    if existing_record and not any(
+            [uid == existing_record['user_id'] for uid in identities]):
         return {
             'statusCode': 400,
             'body': json.dumps(
@@ -284,6 +288,7 @@ def lambda_handler(event, context):
     status_info = {
         "source_id": source_name,
         "version": metadata["mdf"]["version"],
+        "previous_versions": previous_versions,
         "submission_time": datetime.utcnow().isoformat("T") + "Z",
         "submitter": name,
         "title": submission_title,
@@ -303,14 +308,18 @@ def lambda_handler(event, context):
     try:
         # Passes to submit with magic UUID that allows mdf admins to monitor flows in progress
         action_id = automate_manager.submit(mdf_rec=metadata, organization=organization,
-                                            submitting_user_token=globus_dependent_token[run_as_scope],
+                                            submitting_user_token=globus_dependent_token[
+                                                run_as_scope],
                                             submitting_user_id=user_id,
                                             submitting_user_email=user_email,
-                                            monitor_by_id=['urn:globus:auth:identity:' + user_id, monitor_by_group],
+                                            monitor_by_id=[
+                                                'urn:globus:auth:identity:' + user_id,
+                                                monitor_by_group],
                                             search_index_uuid=search_index_uuid if not is_test else test_search_index_uuid,
                                             data_sources=submission_conf['data_sources'],
                                             is_test=is_test,
-                                            update_metadata_only=submission_conf['update_metadata_only'],
+                                            update_metadata_only=submission_conf[
+                                                'update_metadata_only'],
                                             )
         status_info['action_id'] = action_id
 
