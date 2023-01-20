@@ -200,7 +200,7 @@ def curation_steps(sender_email):
                     "header_icon_link": "https://materialsdatafacility.org",
                     "header_text": "Curate an MDF Dataset",
                     "page_title": "Materials Data Facility",
-                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please review it to allow processing to continue.'"},
+                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please sreview it to allow processing to continue.'"},
                 "options": [
                     {
                         "name": "accepted",
