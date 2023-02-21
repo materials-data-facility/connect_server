@@ -1,9 +1,0 @@
-coveralls>=1.2.0
-flake8>=3.5.0
-jupyter>=1.0.0
-mdf-connect-client>=0.3.6
-mdf_toolbox>=0.3.8
-nbval>=0.9.0
-pymongo>=3.9.0
-pytest>=3.4.1
-pytest-cov>=2.5.1

@@ -1,6 +1,0 @@
--e git+https://github.com/CitrineInformatics/calphad-tdb-ingester.git#egg=calphad_tdb_ingester
--e git+https://github.com/CitrineInformatics/cif-file-ingester.git#egg=cif_file_ingester
--e git+https://github.com/CitrineInformatics/csv_template_ingester.git#egg=csv_template_ingester
--e git+https://github.com/CitrineInformatics/pif-ingestor.git#egg=pif_ingestor
--e git+https://github.com/CitrineInformatics/pypif-sdk.git#egg=pypif_sdk
-
