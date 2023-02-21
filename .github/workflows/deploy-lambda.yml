@@ -35,6 +35,8 @@ jobs:
         python -m pip install --upgrade pip wheel
         pip install -r aws/requirements.txt
         pip install boto3
+        # Avoid vulnerable setuptools pulled in by one of our dependencies
+        pip install --upgrade setuptools
         pip list
     - name: Check for vulnerabilities in libraries
       run: |
