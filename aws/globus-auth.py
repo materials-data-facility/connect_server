@@ -55,7 +55,7 @@ def lambda_handler(event, context):
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     try:
-        dependent_token = auth_client.oauth2_get_dependent_tokens(token)
+        dependent_token = auth_client.oauth2_get_dependent_tokens(token).by_resource_server
         print("Dependent token ", dependent_token)
 
         if not auth_res:
