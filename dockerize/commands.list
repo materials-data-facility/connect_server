@@ -1,0 +1,9 @@
+cd auth
+docker build ./ -f ./Dockerfile -t "globus-auth:latest"
+docker build ./ -f ./Dockerfile --platform=linux/amd64 -t "globus-auth:amd64"
+aws ecr get-login-password --region us-east-1 --profile=Accelerate| docker login --username AWS --password-stdin 557062710055.dkr.ecr.us-east-1.amazonaws.com
+docker tag globus-auth:latest 557062710055.dkr.ecr.us-east-1.amazonaws.com/lambda-repo/auth:test
+docker push 557062710055.dkr.ecr.us-east-1.amazonaws.com/lambda-repo/auth:test
+
+
+aws lambda update-function-code --function-name MDF-Connect-auth-prod --image-uri 557062710055.dkr.ecr.us-east-1.amazonaws.com/lambda-repo/auth:latest --publish --profile=Accelerate
