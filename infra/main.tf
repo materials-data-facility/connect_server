@@ -1,9 +1,15 @@
+data "aws_caller_identity" "current" {}
 
 # Create a namespace
 locals {
   namespace = "MDF-Connect"
   envs = ["test", "prod"]
   environments = toset(local.envs)
+  funcs = ["auth", "submit", "status"]
+  functions = toset(local.funcs)
+  account_id = data.aws_caller_identity.current.account_id
+  region         = "us-east-1"
+
 }
 
 terraform {
@@ -43,60 +49,20 @@ resource "aws_iam_role_policy_attachment" "lambda_execution_permissions" {
   role       = aws_iam_role.lambda_execution.id
 }
 
-# Create the Lambda layer version using the S3 bucket
-resource "aws_lambda_layer_version" "globus_layer" {
-  for_each = local.environments
-  layer_name          = "${local.namespace}-GlobusLayer"
-  compatible_runtimes = ["python3.8"]
-  filename = "globus_layer.zip"
-}
+resource "aws_iam_role_policy" "sm_policy" {
+  name = "sm_access_permissions"
+  role = aws_iam_role.lambda_execution.id
 
-# Create the Lambda functions using the S3 bucket and the Lambda layer
-resource "aws_lambda_function" "auth" {
-  for_each = local.environments
-  function_name = "${local.namespace}-Auth-${each.key}"
-  runtime = "python3.8"
-  handler = "lambda_function.lambda_handler"
-  role = aws_iam_role.lambda_execution.arn
-  layers = [aws_lambda_layer_version.globus_layer[each.key].
-arn]
-  filename = "auth.zip"
-
-  environment {
-    variables = {
-      ENVIRONMENT = each.key
-    }
-  }
-}
-
-resource "aws_lambda_function" "submit_dataset" {
-  for_each = local.environments
-  function_name = "${local.namespace}-SubmitDataset-${each.key}"
-  runtime = "python3.8"
-  handler = "lambda_function.lambda_handler"
-  role = aws_iam_role.lambda_execution.arn
-  layers = [aws_lambda_layer_version.globus_layer[each.key].arn]
-  filename = "submit_dataset.zip"
-
-  environment {
-    variables = {
-      ENVIRONMENT = each.key
-    }
-  }
-}
-
-resource "aws_lambda_function" "submission_status" {
-  for_each = local.environments
-  function_name = "${local.namespace}-SubmissionStatus-${each.key}"
-  runtime = "python3.8"
-  handler = "lambda_function.lambda_handler"
-  role = aws_iam_role.lambda_execution.arn
-  layers = [aws_lambda_layer_version.globus_layer[each.key].arn]
-  filename = "submission_status.zip"
-
-  environment {
-    variables = {
-      ENVIRONMENT = each.key
-    }
-  }
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "secretsmanager:GetSecretValue",
+        ]
+        Effect   = "Allow"
+        Resource = "*"
+      },
+    ]
+  })
 }
