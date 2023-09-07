@@ -3,3 +3,5 @@ mdf-toolbox==0.6.0
 globus_automate_client==0.17.1
 click
 requests
+urllib3<2
+
