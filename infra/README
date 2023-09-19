@@ -1,0 +1,3 @@
+adminrole contains terraform code to create an IAM user that has permissions to create and manipulate the rest of the infrastructure.
+
+mdf contains the main infrastructure code

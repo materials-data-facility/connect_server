@@ -1,0 +1,1 @@
+This needs to be run by a user who has admin privs on AWS as it creates a privileged admin IAM role that can be used to create the rest of the infrastructure
