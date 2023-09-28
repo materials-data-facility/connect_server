@@ -14,6 +14,7 @@ resource "aws_lambda_permission" "lambda_submit_permission" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.mdf-connect-containerized-submit["prod"].function_name
   principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
 
   # The /* part allows invocation from any stage, method and resource path
   # within API Gateway.
