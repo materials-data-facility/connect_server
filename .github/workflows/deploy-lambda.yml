@@ -101,6 +101,6 @@ jobs:
         with:
           context: ./aws
           push: true
-          tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:dockerize
+          tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
           file: ./aws/Dockerfile
           build-args: LAMBDA_SCRIPT=${{ matrix.lambda }}
