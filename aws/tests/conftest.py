@@ -7,7 +7,7 @@ import pytest
 from pytest_bdd import given, when, then
 
 from mdf_connect_client import MDFConnectClient
-from aws.submit_dataset import lambda_handler
+from aws.submit import lambda_handler
 
 fake_uuid = "abcdefgh-1234-4321-zyxw-hgfedcba"
 
@@ -84,12 +84,12 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
     print(64)
     print(mdf_environment)
     automate_manager_class = mocker.Mock(return_value=mdf_environment['automate_manager'])
-    mocker.patch('aws.submit_dataset.get_secret')
-    mock_uuid = mocker.patch('aws.submit_dataset.uuid.uuid4')
+    mocker.patch('aws.submit.get_secret')
+    mock_uuid = mocker.patch('aws.submit.uuid.uuid4')
     mock_uuid.return_value = fake_uuid
 
-    with patch('aws.submit_dataset.DynamoManager', new=dynamo_manager_class), \
-            patch('aws.submit_dataset.AutomateManager', new=automate_manager_class):
+    with patch('aws.submit.DynamoManager', new=dynamo_manager_class), \
+            patch('aws.submit.AutomateManager', new=automate_manager_class):
         return lambda_handler({
             'requestContext': {'authorizer': mdf_environment['authorizer']},
             'headers': {'Authorization': 'Bearer 1209hkehjwerkhjre'},
