@@ -51,7 +51,7 @@ def lambda_handler(event, context):
     auth_client = globus_sdk.ConfidentialAppAuthClient(
         globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
-    token = event['headers']['Authorization'].replace("Bearer ", "")
+    token = event['headers']['authorization'].replace("Bearer ", "")
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     try:
