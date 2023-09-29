@@ -97,9 +97,11 @@ jobs:
         uses: docker/setup-buildx-action@v2.7.0
 
       - name: Build and push
-        uses: docker/build-push-action@v4.1.1
+        uses: docker/build-push-action@v5
         with:
           context: ./aws
+          platforms: linux/amd64
+          provenance: false
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
           file: ./aws/Dockerfile
