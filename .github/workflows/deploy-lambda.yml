@@ -5,7 +5,7 @@ name: CI
 on:
   push:
     branches:
-      - "dockerize"
+      - "rolesinfra"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       with:
-        ref: dockerize
+        ref: rolesinfra
 
 
       # Check out the schema repo to package up the JSON schema with lambda function
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: dockerize
+          ref: rolesinfra
 
         # Check out the schema repo to package up the JSON schemae with function
       - name: Checkout schema repo
