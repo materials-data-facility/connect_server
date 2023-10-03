@@ -2,9 +2,10 @@
 # Define the AWS API Gateway v2 deployment for production
 resource "aws_apigatewayv2_stage" "prod" {
   name        = "prod"
-  api_id      = aws_apigatewayv2_api.http_api.id
+  api_id      = aws_apigatewayv2_api.http_api["prod"].id
   auto_deploy = true
   stage_variables = {
+    name = "prod"
     auth_function = "MDF-Connect-auth-prod"
     submit_function = "MDF-Connect-submit-prod"
     status_function = "MDF-Connect-status-prod"
@@ -18,9 +19,10 @@ resource "aws_apigatewayv2_stage" "prod" {
 # Define the AWS API Gateway v2 deployment for testing
 resource "aws_apigatewayv2_stage" "test" {
   name        = "test"
-  api_id      = aws_apigatewayv2_api.http_api.id
+  api_id      = aws_apigatewayv2_api.http_api["test"].id
   auto_deploy = true
   stage_variables = {
+    name = "test"
     auth_function = "MDF-Connect-auth-test"
     submit_function = "MDF-Connect-submit-test"
     status_function = "MDF-Connect-status-test"
