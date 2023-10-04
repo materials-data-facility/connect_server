@@ -28,7 +28,7 @@ class TestDynamoManager:
 
         mock_table.query = mocker.Mock(side_effect=[batch1, batch2])
         mock_boto = mocker.patch('dynamo_manager.boto3')
-        mock_boto.client = mocker.Mock(return_value=mock_dynamo)
+        mock_boto.resource = mocker.Mock(return_value=mock_dynamo)
 
         os.environ["DYNAMO_STATUS_TABLE"] = 'test_table'
         os.environ["DYNAMO_CURATION_TABLE"] = 'test_curation_table'
@@ -57,7 +57,7 @@ class TestDynamoManager:
 
         mock_table.query = mocker.Mock(side_effect=[batch1])
         mock_boto = mocker.patch('dynamo_manager.boto3')
-        mock_boto.client = mocker.Mock(return_value=mock_dynamo)
+        mock_boto.resource = mocker.Mock(return_value=mock_dynamo)
 
         os.environ["DYNAMO_STATUS_TABLE"] = 'test_table'
         os.environ["DYNAMO_CURATION_TABLE"] = 'test_curation_table'
