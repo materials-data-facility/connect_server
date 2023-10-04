@@ -75,11 +75,12 @@ class AutomateManager:
 
         print("---->", tokens)
 
+
         cca = ClientCredentialsAuthorizer(
             conf_client,
             self.manage_flows_scope,
-            tokens.by_resource_server['flows.globus.org']['access_token'],
-            tokens.by_resource_server['flows.globus.org']['expires_at_seconds']
+            access_token=tokens.by_resource_server['flows.globus.org']['access_token'],
+            expires_at=tokens.by_resource_server['flows.globus.org']['expires_at_seconds']
         )
 
         self.flows_client = FlowsClient.new_client(
