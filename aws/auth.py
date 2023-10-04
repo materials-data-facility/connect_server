@@ -1,5 +1,6 @@
 import globus_sdk
 import boto3
+import json
 
 
 def get_secret():
@@ -47,6 +48,10 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
 
 def lambda_handler(event, context):
     globus_secrets = get_secret()
+
+    #Have to log the event to see why methodArn isn't appearing
+    print(json.dumps(event));
+    print(json.dumps(context));
 
     auth_client = globus_sdk.ConfidentialAppAuthClient(
         globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
