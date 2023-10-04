@@ -10,6 +10,7 @@ RUN  pip3 install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
 
 # Copy function code
 COPY *.py ${LAMBDA_TASK_ROOT}
+COPY schemas/ ./schemas
 
 # Problems with passing buuld arg through to the CMD. Use this trick
 # to pass in to entrypoint script from
