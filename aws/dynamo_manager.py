@@ -113,7 +113,7 @@ class DynamoManager:
             dmo_status = table.table_status
             if dmo_status != "ACTIVE":
                 raise ValueError("Table not active")
-        except (ValueError, boto3.client.meta.client.exceptions.ResourceNotFoundException):
+        except (ValueError, self.dmo_client.exceptions.ResourceNotFoundException):
             return {
                 "success": False,
                 "error": "Table does not exist or is not active"
