@@ -56,7 +56,7 @@ def lambda_handler(event, context):
     search_index_uuid = os.environ['SEARCH_INDEX_UUID']
     test_search_index_uuid = os.environ['TEST_SEARCH_INDEX_UUID']
 
-    access_token = event['headers']['Authorization']
+    access_token = event['headers']['authorization']
 
     dynamo_manager = DynamoManager()
     sourceid_manager = SourceIDManager()
