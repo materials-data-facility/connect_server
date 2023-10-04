@@ -106,11 +106,3 @@ jobs:
           tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
           file: ./aws/Dockerfile
           build-args: LAMBDA_SCRIPT=${{ matrix.lambda }}
-
-      - name: Update auth lambda
-        steps:
-          - name: Install aws cli
-            id: install-aws-cli
-            uses: unfor19/install-aws-cli-action@master
-          - run: aws lambda update-function-code --function-name arn:aws:lambda:us-east-1:557062710055:function:MDF-Connect-auth-test --image-uri 557062710055.dkr.ecr.us-east-1.amazonaws.com/mdf-lambdas/auth:test
-            shell: bash
