@@ -51,7 +51,6 @@ def lambda_handler(event, context):
 
     #Have to log the event to see why methodArn isn't appearing
     print(json.dumps(event));
-    print(json.dumps(context));
 
     auth_client = globus_sdk.ConfidentialAppAuthClient(
         globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
