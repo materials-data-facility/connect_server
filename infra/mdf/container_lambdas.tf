@@ -58,6 +58,8 @@ resource "aws_lambda_function" "mdf-connect-containerized-submit" {
         SEARCH_INDEX_UUID="ab71134d-0b36-473d-aa7e-7b19b2124c88"
         TEST_DATA_DESTINATION="globus://f10a69a9-338c-4e5b-baa1-0dc92359ab47/mdf_testing/"
         TEST_SEARCH_INDEX_UUID="ab71134d-0b36-473d-aa7e-7b19b2124c88"
+        FLOW_ID="0c7ee169-cefc-4a23-81e1-dc323307c863"
+        FLOW_SCOPE= "https://auth.globus.org/scopes/0c7ee169-cefc-4a23-81e1-dc323307c863/flow_0c7ee169_cefc_4a23_81e1_dc323307c863_user"
         }
   }
 }
