@@ -43,7 +43,7 @@ class DynamoManager:
     )
 
     def __init__(self):
-        self.dmo_client = boto3.resource('dynamodb', region_name="us-east-1")
+        self.dmo_client = boto3.client('dynamodb', region_name="us-east-1")
         self.status_table = self.dmo_client.Table(os.environ["DYNAMO_STATUS_TABLE"])
 
         self.dmo_tables = {
