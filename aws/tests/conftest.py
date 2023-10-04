@@ -92,7 +92,7 @@ def submit_dataset(mdf_environment, mdf_submission, mocker):
             patch('aws.submit.AutomateManager', new=automate_manager_class):
         return lambda_handler({
             'requestContext': {'authorizer': mdf_environment['authorizer']},
-            'headers': {'Authorization': 'Bearer 1209hkehjwerkhjre'},
+            'headers': {'authorization': 'Bearer 1209hkehjwerkhjre'},
             'body': json.dumps(mdf_submission)
         }, None)
 
