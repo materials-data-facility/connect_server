@@ -43,6 +43,8 @@ def authenticated_with_globus(mocker):
     os.environ['MANAGE_FLOWS_SCOPE'] = 'https://manage.flows.scope.123'
     os.environ['TEST_DATA_DESTINATION'] = "globus://test_data"
     os.environ['TEST_SEARCH_INDEX_UUID'] = "https://test-search.index"
+    os.environ['FLOW_ID'] = 'flow-id-1'
+    os.environ['FLOW_SCOPE'] = 'flow-scope-1'
 
     environment = {
         'dynamo_manager': dynamo_manager,

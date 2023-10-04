@@ -49,11 +49,26 @@ class GlobusAutomateFlow:
         return result
 
     @classmethod
-    def from_existing_flow(cls, path: str,
+    def from_existing_flow(cls, path: str = None,
+                           flow_id: str = None,
+                           flow_scope: str = None,
                            client: FlowsClient = None,
                            globus_auth: GlobusAuthManager = None):
+        """
+        Create a GlobusAutomateFlow object from an existing flow. The flow-id and
+        flow-scope can either come out of a json file, or be provided directly.
+        """
+        if path is None:
+            assert flow_id is not None and flow_scope is not None
+        else:
+            assert path is None
+
         result = GlobusAutomateFlow(client, globus_auth)
-        result.read_flow(path)
+        if path:
+            result.read_flow(path)
+        else:
+            result.flow_id = flow_id
+            result.flow_scope = flow_scope
         return result
 
     def set_client(self, client):
