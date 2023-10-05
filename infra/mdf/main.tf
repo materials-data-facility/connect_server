@@ -87,6 +87,7 @@ resource "aws_iam_policy" "lambda_dynamodb_policy" {
           "dynamodb:DescribeTable",
           "dynamodb:GetItem",
           "dynamodb:PutItem",
+          "dynamodb:Query",
         ],
         Effect   = "Allow",
         Resource = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${local.namespace}-test"

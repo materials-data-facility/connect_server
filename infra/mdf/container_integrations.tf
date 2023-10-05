@@ -41,7 +41,7 @@ resource "aws_apigatewayv2_integration" "submission_status" {
   #integration_uri    = "arn:aws:lambda:${local.region}:${local.account_id}:function:$${stageVariables.status_function}"
   #integration_uri    = aws_lambda_function.mdf-connect-containerized-status[each.key].invoke_arn
   #integration_uri    = "aws_lambda_function.${local.namespace}-status-${each.key}".invoke_arn
-  integration_method = "POST"
+  integration_method = "GET"
   #integration_payload_format_version = "2.0"
   #integration_timeout_ms = 5000
   #route_key          = "POST /submission-status"
