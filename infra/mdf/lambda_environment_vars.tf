@@ -1,3 +1,5 @@
+#These are the env vars provided to the prod lambda functions
+#Edit them here for your deployment
 variable "prod_env_vars" {
   type = map
   default = {
@@ -15,6 +17,8 @@ variable "prod_env_vars" {
         FLOW_SCOPE= "https://auth.globus.org/scopes/0c7ee169-cefc-4a23-81e1-dc323307c863/flow_0c7ee169_cefc_4a23_81e1_dc323307c863_user"
         }
 }
+#These are the env vars provided to the testlambda functions
+#Edit them here for your deployment
 variable "test_env_vars" {
   type = map
   default = {

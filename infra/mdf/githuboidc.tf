@@ -15,7 +15,9 @@ data "aws_iam_policy_document" "github_allow" {
    actions = ["sts:AssumeRoleWithWebIdentity"]
    principals {
      type        = "Federated"
+     #If you uncommented the MDFgithub resource above, you'll need this identifier:
      #identifiers = [aws_iam_openid_connect_provider.MDFgithub.arn]
+     #This identifier is hardcoded to preexisting one in the Accelerate account:
      identifiers = ["arn:aws:iam::557062710055:oidc-provider/token.actions.githubusercontent.com"]
    }
    condition {
