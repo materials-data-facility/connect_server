@@ -11,7 +11,10 @@ locals {
   functions = toset(local.funcs)
   account_id = data.aws_caller_identity.current.account_id
   region         = "us-east-1"
-
+  env_vars = {
+        prod = var.prod_env_vars
+        test = var.test_env_vars
+        }
 }
 
 terraform {
