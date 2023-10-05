@@ -51,6 +51,11 @@ resource "aws_iam_role_policy_attachment" "lambda_execution_permissions" {
   role       = aws_iam_role.lambda_execution.id
 }
 
+resource "aws_iam_role_policy_attachment" "lambda_execution_dynamodb" {
+  role       = aws_iam_role.lambda_execution.id
+  policy_arn = aws_iam_policy.lambda_dynamodb_policy.arn
+}
+
 resource "aws_iam_role_policy" "sm_policy" {
   name = "sm_access_permissions"
   role = aws_iam_role.lambda_execution.id
@@ -66,5 +71,26 @@ resource "aws_iam_role_policy" "sm_policy" {
         Resource = "*"
       },
     ]
+  })
+}
+
+resource "aws_iam_policy" "lambda_dynamodb_policy" {
+  name        = "lambda_dynamodb-policy"
+  description = "DynamoDB Policy for Lambdas"
+
+  # Define the policy document that grants access to DynamoDB
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action   = [
+          "dynamodb:DescribeTable",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+        ],
+        Effect   = "Allow",
+        Resource = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${local.namespace}-test"
+      },
+    ],
   })
 }
