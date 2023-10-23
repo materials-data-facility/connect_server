@@ -20,7 +20,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       with:
-        ref: rolesinfra
+        ref: serverless
 
 
       # Check out the schema repo to package up the JSON schema with lambda function
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: rolesinfra
+          ref: serverless
 
         # Check out the schema repo to package up the JSON schemae with function
       - name: Checkout schema repo
