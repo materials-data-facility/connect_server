@@ -5,7 +5,7 @@ name: CI
 on:
   push:
     branches:
-      - "rolesinfra"
+      - "serverless"
   workflow_dispatch:
 
 permissions:
