@@ -30,7 +30,12 @@ class AutomateManager:
         tokens = None
         mdf_flow = None
 
-        self.flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json")
+        # See if there is a json file with the flow info
+        if os.path.exists("mdf_flow_info.json"):
+            self.flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json")
+        else:
+            self.flow = GlobusAutomateFlow.from_existing_flow(flow_id=os.environ['FLOW_ID'],
+                                                                flow_scope=os.environ['FLOW_SCOPE'])
         mdf_flow = self.flow
 
         self.flows_client = None
@@ -70,11 +75,12 @@ class AutomateManager:
 
         print("---->", tokens)
 
+
         cca = ClientCredentialsAuthorizer(
             conf_client,
             self.manage_flows_scope,
-            tokens.by_resource_server['flows.globus.org']['access_token'],
-            tokens.by_resource_server['flows.globus.org']['expires_at_seconds']
+            access_token=tokens.by_resource_server['flows.globus.org']['access_token'],
+            expires_at=tokens.by_resource_server['flows.globus.org']['expires_at_seconds']
         )
 
         self.flows_client = FlowsClient.new_client(

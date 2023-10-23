@@ -25,3 +25,4 @@ travis.tar
 .mdfsecrets
 aws/python
 .idea/
+secrets.env

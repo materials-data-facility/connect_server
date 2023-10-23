@@ -1,5 +1,6 @@
 import globus_sdk
 import boto3
+import json
 
 
 def get_secret():
@@ -48,10 +49,13 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
 def lambda_handler(event, context):
     globus_secrets = get_secret()
 
+    #Have to log the event to see why methodArn isn't appearing
+    print(json.dumps(event));
+
     auth_client = globus_sdk.ConfidentialAppAuthClient(
         globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
-    token = event['headers']['Authorization'].replace("Bearer ", "")
+    token = event['headers']['authorization'].replace("Bearer ", "")
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     try:
@@ -59,22 +63,22 @@ def lambda_handler(event, context):
         print("Dependent token ", dependent_token)
 
         if not auth_res:
-            return generate_policy(None, 'Deny', event['methodArn'],
+            return generate_policy(None, 'Deny', event['routeArn'],
                                    message='User not found')
 
         if not auth_res['active']:
-            return generate_policy(None, 'Deny', event['methodArn'],
+            return generate_policy(None, 'Deny', event['routeArn'],
                                    message='User account not active')
 
         print("auth_res", auth_res)
         user_email = auth_res.get("email", "nobody@nowhere.com")
 
-        return generate_policy(auth_res['username'], 'Allow', event['methodArn'],
+        return generate_policy(auth_res['username'], 'Allow', event['routeArn'],
                                name=auth_res["name"],
                                identities=auth_res["identities_set"],
                                user_id=auth_res['sub'],
                                dependent_token=dependent_token,
                                user_email=user_email)
     except:
-        return generate_policy(None, 'Deny', event['methodArn'],
+        return generate_policy(None, 'Deny', event['routeArn'],
                                message='Invalid auth token')
