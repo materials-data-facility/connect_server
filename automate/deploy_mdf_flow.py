@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 import globus_automate_client
@@ -8,16 +9,26 @@ import minimus_mdf_flow  # NOQA
 from globus_auth_manager import GlobusAuthManager
 from globus_automate_flow import GlobusAutomateFlow  # NOQA
 
-with open(".mdfsecrets", 'r') as f:
-    globus_secrets = json.load(f)
-    smtp_send_credentials = [{
-        "credential_type": "smtp",
-        "credential_value": {
-            "hostname": globus_secrets['smtp_hostname'],
-            "username": globus_secrets['smtp_user'],
-            "password": globus_secrets['smtp_pass']
-        }
-    }]
+if "API_CLIENT_ID" in os.environ:
+    globus_secrets = {
+        "API_CLIENT_ID": os.environ["API_CLIENT_ID"],
+        "API_CLIENT_SECRET": os.environ["API_CLIENT_SECRET"],
+        "smtp_hostname": os.environ["SMTP_HOSTNAME"],
+        "smtp_user": os.environ["SMTP_USER"],
+        "smtp_pass": os.environ["SMTP_PASS"]
+    }
+else:
+    with open(".mdfsecrets", 'r') as f:
+        globus_secrets = json.load(f)
+
+smtp_send_credentials = [{
+    "credential_type": "smtp",
+    "credential_value": {
+        "hostname": globus_secrets['smtp_hostname'],
+        "username": globus_secrets['smtp_user'],
+        "password": globus_secrets['smtp_pass']
+    }
+}]
 
 
 # Load other configuration variables
