@@ -61,7 +61,7 @@ class GlobusAutomateFlow:
         if path is None:
             assert flow_id is not None and flow_scope is not None
         else:
-            assert path is None
+            assert flow_id is None and flow_scope is None
 
         result = GlobusAutomateFlow(client, globus_auth)
         if path:
@@ -101,16 +101,15 @@ class GlobusAutomateFlow:
     def update_flow(self, flow_def: GlobusAutomateFlowDef):
         flow_deploy_res = self.flows_client.update_flow(
             flow_id=self.flow_id,
-            flow_definition=flow_def.flow_definition,
+            definition=flow_def.flow_definition,
             title=flow_def.title,
             subtitle=flow_def.subtitle,
             description=flow_def.description,
-            visible_to=flow_def.visible_to,
-            runnable_by=flow_def.runnable_by,
-            administered_by=flow_def.administered_by,
+            flow_viewers=flow_def.visible_to,
+            flow_starters=flow_def.runnable_by,
+            flow_administrators=flow_def.administered_by,
             # TODO: Make rough schema outline into JSONSchema
-            input_schema=flow_def.input_schema,
-            validate_definition=True
+            input_schema=flow_def.input_schema
         )
         self.flow_id = flow_deploy_res["id"]
         self.flow_scope = flow_deploy_res["globus_auth_scope"]
