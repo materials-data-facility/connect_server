@@ -20,9 +20,21 @@ with open(".mdfsecrets", 'r') as f:
     }]
 
 
+# Load other configuration variables
+# Please set these in the configuration file, not in-line here
+with open("mdf_flow_config.json") as f:
+    config = json.load(f)
+
 native_app_id = "e6128bac-8f6a-4b19-adf8-716ed9c4d56c"  # MDF Automate Client app ID
 
-flows_client = globus_automate_client.create_flows_client(native_app_id)
+conf_client = globus_sdk.ConfidentialAppAuthClient(
+    globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET']
+)
+cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(conf_client, globus_sdk.FlowsClient.scopes.manage_flows)
+
+flows_client = globus_sdk.FlowsClient(authorizer=cc_authorizer)
+
+
 globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
 # Load other configuration variables
@@ -48,13 +60,6 @@ mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
     administered_by=[
         'urn:globus:auth:identity:2400d618-4c18-479d-b8bf-32b7497cc673'  # Ethan
     ]))
-
-# mdf_flow = GlobusAutomateFlow.from_flow_def(flows_client,
-#                                             flow_def=minimus_mdf_flow.flow_def(
-#                                                 smtp_send_credentials=smtp_send_credentials,
-#                                                 sender_email=config['sender_email'],
-#                                                 flow_permissions=config['flow_permissions']),
-#                                             globus_auth=globus_auth)
 
 mdf_flow.save_flow("mdf_flow_info.json")
 print("scope = ", mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
