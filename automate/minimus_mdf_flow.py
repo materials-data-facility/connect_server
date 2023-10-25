@@ -406,10 +406,11 @@ def exception_state(sender_email):
     }
 
 
-def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by):
+def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by, description=""):
     return GlobusAutomateFlowDef(
         title="MDF Ingest Flow",
-        description="Ingest Materials Data Facility Submissions",
+        subtitle="Ingest Materials Data Facility Submissions",
+        description=description,
         visible_to=flow_permissions,
         runnable_by=flow_permissions,
         administered_by=administered_by,
