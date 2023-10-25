@@ -1,8 +1,6 @@
 import json
 import os
-import sys
 
-import globus_automate_client
 import globus_sdk
 
 import minimus_mdf_flow  # NOQA
