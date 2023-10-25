@@ -28,13 +28,16 @@ smtp_send_credentials = [{
     }
 }]
 
+print(f"shhh--->{globus_secrets}")
+if globus_secrets['API_CLIENT_ID'] == "***":
+    print("well, that's it")
+else:
+    print("nope")
 
 # Load other configuration variables
 # Please set these in the configuration file, not in-line here
 with open("mdf_flow_config.json") as f:
     config = json.load(f)
-
-native_app_id = "e6128bac-8f6a-4b19-adf8-716ed9c4d56c"  # MDF Automate Client app ID
 
 conf_client = globus_sdk.ConfidentialAppAuthClient(
     globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET']

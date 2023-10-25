@@ -1,7 +1,7 @@
 import json
 from typing import Mapping, Any, Optional, List
 
-from globus_automate_client import FlowsClient
+from globus_sdk import FlowsClient
 
 import mdf_toolbox
 
