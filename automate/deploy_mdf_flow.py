@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 import globus_sdk
 
@@ -28,12 +29,6 @@ smtp_send_credentials = [{
     }
 }]
 
-print(f"shhh--->{globus_secrets}")
-if globus_secrets['API_CLIENT_ID'] == "***":
-    print("well, that's it")
-else:
-    print("nope")
-
 # Load other configuration variables
 # Please set these in the configuration file, not in-line here
 with open("mdf_flow_config.json") as f:
@@ -54,23 +49,22 @@ globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets[
 with open("mdf_flow_config.json") as f:
     config = json.load(f)
 
-flow_def = minimus_mdf_flow.flow_def(smtp_send_credentials=smtp_send_credentials,
-                                     sender_email=config['sender_email'],
-                                     flow_permissions=config['flow_permissions'],
-                                     administered_by=[
-                                         'urn:globus:auth:identity:2400d618-4c18-479d-b8bf-32b7497cc673'
-                                         # Ethan
-                                     ])
-print(flow_def.flow_definition)
 mdf_flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json",
                                                  client=flows_client,
                                                  globus_auth=globus_auth)
+
+if len(sys.argv) > 1:
+    description = f"MDF Connected deployed from GitHub release {sys.argv[1]}"
+else:
+    description = "MDF Connect Flow deployed manually"
+
 mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
     smtp_send_credentials=smtp_send_credentials,
     sender_email=config['sender_email'],
     flow_permissions=config['flow_permissions'],
+    description=description,
     administered_by=[
-        'urn:globus:auth:identity:2400d618-4c18-479d-b8bf-32b7497cc673'  # Ethan
+        'urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20' # MDF Connect Admins
     ]))
 
 mdf_flow.save_flow("mdf_flow_info.json")
