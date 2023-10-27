@@ -25,3 +25,12 @@ resource "aws_lambda_permission" "lambda_status_permission" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http_api[each.key].execution_arn}/*/*/*"
 }
+
+resource "aws_lambda_permission" "lambda_submissions_permission" {
+  for_each = local.environments
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.mdf-connect-containerized-submissions["${each.key}"].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.http_api[each.key].execution_arn}/*/*/*"
+}
