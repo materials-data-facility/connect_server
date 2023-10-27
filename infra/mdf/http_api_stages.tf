@@ -9,6 +9,7 @@ resource "aws_apigatewayv2_stage" "prod" {
     auth_function = "MDF-Connect-auth-prod"
     submit_function = "MDF-Connect-submit-prod"
     status_function = "MDF-Connect-status-prod"
+    submissions_function = "MDF-Connect-submissions-prod"
   }
   access_log_settings  {
     destination_arn = "${aws_cloudwatch_log_group.MDFConnect-logs.arn}"
@@ -26,6 +27,7 @@ resource "aws_apigatewayv2_stage" "test" {
     auth_function = "MDF-Connect-auth-test"
     submit_function = "MDF-Connect-submit-test"
     status_function = "MDF-Connect-status-test"
+    submissions_function = "MDF-Connect-submissions-test"
   }
   access_log_settings  {
     destination_arn = "${aws_cloudwatch_log_group.MDFConnect-logs.arn}"
@@ -44,6 +46,15 @@ output "submission_status_url" {
   value = "${aws_apigatewayv2_stage.prod.invoke_url}/submission-status/{submission_id}"
 }
 
+output "submissions_url" {
+  value = "${aws_apigatewayv2_stage.prod.invoke_url}/submissions"
+}
+
+output "submissions_foruser_url" {
+  value = "${aws_apigatewayv2_stage.prod.invoke_url}/submissions/{user_id}"
+}
+
+
 output "auth_url_test" {
   value = "${aws_apigatewayv2_stage.test.invoke_url}/auth"
 }
@@ -54,4 +65,12 @@ output "submit_dataset_url_test" {
 
 output "submission_status_url_test" {
   value = "${aws_apigatewayv2_stage.test.invoke_url}/submission-status/{submission_id}"
+}
+
+output "submissions_url_test" {
+  value = "${aws_apigatewayv2_stage.test.invoke_url}/submissions"
+}
+
+output "submissions_foruser_url_test" {
+  value = "${aws_apigatewayv2_stage.test.invoke_url}/submissions/{user_id}"
 }

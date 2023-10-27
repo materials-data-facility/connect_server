@@ -27,3 +27,23 @@ resource "aws_apigatewayv2_route" "submission_status" {
   target = "integrations/${aws_apigatewayv2_integration.submission_status[each.key].id}"
 }
 
+resource "aws_apigatewayv2_route" "submissions" {
+  for_each = local.environments
+  api_id    = aws_apigatewayv2_api.http_api[each.key].id
+  route_key = "GET /submissions"
+  authorizer_id = aws_apigatewayv2_authorizer.globus-auth[each.key].id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.submissions[each.key].id}"
+}
+
+resource "aws_apigatewayv2_route" "user_submissions" {
+  for_each = local.environments
+  api_id    = aws_apigatewayv2_api.http_api[each.key].id
+  route_key = "GET /submissions/{user_id}"
+  authorizer_id = aws_apigatewayv2_authorizer.globus-auth[each.key].id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.submissions[each.key].id}"
+}
+

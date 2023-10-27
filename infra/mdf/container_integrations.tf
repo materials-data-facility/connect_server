@@ -24,3 +24,13 @@ resource "aws_apigatewayv2_integration" "submission_status" {
   integration_uri    = "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.namespace}-status-${each.key}"
   integration_method = "GET"
 }
+
+resource "aws_apigatewayv2_integration" "submissions" {
+  for_each = local.environments
+  api_id             = aws_apigatewayv2_api.http_api[each.key].id
+  #api_id             = aws_apigatewayv2_api.http_api.id
+  integration_type   = "AWS_PROXY"
+  integration_uri    = "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.namespace}-submissions-${each.key}"
+  integration_method = "GET"
+}
+
