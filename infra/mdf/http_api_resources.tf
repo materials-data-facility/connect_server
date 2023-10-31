@@ -30,7 +30,7 @@ resource "aws_apigatewayv2_route" "submission_status" {
 resource "aws_apigatewayv2_route" "submissions" {
   for_each = local.environments
   api_id    = aws_apigatewayv2_api.http_api[each.key].id
-  route_key = "GET /submissions"
+  route_key = "POST /submissions"
   authorizer_id = aws_apigatewayv2_authorizer.globus-auth[each.key].id
   authorization_type = "CUSTOM"
 
@@ -40,7 +40,7 @@ resource "aws_apigatewayv2_route" "submissions" {
 resource "aws_apigatewayv2_route" "user_submissions" {
   for_each = local.environments
   api_id    = aws_apigatewayv2_api.http_api[each.key].id
-  route_key = "GET /submissions/{user_id}"
+  route_key = "POST /submissions/{user_id}"
   authorizer_id = aws_apigatewayv2_authorizer.globus-auth[each.key].id
   authorization_type = "CUSTOM"
 

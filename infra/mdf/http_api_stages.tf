@@ -33,6 +33,10 @@ resource "aws_apigatewayv2_stage" "test" {
     destination_arn = "${aws_cloudwatch_log_group.MDFConnect-logs.arn}"
     format =  "$context.extendedRequestId $context.identity.sourceIp $context.identity.caller $context.identity.user [$context.requestTime] $context.httpMethod $context.resourcePath $context.protocol $context.status $context.responseLength $context.requestId $context.extendedRequestId"
   }
+  default_route_settings{
+    throttling_burst_limit = 5000
+    throttling_rate_limit = 10000
+  }
 }# Output the URLs for each environment
 output "auth_url" {
   value = "${aws_apigatewayv2_stage.prod.invoke_url}/auth"

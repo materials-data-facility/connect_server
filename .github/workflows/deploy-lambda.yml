@@ -5,7 +5,7 @@ name: CI
 on:
   push:
     branches:
-      - "serverless"
+      - "submissions"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
       with:
-        ref: serverless
+        ref: submissions
 
 
       # Check out the schema repo to package up the JSON schema with lambda function
@@ -61,7 +61,7 @@ jobs:
       fail-fast: false
       matrix:
         # Loop over each lambda function
-        lambda: ["auth", "submit", "status"]
+        lambda: ["auth", "submit", "status", "submissions"]
 
     needs: test
     runs-on: ubuntu-latest
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: serverless
+          ref: submissions
 
         # Check out the schema repo to package up the JSON schemae with function
       - name: Checkout schema repo
