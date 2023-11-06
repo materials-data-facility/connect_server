@@ -108,7 +108,7 @@ jobs:
           build-args: LAMBDA_SCRIPT=${{ matrix.lambda }}
 
       - name: Update lambda functions w/ the new containers
-        uses: ericblau/deploy-lambda-action@v0
+        uses: materials-data-facility/deploy-lambda-action@v0
         with:
            function-name: MDF-Connect-${{ matrix.lambda }}-test
            image-uri: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
