@@ -69,7 +69,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-        name: Checkout to repository
+
+      - name: Use branch name to determine image tag
         shell: bash
         run: echo "imagetag=$(echo ${GITHUB_REF##*/})" >> $GITHUB_OUTPUT
         id: extract_tag_name
