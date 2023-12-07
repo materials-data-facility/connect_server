@@ -5,7 +5,7 @@ name: CI
 on:
   push:
     branches:
-      - "serverless"
+      - "test"
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-      with:
-        ref: serverless
+      shell: bash
+      run: echo "imagetag=$(echo ${GITHUB_REF##*/})" >> $GITHUB_OUTPUT
+      id: extract_tag_name
 
 
       # Check out the schema repo to package up the JSON schema with lambda function
@@ -68,8 +69,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-        with:
-          ref: serverless
+        name: Checkout to repository
+        shell: bash
+        run: echo "imagetag=$(echo ${GITHUB_REF##*/})" >> $GITHUB_OUTPUT
+        id: extract_tag_name
 
         # Check out the schema repo to package up the JSON schemae with function
       - name: Checkout schema repo
@@ -103,12 +106,12 @@ jobs:
           platforms: linux/amd64
           provenance: false
           push: true
-          tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
+          tags: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:${{ steps.extract_tag_name.outputs.imagetag }}
           file: ./aws/Dockerfile
           build-args: LAMBDA_SCRIPT=${{ matrix.lambda }}
 
       - name: Update lambda functions w/ the new containers
         uses: materials-data-facility/deploy-lambda-action@v0
         with:
-           function-name: MDF-Connect-${{ matrix.lambda }}-test
-           image-uri: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:test
+            function-name: MDF-Connect-${{ matrix.lambda }}-${{ steps.extract_tag_name.outputs.imagetag }}
+            image-uri: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:${{ steps.extract_tag_name.outputs.imagetag }}
