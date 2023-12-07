@@ -118,17 +118,16 @@ class GlobusAutomateFlow:
         print(self.runAsScopes)
 
     def _deploy_mdf_flow(self, mdf_flow_def: GlobusAutomateFlowDef):
-        flow_deploy_res = self.flows_client.deploy_flow(
-            flow_definition=mdf_flow_def.flow_definition,
+        flow_deploy_res = self.flows_client.create_flow(
+            definition=mdf_flow_def.flow_definition,
             title=mdf_flow_def.title,
             subtitle=mdf_flow_def.subtitle,
             description=mdf_flow_def.description,
-            visible_to=mdf_flow_def.visible_to,
-            runnable_by=mdf_flow_def.runnable_by,
-            administered_by=mdf_flow_def.administered_by,
+            flow_viewers=mdf_flow_def.visible_to,
+            flow_starters=mdf_flow_def.runnable_by,
+            flow_administrators=mdf_flow_def.administered_by,
             # TODO: Make rough schema outline into JSONSchema
-            input_schema=mdf_flow_def.input_schema,
-            validate_definition=True
+            input_schema=mdf_flow_def.input_schema
         )
         self.flow_id = flow_deploy_res["id"]
         self.flow_scope = flow_deploy_res["globus_auth_scope"]
