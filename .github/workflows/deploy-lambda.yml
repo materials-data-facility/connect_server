@@ -19,10 +19,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-      shell: bash
-      run: echo "imagetag=$(echo ${GITHUB_REF##*/})" >> $GITHUB_OUTPUT
-      id: extract_tag_name
-
 
       # Check out the schema repo to package up the JSON schema with lambda function
     - name: Checkout schema repo
