@@ -4,7 +4,8 @@ name: CI
 # events but only for the master branch
 on:
   release:
-    types: [released, prereleased]
+    types:
+      - published
 
 jobs:
   deploy-flow:
@@ -13,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: deploy_flow
+          ref: test
 
       - name: Set up Python
         uses: actions/setup-python@v2
@@ -38,6 +39,7 @@ jobs:
           SMTP_PASS: '${{ secrets.SMTP_PASS }}'
         run: |
           cd automate
-          PYTHONPATH=../aws/ python deploy_mdf_flow.py ${{ env.RELEASE_VERSION }}
+          PYTHONPATH=../aws/ echo "python deploy_mdf_flow.py ${{ env.RELEASE_VERSION }}"
+#          echo  "python deploy_mdf_flow.py ${{ env.RELEASE_VERSION }}"
 
 
