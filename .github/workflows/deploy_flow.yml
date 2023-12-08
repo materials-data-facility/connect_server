@@ -16,6 +16,20 @@ jobs:
         with:
           ref: test
 
+      - name: Set Environment Variable
+        run: |
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            echo "Setting MY_ENV_VAR for prerelease"
+            echo "MY_ENV_VAR=prerelease" >> $GITHUB_ENV
+          else
+            echo "Setting MY_ENV_VAR for regular release"
+            echo "MY_ENV_VAR=release" >> $GITHUB_ENV
+          fi
+
+      - name: Show Environment Variable
+        run: echo "MY_ENV_VAR is $MY_ENV_VAR"
+
+
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
