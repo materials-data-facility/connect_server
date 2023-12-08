@@ -43,7 +43,7 @@ globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets[
 if len(sys.argv) > 1:
     description = f"MDF Connected deployed from GitHub release {sys.argv[2]}"
     config_file = f"mdf_{sys.argv[1]}_flow_config.json"
-    flow_info_file = f'mdf{sys.argv[1]}_flow_info.json'
+    flow_info_file = f'mdf_{sys.argv[1]}_flow_info.json'
 else:
     description = "MDF Connect Flow deployed manually"
     config_file = "mdf_flow_config.json"
