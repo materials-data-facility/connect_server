@@ -1,0 +1,10 @@
+{
+    "flow_permissions": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+    "admin_permissions": [
+        "urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
+    ],
+
+    "sender_email": "materialsdatafacility@uchicago.edu"
+}

@@ -29,10 +29,6 @@ smtp_send_credentials = [{
     }
 }]
 
-# Load other configuration variables
-# Please set these in the configuration file, not in-line here
-with open("mdf_flow_config.json") as f:
-    config = json.load(f)
 
 conf_client = globus_sdk.ConfidentialAppAuthClient(
     globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET']
@@ -44,19 +40,22 @@ flows_client = globus_sdk.FlowsClient(authorizer=cc_authorizer)
 
 globus_auth = GlobusAuthManager(globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
 
-# Load other configuration variables
-# Please set these in the configuration file, not in-line here
-with open("mdf_flow_config.json") as f:
-    config = json.load(f)
-
-mdf_flow = GlobusAutomateFlow.from_existing_flow("mdf_flow_info.json",
-                                                 client=flows_client,
-                                                 globus_auth=globus_auth)
-
 if len(sys.argv) > 1:
-    description = f"MDF Connected deployed from GitHub release {sys.argv[1]}"
+    description = f"MDF Connected deployed from GitHub release {sys.argv[2]}"
+    config_file = f"mdf_{sys.argv[1]}_flow_config.json"
+    flow_info_file = f'mdf{sys.argv[1]}_flow_info.json'
 else:
     description = "MDF Connect Flow deployed manually"
+    config_file = "mdf_flow_config.json"
+    flow_info_file = 'mdf_flow_info.json'
+
+# Load other configuration variables
+with open(config_file) as f:
+    config = json.load(f)
+
+mdf_flow = GlobusAutomateFlow.from_existing_flow(flow_info_file,
+                                                 client=flows_client,
+                                                 globus_auth=globus_auth)
 
 mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
     smtp_send_credentials=smtp_send_credentials,
@@ -67,7 +66,7 @@ mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
         'urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20' # MDF Connect Admins
     ]))
 
-mdf_flow.save_flow("mdf_flow_info.json")
+mdf_flow.save_flow(flow_info_file)
 print("scope = ", mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
 
 print("MDF Flow deployed", mdf_flow)
