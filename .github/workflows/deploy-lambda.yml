@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - "test"
+      - "prod"
   workflow_dispatch:
 
 permissions:
