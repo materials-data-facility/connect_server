@@ -94,7 +94,9 @@ resource "aws_iam_policy" "lambda_dynamodb_policy" {
           "dynamodb:Scan",
         ],
         Effect   = "Allow",
-        Resource = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${local.namespace}-test"
+        Resource = [
+          "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${local.namespace}-test",
+          "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${local.namespace}-prod"]
       },
     ],
   })
