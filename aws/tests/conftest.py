@@ -45,6 +45,8 @@ def authenticated_with_globus(mocker):
     os.environ['TEST_SEARCH_INDEX_UUID'] = "https://test-search.index"
     os.environ['FLOW_ID'] = 'flow-id-1'
     os.environ['FLOW_SCOPE'] = 'flow-scope-1'
+    os.environ['MDF_SECRETS_NAME'] = 'mdf-secrets'
+    os.environ['MDF_AWS_REGION'] = 'us-east-1'
 
     environment = {
         'dynamo_manager': dynamo_manager,
