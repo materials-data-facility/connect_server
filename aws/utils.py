@@ -93,10 +93,7 @@ def make_globus_app_link(globus_uri, config):
     return globus_link
 
 
-def get_secret():
-    secret_name = "Globus"
-    region_name = "us-east-1"
-
+def get_secret(secret_name, region_name):
     # Create a Secrets Manager client
     session = boto3.session.Session()
 

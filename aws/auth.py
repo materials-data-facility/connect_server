@@ -1,25 +1,9 @@
+import os
+
 import globus_sdk
 import boto3
 import json
-
-
-def get_secret():
-    secret_name = "Globus"
-    region_name = "us-east-1"
-
-    # Create a Secrets Manager client
-    session = boto3.session.Session()
-
-    client = session.client(
-        service_name='secretsmanager',
-        region_name=region_name
-    )
-
-    get_secret_value_response = client.get_secret_value(
-        SecretId=secret_name
-    )
-    return eval(get_secret_value_response['SecretString'])
-
+from utils import get_secret
 
 def generate_policy(principalId, effect, resource, message="", name=None, identities=[],
                     user_id=None, dependent_token=None, user_email=None):
@@ -47,10 +31,11 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
 
 
 def lambda_handler(event, context):
-    globus_secrets = get_secret()
+    globus_secrets = get_secret(secret_name=os.environ['MDF_SECRETS_NAME'],
+                                region_name=os.environ['MDF_AWS_REGION'])
 
     #Have to log the event to see why methodArn isn't appearing
-    print(json.dumps(event));
+    print(json.dumps(event))
 
     auth_client = globus_sdk.ConfidentialAppAuthClient(
         globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])

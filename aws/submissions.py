@@ -1,4 +1,6 @@
 import json
+import os
+
 from dynamo_manager import DynamoManager
 from automate_manager import AutomateManager
 from utils import get_secret
@@ -44,7 +46,8 @@ def lambda_handler(event, context):
 
     dynamo_manager = DynamoManager()
 
-    automate_manager = AutomateManager(get_secret())
+    automate_manager = AutomateManager(get_secret(secret_name=os.environ['MDF_SECRETS_NAME'],
+                                                  region_name=os.environ['MDF_AWS_REGION']))
     automate_manager.authenticate()
 
     if event["pathParameters"] and  "user_id" in event['pathParameters']:
