@@ -24,7 +24,8 @@ def generate_policy(principalId, effect, resource, message="", name=None, identi
         'user_id': user_id,
         'identities': str(identities),
         'globus_dependent_token': str(dependent_token),
-        'user_email': user_email
+        'user_email': user_email,
+        'message': message
     }
     print("AuthResponse", authResponse)
     return authResponse

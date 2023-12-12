@@ -32,6 +32,9 @@ resource "aws_lambda_function" "mdf-connect-containerized-auth" {
   architectures = ["x86_64"]
   role          = aws_iam_role.lambda_execution.arn
   timeout = 30
+  environment {
+    variables = local.env_vars[each.key]
+  }
 }
 
 resource "aws_lambda_function" "mdf-connect-containerized-submit" {

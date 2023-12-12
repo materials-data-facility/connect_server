@@ -4,7 +4,7 @@ variable "prod_env_vars" {
   type = map
   default = {
         DYNAMO_STATUS_TABLE="MDF-Connect-prod"
-        MDF_SECRETS_NAME="Globus"
+        MDF_SECRETS_NAME="MDF-Connect-Secrets-prod"
         MDF_AWS_REGION="us-east-1"
         GDRIVE_EP="f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb"
         GDRIVE_ROOT="/Shared With Me"
@@ -25,7 +25,7 @@ variable "test_env_vars" {
   type = map
   default = {
         DYNAMO_STATUS_TABLE="MDF-Connect-test"
-        MDF_SECRETS_NAME="Globus"
+        MDF_SECRETS_NAME="MDF-Connect-Secrets-test"
         MDF_AWS_REGION="us-east-1"
         GDRIVE_EP="f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb"
         GDRIVE_ROOT="/Shared With Me"
