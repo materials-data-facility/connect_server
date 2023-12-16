@@ -111,5 +111,5 @@ jobs:
       - name: Update lambda functions w/ the new containers
         uses: materials-data-facility/deploy-lambda-action@v0
         with:
-            function-name: MDF-Connect-${{ matrix.lambda }}-${{ steps.extract_tag_name.outputs.imagetag }}
+            function-name: MDF-Connect2-${{ matrix.lambda }}-${{ steps.extract_tag_name.outputs.imagetag }}
             image-uri: ${{ steps.login-ecr.outputs.registry }}/mdf-lambdas/${{ matrix.lambda }}:${{ steps.extract_tag_name.outputs.imagetag }}
