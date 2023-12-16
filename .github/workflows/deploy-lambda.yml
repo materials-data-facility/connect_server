@@ -83,7 +83,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::557062710055:role/MDF-ConnectGithubActionsRole
+          role-to-assume: arn:aws:iam::557062710055:role/MDF-Connect2GithubActionsRole
           role-session-name: mdfconnect-backend-deployer
           aws-region: us-east-1
 
