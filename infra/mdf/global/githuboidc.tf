@@ -23,14 +23,14 @@ data "aws_iam_policy_document" "github_allow" {
    condition {
      test     = "StringLike"
  variable = "token.actions.githubusercontent.com:sub"
-     values   = ["repo:${local.GitHubOrg}/${local.GitHubRepo}:*"]
+     values   = ["repo:${var.GitHubOrg}/${var.GitHubRepo}:*"]
 
    }
  }
 }
 
  resource "aws_iam_role" "github_role" {
- name               = "${local.namespace}GithubActionsRole"
+ name               = "${var.namespace}GithubActionsRole"
  assume_role_policy = data.aws_iam_policy_document.github_allow.json
 }
 

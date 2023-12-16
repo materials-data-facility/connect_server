@@ -1,40 +1,83 @@
 # MDF Connect Serverless Infrastructure
 
-This directory includes the Terraform needed to deploy the MDF Connect Serverless  infrastructure. 
+This directory includes the Terraform needed to deploy the MDF Connect 
+Serverless  infrastructure. It is actually divided into three separate
+Terraform projects, one for the global resources, one for dev and prod 
+environments.
+
+## Global Resources
+This is the Terraform project that creates the resources that are shared between
+the dev and prod environments. This includes the ECR repositories and a role 
+that allows GitHub Actions to push to ECR.
+
+## Dev and Prod Environments
+These are the Terraform projects that create the dev and prod environments. They
+are defined using a directory of shared modules. The two environments are 
+recorded in each directory's `variables.tf` file.
+
+### Variables
+- env: The environment name. This is used to name resources and is used to select the docker image tags picked up by the lambda functions.
+- namespace: The namespace to use for the resources. This makes it possible to deploy different data facilities in the same AWS account.
+- mdf_secrets_arn: The ARN of the MDF Secrets Manager secret. These secrets are consumed by the Lambda functions.
+- env_vars: A map of environment variables to set for the Lambda functions. Some of them are set by Terraform as a result of creating resources. Others are simply hardcoded.
+- ecr_repos: A map of ECR repositories to use for the Lambda functions. 
+
 
 ## What it does not include
+Lambda code deployment is not included in this Terraform. Instead, the lambda
+functions pull their code from the attached docker images. The docker images are
+built and pushed to ECR by GitHub Actions. The GitHub Actions workflows are
+defined in the `../.github/workflows` directory. Images are only built and pushed
+when code in the `dev` or `prod` branches are updated. The docker images are 
+tagged with the originating branch name.
 
-Code deployment.
-
-Deploying changes to the Lambda code is out of Terraform's purview. 
-If you're making a new API endpoint that has the same auth requirements as an existing one, you probably shouldn't have need to change anything here.
+Association of domain names to the API Gateway is not included in this Terraform.
+You will need to fiddle around in the AWS console to get this to work out 
+correctly. It mostly involves creating a domain name in Route53 and then 
+convincing AWS to create a certificate for it. The certificate is then used to
+create a custom domain name in API Gateway. The custom domain name is then
+associated with the API Gateway stage.
 
 ## What infra is there?
-
-- An AWS API Gateway  (2 stages, "test" and "prod")
+- An AWS API Gateway 
 - An auth Lambda
 - submit_dataset Lambda
 - submission_status  Lambda
+- Get submissions lambda
+- A DynamoDB table for storing submissions
+
 
 ## Making changes to the existing deployment
-
-Prereqs:
-- Have the terraform CLI installed on your machine. (I have used version > 1.3.x)
-- Copy the tfvars.example to something like prod.tfvars and get the real values from the AWS console
-- Use your preferred method to let Terraform authenticate with AWS
+### Pre-requisites:
+- Have the terraform CLI installed on your machine. (This has been tested with version  1.5.x)
+- Make sure you have the AWS CLI installed and configured with the right credentials
+- Export environment variables for the AWS credentials:
+  - `export AWS_ACCESS_KEY_ID=...`
+  - `export AWS_SECRET_ACCESS_KEY=...`
+  - `export AWS_DEFAULT_REGION=...`
+- Initialize the terraform project by running `terraform init` in the directory of the environment you want to deploy from.
 
 Steps:
 - Make your edit to the terraform code.
-- `terraform plan -var-file="{env}.tfvars"` and then if you approve, `terraform plan -var-file="{env}.tfvars"`
-- Do a sanity check to make sure things are still working, and you're done :)
+- Run `terraform plan` to see what changes will be made.
+- Run `terraform apply` to apply the changes.
 
 ## Deploying from scratch
+There are a number of interesting chicken and egg problems that arise when
+deploying from scratch. The following hints should get you there.
 
-We don't want to use Terraform for our routine code deploys, but also Terraform reasonably refuses to create lambdas without code ot run on them.
-The following zipfiles need to have something in them for the terraform to run:
-auth.zip		submission_status.zip
-globus_layer.zip	submit_dataset.zip
+The main issue we've encountered is that we need the docker images to 
+exist in the ECR repositories before we can create the lambdas. You can 
+build the `global` project first and then manually push docker images to
+the created repositories. The tags for these images must match the `env`
+setting in the `dev` and `prod` projects. 
 
-It needn't be the real code, but they must be valid zip files.
+In order to do this, it's easiest to rely on the docker cli to push images.
+You'll need to authenticate your docker cli with ECR. You can do this by
+running the following command:
 
-You can follow the shell commands in the GH Action yaml to see how to zip it up properly, but also you could just use dummy files and it would be fine.
+```shell
+aws ecr get-login-password  | docker login --username AWS --password-stdin 557062710055.dkr.ecr.us-east-1.amazonaws.com
+```
+
+
