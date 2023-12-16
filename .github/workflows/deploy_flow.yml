@@ -18,7 +18,7 @@ jobs:
         run: |
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then
             echo "Setting FLOW_ENVIRONMENT for prerelease"
-            echo "FLOW_ENVIRONMENT=test" >> $GITHUB_ENV
+            echo "FLOW_ENVIRONMENT=dev" >> $GITHUB_ENV
           else
             echo "Setting FLOW_ENVIRONMENT for prod release"
             echo "FLOW_ENVIRONMENT=prod" >> $GITHUB_ENV
