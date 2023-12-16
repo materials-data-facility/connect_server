@@ -1,6 +1,5 @@
 resource "aws_dynamodb_table" "dynamodb-table" {
-  for_each       = local.environments
-  name           = "${local.namespace}-${each.key}"
+  name           = "${var.namespace}-${var.env}"
   billing_mode   = "PROVISIONED"
   read_capacity  = 5
   write_capacity = 5
@@ -23,7 +22,7 @@ resource "aws_dynamodb_table" "dynamodb-table" {
   }
 
   tags = {
-    Name        = "${local.namespace}"
-    Environment = "${each.key}"
+    Name        = var.namespace
+    Environment = var.env
   }
 }
