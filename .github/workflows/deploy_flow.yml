@@ -19,9 +19,20 @@ jobs:
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then
             echo "Setting FLOW_ENVIRONMENT for prerelease"
             echo "FLOW_ENVIRONMENT=dev" >> $GITHUB_ENV
+            echo "PROD_API_CLIENT_ID=${{ secrets.API_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "PROD_API_CLIENT_SECRET=${{ secrets.API_CLIENT_SECRET }}" >> $GITHUB_ENV
+            echo "SMTP_HOSTNAME=${{ secrets.SMTP_HOSTNAME }}" >> $GITHUB_ENV
+            echo "SMTP_USER=${{ secrets.SMTP_USER }}" >> $GITHUB_ENV
+            echo "SMTP_PASS=${{ secrets.SMTP_PASS }}" >> $GITHUB_ENV
           else
             echo "Setting FLOW_ENVIRONMENT for prod release"
             echo "FLOW_ENVIRONMENT=prod" >> $GITHUB_ENV
+            echo "API_CLIENT_ID=${{ secrets.API_CLIENT_ID }}" >> $GITHUB_ENV
+            echo "API_CLIENT_SECRET=${{ secrets.API_CLIENT_SECRET }}" >> $GITHUB_ENV
+            echo "SMTP_HOSTNAME=${{ secrets.SMTP_HOSTNAME }}" >> $GITHUB_ENV
+            echo "SMTP_USER=${{ secrets.SMTP_USER }}" >> $GITHUB_ENV
+            echo "SMTP_PASS=${{ secrets.SMTP_PASS }}" >> $GITHUB_ENV
+
           fi
 
 
@@ -40,12 +51,6 @@ jobs:
         run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
       - name: Deploy
-        env:
-          API_CLIENT_ID: '${{ secrets.API_CLIENT_ID }}'
-          API_CLIENT_SECRET: '${{ secrets.API_CLIENT_SECRET }}'
-          SMTP_HOSTNAME: '${{ secrets.SMTP_HOSTNAME }}'
-          SMTP_USER: '${{ secrets.SMTP_USER }}'
-          SMTP_PASS: '${{ secrets.SMTP_PASS }}'
         run: |
           cd automate
           PYTHONPATH=../aws/ python deploy_mdf_flow.py ${{ env.FLOW_ENVIRONMENT }} ${{ env.RELEASE_VERSION }}
