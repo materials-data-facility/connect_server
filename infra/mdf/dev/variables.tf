@@ -48,3 +48,12 @@ variable "ecr_repos" {
     "auth" = "557062710055.dkr.ecr.us-east-1.amazonaws.com/mdf-lambdas/auth"
   }
 }
+
+variable "resource_tags" {
+    type = map(string)
+    default = {
+        "Owner" = "MDF"
+        "Environment" = "Development"
+        "Project" = "MDF Connect"
+    }
+}

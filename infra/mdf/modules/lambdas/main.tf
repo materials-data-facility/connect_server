@@ -27,7 +27,7 @@ resource "aws_lambda_function" "mdf-connect-auth" {
 
 
 resource "aws_cloudwatch_log_group" "auth_log_group" {
-  name              = "/aws/lambda/${local.auth_function_name}"
+  name              = "/aws/lambda/${local.auth_function_name}-${var.env}"
   retention_in_days = 5
   tags = var.resource_tags
 }
@@ -48,7 +48,7 @@ resource "aws_lambda_function" "mdf-connect-submit" {
 }
 
 resource "aws_cloudwatch_log_group" "submit_log_group" {
-  name              = "/aws/lambda/${local.submit_function_name}"
+  name              = "/aws/lambda/${local.submit_function_name}-${var.env}"
   retention_in_days = 5
   tags = var.resource_tags
 }
@@ -69,7 +69,7 @@ resource "aws_lambda_function" "mdf-connect-status" {
 }
 
 resource "aws_cloudwatch_log_group" "status_log_group" {
-  name              = "/aws/lambda/${local.status_function_name}"
+  name              = "/aws/lambda/${local.status_function_name}-${var.env}"
   retention_in_days = 5
   tags = var.resource_tags
 }
@@ -92,7 +92,7 @@ resource "aws_lambda_function" "mdf-connect-submissions" {
 }
 
 resource "aws_cloudwatch_log_group" "submissions_log_group" {
-  name              = "/aws/lambda/${local.submissions_function_name}"
+  name              = "/aws/lambda/${local.submissions_function_name}--${var.env}"
   retention_in_days = 5
   tags = var.resource_tags
 }
