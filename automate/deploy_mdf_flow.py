@@ -67,10 +67,10 @@ mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
     ]))
 
 mdf_flow.save_flow(flow_info_file)
-print("scope = ", mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
+print("scope = ", mdf_flow.get_scope_id_for_runAs_role('SubmittingUser')['scopes'][0]['id'])
 
 print("MDF Flow deployed", mdf_flow)
-submitting_user_scope_id = mdf_flow.get_scope_for_runAs_role('SubmittingUser')['scopes'][0]['id']
+submitting_user_scope_id = mdf_flow.get_scope_id_for_runAs_role('SubmittingUser')['scopes'][0]['id']
 
 connect_scope_def = {
     "scope": {

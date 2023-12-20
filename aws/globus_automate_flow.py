@@ -157,6 +157,8 @@ class GlobusAutomateFlow:
             self.flow_id = flow_info['flow_id']
             self.flow_scope = flow_info['flow_scope']
 
-    def get_scope_for_runAs_role(self, rolename):
-        print("--->RunAsScopes ", self.runAsScopes[rolename])
+    def get_scope_id_for_runAs_role(self, rolename):
         return self.globus_auth.scope_id_from_uri(self.runAsScopes[rolename])
+
+    def get_scope_uri_for_runAs_role(self, rolename):
+        return self.runAsScopes[rolename]

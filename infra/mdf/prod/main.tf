@@ -36,6 +36,7 @@ module "lambdas" {
   namespace                 = var.namespace
   lambda_execution_role_arn = module.permissions.submit_lambda_invoke_arn
   ecr_repos                 = var.ecr_repos
+  resource_tags             = var.resource_tags
 }
 
 module "dynamodb" {

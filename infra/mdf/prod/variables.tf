@@ -30,7 +30,7 @@ variable "env_vars" {
         MANAGE_FLOWS_SCOPE="https://auth.globus.org/scopes/eec9b274-0c81-4334-bdc2-54e90e689b9a/manage_flows"
         MONITOR_BY_GROUP="urn:globus:groups:id:5fc63928-3752-11e8-9c6f-0e00fd09bf20"
         PORTAL_URL="https://acdc.alcf.anl.gov/mdf/detail/"
-        RUN_AS_SCOPE="aa5f9e85-5305-4f9e-9679-95c158e5aa47"
+        RUN_AS_SCOPE="c096e223-59e8-42fe-85ea-956208b0f878"
         SEARCH_INDEX_UUID="1a57bbe5-5272-477f-9d31-343b8258b7a5"
         TEST_DATA_DESTINATION="globus://f10a69a9-338c-4e5b-baa1-0dc92359ab47/mdf_testing/"
         TEST_SEARCH_INDEX_UUID="5acded0c-a534-45af-84be-dcf042e36412"
@@ -47,4 +47,13 @@ variable "ecr_repos" {
     "status" = "557062710055.dkr.ecr.us-east-1.amazonaws.com/mdf-lambdas/status"
     "auth" = "557062710055.dkr.ecr.us-east-1.amazonaws.com/mdf-lambdas/auth"
   }
+}
+
+variable "resource_tags" {
+    type = map(string)
+    default = {
+        "Owner" = "MDF"
+        "Environment" = "Production"
+        "Project" = "MDF Connect"
+    }
 }

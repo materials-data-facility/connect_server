@@ -10,4 +10,6 @@ if len(sys.argv) != 2:
     sys.exit(1)
 
 mdfcc = MDFConnectClient(service_instance=sys.argv[1])
+mdfcc.logout()
+mdfcc = MDFConnectClient(service_instance=sys.argv[1])
 print(mdfcc._MDFConnectClient__authorizer.access_token)

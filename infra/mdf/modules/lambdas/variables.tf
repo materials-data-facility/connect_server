@@ -22,3 +22,8 @@ variable "ecr_repos" {
   description = "Map of lambda function to ECR repo holding the images."
   type = map(string)
 }
+
+variable "resource_tags" {
+  description = "Tags to apply to all resources."
+  type = map(string)
+}

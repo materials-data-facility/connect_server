@@ -16,9 +16,23 @@ resource "aws_iam_role" "lambda_execution_role" {
 }
 
 
-resource "aws_iam_role_policy_attachment" "AWSLambdaBasicExecutionRole" {
+# role
+data "aws_iam_policy_document" "lambda_logging_role_policy" {
+  statement {
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+    resources = [
+      "arn:aws:logs:*:*:*"
+    ]
+  }
+}
+
+
+resource "aws_iam_role_policy" "lambda_logging_role" {
   role = aws_iam_role.lambda_execution_role.id
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  policy = data.aws_iam_policy_document.lambda_logging_role_policy.json
 }
 
 resource "aws_iam_policy" "allow_mdf_secrets_access_policy" {
