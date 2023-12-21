@@ -193,7 +193,7 @@ def curation_steps(sender_email):
             "Parameters": {
                 "landing_page": {
                     "url_suffix.$": "$._context.action_id",
-                    "header_background": "#FFF8C6",
+                    "header_background": "#c6e3ff",
                     "header_icon_url": "https://connect.materialsdatafacility.org/static/img/MDF-logo%402x.png",
                     "header_icon_link": "https://materialsdatafacility.org",
                     "header_text": "Curate an MDF Dataset",
@@ -204,13 +204,13 @@ def curation_steps(sender_email):
                         "name": "accepted",
                         "description": "Accept dataset",
                         "url_suffix.=": "`$._context.action_id` + '_approve'",
-                        "completed_message": "Thank you! The dataset has been accepted for publication and processing will proceed."
+                        "completed_message": "<h1> Curation Complete - Accepted </h1> The dataset has been accepted for publication and processing will proceed."
                     },
                     {
                         "name": "rejected",
                         "description": "Reject Dataset",
                         "url_suffix.=": "`$._context.action_id` + '_deny'",
-                        "completed_message": "The dataset has been rejected and will not proceed."
+                        "completed_message": "<h1> Curation Complete - Rejected </h1> The dataset has been rejected and will not proceed."
                     }
                 ]
             },
