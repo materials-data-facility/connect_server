@@ -17,3 +17,8 @@ variable "dynamo_db_arn" {
     type = string
     description = "ARN of the DynamoDB table"
 }
+
+variable "legacy_table_arn" {
+    type = string
+    description = "ARN of the legacy DynamoDB table"
+}
