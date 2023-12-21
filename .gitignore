@@ -23,6 +23,8 @@ prototypes/forge_sandbox.ipynb
 
 travis.tar
 .mdfsecrets
+.mdfsecrets.*
 aws/python
 .idea/
 secrets.env
+
