@@ -10,7 +10,8 @@ from utils import get_secret
 status_codes = {
     "SUCCEEDED": "S",
     "ACTIVE": "P",
-    "FAILED": "F"
+    "FAILED": "F",
+    "UNKNOWN": "U"
 }
 
 def format_status_record(status:dict, automate_manager:AutomateManager) -> dict:
@@ -22,7 +23,7 @@ def format_status_record(status:dict, automate_manager:AutomateManager) -> dict:
                                                    status["submission_time"])
 
     automate_status = {
-        "status": "Unknown",
+        "status": "UNKNOWN",
         "details": {
             "description": "Unknown"
         }
