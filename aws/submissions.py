@@ -1,6 +1,8 @@
 import json
 import os
 
+from globus_sdk import GlobusAPIError
+
 from dynamo_manager import DynamoManager
 from automate_manager import AutomateManager
 from utils import get_secret
@@ -19,8 +21,20 @@ def format_status_record(status:dict, automate_manager:AutomateManager) -> dict:
                                                    status["submitter"],
                                                    status["submission_time"])
 
-    automate_status = automate_manager.get_status(status['action_id'])
+    automate_status = {
+        "status": "Unknown",
+        "details": {
+            "description": "Unknown"
+        }
+    }
 
+    if 'action-id' in status:
+        try:
+            automate_status = automate_manager.get_status(status['action_id'])
+        except GlobusAPIError:
+            automate_status["details"]['description'] = "Flow not found"
+    else:
+        automate_status["details"]['description'] = "Submission prior to GlobusAutomate"
 
     return {
         "source_id": status["source_id"],
