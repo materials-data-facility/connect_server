@@ -194,11 +194,11 @@ def curation_steps(sender_email):
                 "landing_page": {
                     "url_suffix.$": "$._context.action_id",
                     "header_background": "#FFF8C6",
-                    "header_icon_url": "https://materialsdatafacility.org/images/MDF-logo@2x.png",
+                    "header_icon_url": "https://connect.materialsdatafacility.org/static/img/MDF-logo%402x.png",
                     "header_icon_link": "https://materialsdatafacility.org",
                     "header_text": "Curate an MDF Dataset",
                     "page_title": "Materials Data Facility",
-                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please sreview it to allow processing to continue.'"},
+                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please review it to allow processing to continue.'"},
                 "options": [
                     {
                         "name": "accepted",
