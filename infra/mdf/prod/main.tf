@@ -45,6 +45,7 @@ module "dynamodb" {
   namespace = var.namespace
   env_vars  = var.env_vars
   resource_tags             = var.resource_tags
+  dynamodb_write_capacity   = 20
 }
 
 module "permissions" {
