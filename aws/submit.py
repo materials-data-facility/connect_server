@@ -303,7 +303,7 @@ def lambda_handler(event, context):
     print("status info", status_info)
 
     automate_manager = AutomateManager(get_secret(secret_name=os.environ['MDF_SECRETS_NAME'],
-                                                  region_name=os.environ['MDF_AWS_REGION']))
+                                                  region_name=os.environ['MDF_AWS_REGION']), is_test)
     automate_manager.authenticate()
 
     try:

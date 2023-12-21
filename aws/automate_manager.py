@@ -23,7 +23,7 @@ def authorizer_callback(*args, **kwargs):
 
 class AutomateManager:
 
-    def __init__(self, secrets):
+    def __init__(self, secrets: dict, is_test: bool = False):
         # Globals needed for the authorizer_callback
         global tokens, mdf_flow
 
@@ -45,9 +45,15 @@ class AutomateManager:
         self.api_client_id = secrets['API_CLIENT_ID']
         self.api_client_secret = secrets['API_CLIENT_SECRET']
 
-        self.datacite_username = secrets['DATACITE_USERNAME']
-        self.datacite_password = secrets['DATACITE_PASSWORD']
-        self.datacite_prefix = secrets['DATACITE_PREFIX']
+        if not is_test:
+            self.datacite_username = secrets['DATACITE_USERNAME_PROD']
+            self.datacite_password = secrets['DATACITE_PASSWORD_PROD']
+            self.datacite_prefix = secrets['DATACITE_PREFIX_PROD']
+        else:
+            self.datacite_username = secrets['DATACITE_USERNAME_TEST']
+            self.datacite_password = secrets['DATACITE_PASSWORD_TEST']
+            self.datacite_prefix = secrets['DATACITE_PREFIX_TEST']
+
 
         self.portal_url = os.environ.get('PORTAL_URL', None)
 

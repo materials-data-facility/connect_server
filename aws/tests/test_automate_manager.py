@@ -15,9 +15,12 @@ class TestAutomateManager:
             "SES_SECRET": "shhh",
             "API_CLIENT_ID": "55-321",
             "API_CLIENT_SECRET": "hhhhs",
-            "DATACITE_USERNAME": "datacite_test_usrname_1234",
-            "DATACITE_PASSWORD": "datacite_test_passwrd_1234",
-            "DATACITE_PREFIX": "10.12345"
+            "DATACITE_USERNAME_PROD": "datacite_prod_usrname_1234",
+            "DATACITE_PASSWORD_PROD": "datacite_prod_passwrd_1234",
+            "DATACITE_PREFIX_PROD": "10.12345",
+            "DATACITE_USERNAME_TEST": "datacite_test_usrname_1234",
+            "DATACITE_PASSWORD_TEST": "datacite_test_passwrd_1234",
+            "DATACITE_PREFIX_TEST": "10.12347"
         }
     
 
