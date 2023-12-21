@@ -1,8 +1,9 @@
+
 resource "aws_dynamodb_table" "dynamodb-table" {
   name           = "${var.namespace}-${var.env}"
   billing_mode   = "PROVISIONED"
   read_capacity  = 5
-  write_capacity = 5
+  write_capacity = var.dynamodb_write_capacity
   hash_key       = "source_id"
   range_key      = "version"
   attribute {
@@ -21,8 +22,5 @@ resource "aws_dynamodb_table" "dynamodb-table" {
     enabled        = false
   }
 
-  tags = {
-    Name        = var.namespace
-    Environment = var.env
-  }
+  tags = var.resource_tags
 }

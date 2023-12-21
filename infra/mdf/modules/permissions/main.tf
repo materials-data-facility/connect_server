@@ -75,7 +75,10 @@ resource "aws_iam_policy" "lambda_dynamodb_policy" {
           "dynamodb:Scan",
         ],
         Effect   = "Allow",
-        Resource = [ var.dynamo_db_arn ]
+        Resource = [
+          var.dynamo_db_arn,
+          var.legacy_table_arn
+        ]
       },
     ],
   })

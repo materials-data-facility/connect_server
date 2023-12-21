@@ -45,6 +45,8 @@ module "dynamodb" {
   env       = var.env
   namespace = var.namespace
   env_vars  = var.env_vars
+  resource_tags             = var.resource_tags
+  dynamodb_write_capacity = 20
 }
 
 module "permissions" {
@@ -53,6 +55,7 @@ module "permissions" {
   namespace       = var.namespace
   mdf_secrets_arn = var.mdf_secrets_arn
   dynamo_db_arn   = module.dynamodb.dynamodb_arn
+  legacy_table_arn = "arn:aws:dynamodb:us-east-1:557062710055:table/dev-status-0.4"
 }
 
 module "api_gateway" {
