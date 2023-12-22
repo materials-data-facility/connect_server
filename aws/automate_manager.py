@@ -23,7 +23,7 @@ def authorizer_callback(*args, **kwargs):
 
 class AutomateManager:
 
-    def __init__(self, secrets: dict, is_test: bool = False):
+    def __init__(self, secrets: dict, is_test: bool):
         # Globals needed for the authorizer_callback
         global tokens, mdf_flow
 
@@ -49,10 +49,14 @@ class AutomateManager:
             self.datacite_username = secrets['DATACITE_USERNAME_PROD']
             self.datacite_password = secrets['DATACITE_PASSWORD_PROD']
             self.datacite_prefix = secrets['DATACITE_PREFIX_PROD']
+            print(f"Using PROD Datacite prefix {self.datacite_prefix}, username {self.datacite_username}")
+
         else:
             self.datacite_username = secrets['DATACITE_USERNAME_TEST']
             self.datacite_password = secrets['DATACITE_PASSWORD_TEST']
             self.datacite_prefix = secrets['DATACITE_PREFIX_TEST']
+            print(f"Using Test Datacite prefix {self.datacite_prefix}, username {self.datacite_username}")
+
 
 
         self.portal_url = os.environ.get('PORTAL_URL', None)

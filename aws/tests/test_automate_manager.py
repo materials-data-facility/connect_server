@@ -77,7 +77,7 @@ class TestAutomateManager:
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items(self, _, secrets, organization, set_environ):
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
@@ -102,7 +102,7 @@ class TestAutomateManager:
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_from_origin(self, _, secrets, organization):
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
             "https://app.globus.org/file-manager?origin_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&origin_path=%2Fexalearn-design%2F"
@@ -127,7 +127,7 @@ class TestAutomateManager:
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
         os.environ['GDRIVE_EP'] = "f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb"
         os.environ['GDRIVE_ROOT'] = "/Shared With Me"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
             "google:///mdf/my_dataset"
@@ -150,7 +150,7 @@ class TestAutomateManager:
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_test_submit(self, _, secrets, organization, set_environ):
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=True)
 
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
@@ -176,7 +176,7 @@ class TestAutomateManager:
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
@@ -200,7 +200,15 @@ class TestAutomateManager:
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
-        manager = AutomateManager(secrets)
+        manager = AutomateManager(secrets, is_test=False)
+        assert manager.datacite_username == "datacite_prod_usrname_1234"
+        assert manager.datacite_password == "datacite_prod_passwrd_1234"
+        assert manager.datacite_prefix == "10.12345"
+
+        manager = AutomateManager(secrets, is_test=True)
+        assert manager.datacite_username == "datacite_test_usrname_1234"
+        assert manager.datacite_password == "datacite_test_passwrd_1234"
+        assert manager.datacite_prefix == "10.12347"
 
         data_sources = [
             "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
