@@ -241,6 +241,8 @@ def lambda_handler(event, context):
     metadata["mdf"]["source_name"] = source_name
     metadata["mdf"]["version"] = version
     metadata["mdf"]["domains"] = organization.domains
+    metadata["mdf"]["resource_type"] = "dataset"  # Force the resource type to make this findable in the portal
+    metadata["mdf"]["ingest_date"] = datetime.utcnow().isoformat("T") + "Z"
 
     # Fetch custom block descriptors, cast values to str, turn _description => _desc
     # @BenB edited
