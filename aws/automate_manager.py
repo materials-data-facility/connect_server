@@ -23,7 +23,7 @@ def authorizer_callback(*args, **kwargs):
 
 class AutomateManager:
 
-    def __init__(self, secrets: dict, is_test: bool):
+    def __init__(self, secrets: dict, is_test: bool=False):
         # Globals needed for the authorizer_callback
         global tokens, mdf_flow
 
