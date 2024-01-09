@@ -25,6 +25,19 @@ Feature: Submit Dataset
         And an automate flow started
         And I should receive a success result with the generated uuid and version 1.0
 
+    Scenario: Submit Test Dataset With Provided source_id
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit
+        And I provide the source_id
+        And I set the test flag to true
+        When I submit the dataset
+
+        Then a dynamo record should be created with the provided source_id modified to indicate test
+        And the dynamo record should be version 1.0
+        And an automate flow started
+        And I should receive a success result with test source-id, the generated uuid and version 1.0
+
+
     Scenario: Attempt to update another users record
         Given I'm authenticated with MDF
         And I have an update to another users record
