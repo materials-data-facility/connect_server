@@ -9,6 +9,10 @@ fake_uuid = "abcdefgh-1234-4321-zyxw-hgfedcba"
 def test_publish_provided_source_id():
     pass
 
+@scenario('submit_dataset.feature', 'Submit Test Dataset With Provided source_id')
+def test_publish_provided_source_id_test():
+    pass
+
 @scenario('submit_dataset.feature', 'Submit Dataset')
 def test_submit():
     pass
@@ -72,6 +76,10 @@ def provided_source_id(mdf, mdf_environment):
     mdf_environment['source_id'] = 'my dataset'
     return mdf.get_submission()
 
+@given("I set the test flag to true", target_fixture='mdf_submission')
+def set_test_flag(mdf):
+    mdf.test=True
+    return mdf.get_submission()
 
 @given('I have a new MDF dataset to submit for an organization that mints DOIs', 
         target_fixture='mdf_submission')
@@ -141,11 +149,21 @@ def no_error(submit_result, mdf_environment):
 
 @then(parsers.parse('I should receive a success result with the generated uuid and version {version}'))
 def no_error_with_version(submit_result, mdf_environment, version):
+    verify_success_result(submit_result, mdf_environment, version, is_test=False)
+
+@then(parsers.parse('I should receive a success result with test source-id, the generated uuid and version {version}'))
+def no_error_test_submission_with_version(submit_result, mdf_environment, version):
+    verify_success_result(submit_result, mdf_environment, version, is_test=True)
+
+def verify_success_result(submit_result, mdf_environment, version, is_test=False):
     print("---------->", submit_result)
     assert submit_result['statusCode'] == 202
     body = json.loads(submit_result['body'])
     assert body['success']
-    assert body['source_id'] == mdf_environment['source_id']
+    if is_test:
+        assert body['source_id'] == mdf_environment['source_id']+"-test"
+    else:
+        assert body['source_id'] == mdf_environment['source_id']
     assert body['version'] == version
 
 
@@ -218,3 +236,15 @@ def previous_versions_field_empty(dynamo_record):
 @then("the previous_versions field should be ['my dataset-1.0']")
 def previous_versions_after_update(dynamo_record):
     assert dynamo_record['previous_versions'] == ['my dataset-1.0']
+
+
+@then(
+    "a dynamo record should be created with the provided source_id modified to indicate test", target_fixture="dynamo_record")
+def verify_test_source_id(mdf_environment):
+    dynamo_manager = mdf_environment['dynamo_manager']
+    dynamo_manager.create_status.assert_called()
+    dynamo_record = dynamo_manager.create_status.call_args[0][0]
+    print(dynamo_record)
+    assert dynamo_record['source_id'] == mdf_environment['source_id']+"-test"
+    assert dynamo_record['action_id'] == 'action-id-1'
+    return dynamo_record
