@@ -167,8 +167,15 @@ def lambda_handler(event, context):
 
         #
         existing_source_name = metadata.get("mdf", {}).get("source_name", None)
-        print("++++++++existing_source+++++++", existing_source_name)
+
         is_test = submission_conf["test"]
+
+        # Distinguish test sources from prod. Tack -test on the end of the provided
+        # name
+        if is_test and existing_source_name:
+            existing_source_name += "-test"
+
+        print("++++++++existing_source+++++++", existing_source_name)
 
         if not existing_source_name:
             source_name = str(uuid.uuid4())
