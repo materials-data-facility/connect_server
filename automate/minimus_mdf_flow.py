@@ -13,7 +13,26 @@ def email_submission_to_admin(sender_email, admin_email):
                 "sender": sender_email,
                 "destination": admin_email,
                 "subject": "Materials Data Facility Dataset Submission",
-                "body_template": "A new dataset has been submitted.  $.dataset_mdata",
+                "body_template": """
+                <html><h1>New dataset submitted</h1>
+                    <p>A new dataset has been submitted to the Materials Data Facility. View the <a href="https://app.globus.org/runs/$flow_log_link">here</a></p>
+                     <table>
+                        <tr><td>Submitting User</td><td>$submitting_user_email</td></tr>
+                        <tr><td>Organization</td><td>$organization</td></tr>
+                        <tr><td>Title</td><td>$title</td></tr>
+                        <tr><td>Source ID</td><td>$source_id</td></tr>
+                        <tr><td>Versioned Source ID</td><td>$versioned_source_id</td></tr>
+                     </table>
+                </html>
+                """,
+                "body_variables": {
+                    "flow_log_link.$": "$._context.run_id",
+                    "submitting_user_email.$": "$.submitting_user_email",
+                    "title.$": "$.dataset_mdata.dc.titles[0].title",
+                    "source_id.$": "$.dataset_mdata.mdf.source_id",
+                    "versioned_source_id.$": "$.dataset_mdata.mdf.versioned_source_id",
+                    "organization.$": "$.dataset_mdata.mdf.organization",
+                },
                 "notification_method": "any",
                 "notification_priority": "high",
                 "send_credentials": [
@@ -25,6 +44,7 @@ def email_submission_to_admin(sender_email, admin_email):
                 ],
                 "__Private_Parameters": ["send_credentials"],
             },
+            "ResultPath": "$.EmailSubmissionResult",
             "Next": "Check Metadata Only"
             },
         }
