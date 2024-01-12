@@ -13,10 +13,7 @@ def email_submission_to_admin(sender_email, admin_email):
                 "sender": sender_email,
                 "destination": admin_email,
                 "subject": "Materials Data Facility Dataset Submission",
-                "body_template": "A new dataset has been submitted.  $submission_json",
-                "body_variables": {
-                    "$submission_json.=": "$.dataset_mdata"
-                },
+                "body_template": "A new dataset has been submitted.  $.dataset_mdata",
                 "notification_method": "any",
                 "notification_priority": "high",
                 "send_credentials": [
