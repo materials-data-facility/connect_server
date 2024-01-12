@@ -58,8 +58,8 @@ mdf_flow = GlobusAutomateFlow.from_existing_flow(flow_info_file,
                                                  globus_auth=globus_auth)
 
 mdf_flow.update_flow(flow_def=minimus_mdf_flow.flow_def(
-    smtp_send_credentials=smtp_send_credentials,
     sender_email=config['sender_email'],
+    admin_email=config['admin_email'],
     flow_permissions=config['flow_permissions'],
     description=description,
     administered_by=[
