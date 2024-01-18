@@ -2,8 +2,57 @@ import action_providers
 from globus_automate_flow import GlobusAutomateFlowDef
 
 
+def email_submission_to_admin(sender_email, admin_email):
+    return {
+        "EmailSubmission": {
+            "Type": "Action",
+            "ActionUrl": "https://actions.globus.org/notification/notify",
+            "ExceptionOnActionFailure": True,
+            "Parameters": {
+                "body_mimetype": "text/html",
+                "sender": sender_email,
+                "destination": admin_email,
+                "subject": "Materials Data Facility Dataset Submission",
+                "body_template": """
+                <html><h1>New dataset submitted</h1>
+                    <p>A new dataset has been submitted to the Materials Data Facility. View the <a href="https://app.globus.org/runs/$flow_log_link">here</a></p>
+                     <table>
+                        <tr><td>Submitting User</td><td>$submitting_user_email</td></tr>
+                        <tr><td>Organization</td><td>$organization</td></tr>
+                        <tr><td>Title</td><td>$title</td></tr>
+                        <tr><td>Source ID</td><td>$source_id</td></tr>
+                        <tr><td>Versioned Source ID</td><td>$versioned_source_id</td></tr>
+                     </table>
+                </html>
+                """,
+                "body_variables": {
+                    "flow_log_link.$": "$._context.run_id",
+                    "submitting_user_email.$": "$.submitting_user_email",
+                    "title.$": "$.dataset_mdata.dc.titles[0].title",
+                    "source_id.$": "$.dataset_mdata.mdf.source_id",
+                    "versioned_source_id.$": "$.dataset_mdata.mdf.versioned_source_id",
+                    "organization.$": "$.dataset_mdata.mdf.organization",
+                },
+                "notification_method": "any",
+                "notification_priority": "high",
+                "send_credentials": [
+                    {
+                        "credential_method": "email",
+                        "credential_type": "ses",
+                        "credential_value.$": "$._private_email_credentials",
+                    }
+                ],
+                "__Private_Parameters": ["send_credentials"],
+            },
+            "ResultPath": "$.EmailSubmissionResult",
+            "Next": "Check Metadata Only"
+            },
+        }
+
+
+
 def check_update_metadata_only():
-    return{
+    return {
         "Check Metadata Only": {
             "Comment": "Checks whether flow just updates the metadata",
             "Type": "Choice",
@@ -11,10 +60,10 @@ def check_update_metadata_only():
                 {
                     "Variable": "$.update_metadata_only",
                     "BooleanEquals": True,
-                    "Next": "ChooseCuration"
+                    "Next": "ChooseCuration",
                 }
             ],
-            "Default": "CreateDestinationDir"
+            "Default": "CreateDestinationDir",
         }
     }
 
@@ -22,7 +71,7 @@ def check_update_metadata_only():
 def file_transfer_steps():
     """
     Steps to transfer user data to MDF repository:
-        * Add a temporary write permission to the repo so we can execute the transfer
+        * Add a temporary write permission to the repo, so we can execute the transfer
           as the submitting user
         * Execute the transfer using runAs
         * Remove the temporary write permission
@@ -41,11 +90,10 @@ def file_transfer_steps():
             "Catch": [
                 {
                     "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission"
+                    "Next": "FailUserPermission",
                 }
             ],
-
-            "Next": "UserPermissions"
+            "Next": "UserPermissions",
         },
         "UserPermissions": {
             "Comment": "Temporarily add write permissions for the submitting user",
@@ -58,17 +106,16 @@ def file_transfer_steps():
                 "path.$": "$.user_transfer_inputs.transfer_items[0].destination_path",
                 "principal_type": "identity",
                 "principal.$": "$.user_transfer_inputs.submitting-user-id",
-                "permissions": "rw"
+                "permissions": "rw",
             },
             "ResultPath": "$.UserPermissionResult",
             "Catch": [
                 {
                     "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission"
+                    "Next": "FailUserPermission",
                 }
             ],
-
-            "Next": "UserTransfer"
+            "Next": "UserTransfer",
         },
         "UserTransfer": {
             "Comment": "Copy from user's endpoint to organization's dataset destination",
@@ -80,10 +127,10 @@ def file_transfer_steps():
                 "source_endpoint_id.$": "$.user_transfer_inputs.source_endpoint_id",
                 "destination_endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
                 "label.$": "$.user_transfer_inputs.label",
-                "transfer_items.$": "$.user_transfer_inputs.transfer_items"
+                "transfer_items.$": "$.user_transfer_inputs.transfer_items",
             },
             "ResultPath": "$.UserTransferResult",
-            "Next": "UndoUserPermissions"
+            "Next": "UndoUserPermissions",
         },
         "UndoUserPermissions": {
             "Comment": "Remove temporary write permissions for the submitting user",
@@ -93,16 +140,16 @@ def file_transfer_steps():
             "Parameters": {
                 "operation": "DELETE",
                 "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
-                "rule_id.$": "$.UserPermissionResult.details.access_id"
+                "rule_id.$": "$.UserPermissionResult.details.access_id",
             },
             "ResultPath": "$.UndoUserPermissionResult",
             "Catch": [
                 {
                     "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission"
+                    "Next": "FailUserPermission",
                 }
             ],
-            "Next": "CheckUserTransfer"
+            "Next": "CheckUserTransfer",
         },
         "CheckUserTransfer": {
             "Type": "Choice",
@@ -110,33 +157,33 @@ def file_transfer_steps():
                 {
                     "Variable": "$.UserTransferResult.status",
                     "StringEquals": "SUCCEEDED",
-                    "Next": "ChooseCuration"
+                    "Next": "ChooseCuration",
                 }
             ],
-            "Default": "FailUserTransfer"
+            "Default": "FailUserTransfer",
         },
         "FailUserTransfer": {
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Submission Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed during transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserTransferResult.details`"
+                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed during transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserTransferResult.details`",
             },
             "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd"
+            "Next": "NotifyUserEnd",
         },
         "FailUserPermission": {
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Permission Settings Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserPermissionResult.details`"
+                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserPermissionResult.details`",
             },
             "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd"
+            "Next": "NotifyUserEnd",
         },
     }
 
 
-def curation_steps(sender_email):
+def curation_steps(sender_email, admin_email):
     """
     Steps for allowing an administrator to curate submissions:
         * Check to see if curation has been requested
@@ -151,10 +198,10 @@ def curation_steps(sender_email):
                 {
                     "Variable": "$.curation_input",
                     "BooleanEquals": False,
-                    "Next": "NeedDOI"
+                    "Next": "NeedDOI",
                 }
             ],
-            "Default": "SendCurationEmail"
+            "Default": "SendCurationEmail",
         },
         "SendCurationEmail": {
             "Type": "Action",
@@ -164,26 +211,24 @@ def curation_steps(sender_email):
             "Parameters": {
                 "body_mimetype": "text/html",
                 "sender": sender_email,
-                "destination": "blaiszik@uchicago.edu",
-                # "destination": "materialsdatafacility@uchicago.edu",
+                "destination": admin_email,
                 "subject": "Materials Data Facility Dataset Curation Request",
                 "body_template": "Please either Approve or Deny the dataset publication request here: $landing_page_url",
                 "body_variables": {
                     "landing_page_url.=": "'https://actions.globus.org/weboption/landing_page/' + `$._context.action_id`"
-                }, "notification_method": "any",
+                },
+                "notification_method": "any",
                 "notification_priority": "high",
                 "send_credentials": [
                     {
                         "credential_method": "email",
                         "credential_type": "ses",
-                        "credential_value.$": "$._private_email_credentials"
+                        "credential_value.$": "$._private_email_credentials",
                     }
                 ],
-                "__Private_Parameters": [
-                    "send_credentials"
-                ]
+                "__Private_Parameters": ["send_credentials"],
             },
-            "Next": "CurateSubmission"
+            "Next": "CurateSubmission",
         },
         "CurateSubmission": {
             "Type": "Action",
@@ -198,24 +243,25 @@ def curation_steps(sender_email):
                     "header_icon_link": "https://materialsdatafacility.org",
                     "header_text": "Curate an MDF Dataset",
                     "page_title": "Materials Data Facility",
-                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please review it to allow processing to continue.'"},
+                    "preamble_text.=": "'A new dataset has been submitted. ' + `$.mdf_portal_link` +' Please review it to allow processing to continue.'",
+                },
                 "options": [
                     {
                         "name": "accepted",
                         "description": "Accept dataset",
                         "url_suffix.=": "`$._context.action_id` + '_approve'",
-                        "completed_message": "<h1> Curation Complete - Accepted </h1> The dataset has been accepted for publication and processing will proceed."
+                        "completed_message": "<h1> Curation Complete - Accepted </h1> The dataset has been accepted for publication and processing will proceed.",
                     },
                     {
                         "name": "rejected",
                         "description": "Reject Dataset",
                         "url_suffix.=": "`$._context.action_id` + '_deny'",
-                        "completed_message": "<h1> Curation Complete - Rejected </h1> The dataset has been rejected and will not proceed."
-                    }
-                ]
+                        "completed_message": "<h1> Curation Complete - Rejected </h1> The dataset has been rejected and will not proceed.",
+                    },
+                ],
             },
             "WaitTime": 86400,
-            "Next": "ChooseAcceptance"
+            "Next": "ChooseAcceptance",
         },
         "ChooseAcceptance": {
             "Type": "Choice",
@@ -223,27 +269,25 @@ def curation_steps(sender_email):
                 {
                     "Variable": "$.CurateResult.details.name",
                     "StringEquals": "accepted",
-                    "Next": "NeedDOI"
+                    "Next": "NeedDOI",
                 },
                 {
                     "Variable": "$.CurateResult.details.name",
                     "StringEquals": "rejected",
-                    "Next": "FailCuration"
-                }
+                    "Next": "FailCuration",
+                },
             ],
-            "Default": "ExceptionState"
+            "Default": "ExceptionState",
         },
-
         "FailCuration": {
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Submission Rejected",
-                "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the publication process. The curator gave the following reason: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`"
+                "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the publication process. The curator gave the following reason: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`",
             },
             "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd"
+            "Next": "NotifyUserEnd",
         },
-
     }
 
 
@@ -259,13 +303,9 @@ def mint_doi_steps():
             "Comment": "Checks whether flow needs to mint a DOI",
             "Type": "Choice",
             "Choices": [
-                {
-                    "Variable": "$.mint_doi",
-                    "BooleanEquals": True,
-                    "Next": "MintDOI"
-                }
+                {"Variable": "$.mint_doi", "BooleanEquals": True, "Next": "MintDOI"}
             ],
-            "Default": "SearchIngest"
+            "Default": "SearchIngest",
         },
         "MintDOI": {
             "Type": "Action",
@@ -285,22 +325,19 @@ def mint_doi_steps():
                         "titles.$": "$.dataset_mdata.dc.titles",
                         "publisher.$": "$.dataset_mdata.dc.publisher",
                         "publicationYear.$": "$.dataset_mdata.dc.publicationYear",
-                        "url.$": "$.mdf_portal_link"
-                    }
+                        "url.$": "$.mdf_portal_link",
+                    },
                 },
-                "__Private_Parameters": [
-                    "username",
-                    "password"
-                ]
+                "__Private_Parameters": ["username", "password"],
             },
-            "Next": "AddDoiToSearchRecord"
+            "Next": "AddDoiToSearchRecord",
         },
         "AddDoiToSearchRecord": {
             "Type": "ExpressionEval",
             "ResultPath": "$.dataset_mdata.dc.identifier",
             "Parameters": {
                 "identifierType": "DOI",
-                "identifier.$": "$.DoiResult.details.data.attributes.doi"
+                "identifier.$": "$.DoiResult.details.data.attributes.doi",
             },
             "Next": "SearchIngest",
         },
@@ -318,12 +355,10 @@ def search_ingest_steps():
             "Parameters": {
                 "search_index.$": "$.search_index",
                 "subject.$": "$.dataset_mdata.mdf.versioned_source_id",
-                "visible_to": [
-                    "public"
-                ],
-                "content.$": "$.dataset_mdata"
+                "visible_to": ["public"],
+                "content.$": "$.dataset_mdata",
             },
-            "Next": "SubmissionSuccess"
+            "Next": "SubmissionSuccess",
         },
     }
 
@@ -338,10 +373,10 @@ def notify_user_steps(sender_email):
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "Dataset Accepted for Publication in the Materials Data Facility",
-                "message.=": "'Publication succeeded! Your publication (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`"
+                "message.=": "'Publication succeeded! Your publication (' + `$.dataset_mdata.mdf.source_id`+ ') can be viewed at this link: ' + `$.mdf_portal_link`",
             },
             "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd"
+            "Next": "NotifyUserEnd",
         },
         "NotifyUserEnd": {
             "Type": "Action",
@@ -356,16 +391,14 @@ def notify_user_steps(sender_email):
                     {
                         "credential_method": "email",
                         "credential_type": "ses",
-                        "credential_value.$": "$._private_email_credentials"
+                        "credential_value.$": "$._private_email_credentials",
                     }
                 ],
-                "__Private_Parameters": [
-                    "send_credentials"
-                ]
+                "__Private_Parameters": ["send_credentials"],
             },
             "ResultPath": "$.NotifyUserResult",
             "WaitTime": 86400,
-            "Next": "EndSubmission"
+            "Next": "EndSubmission",
         },
     }
 
@@ -374,7 +407,7 @@ def exception_state(sender_email):
     """
     Handle any general exceptions that occur as a result of the flow
     """
-    return{
+    return {
         "ExceptionState": {
             "Type": "Action",
             "ActionUrl": "https://actions.globus.org/notification/notify",
@@ -385,28 +418,31 @@ def exception_state(sender_email):
                 "destination.$": "$.submitting_user_email",
                 "subject": "Submission Failed to Ingest",
                 "body_template.=": "'Submission ' + `$.source_id` + ' fatally errored processing in Flow '+ `$._context.action_id` + '. Please review the Flow log for details about this exception.'",
-
                 "notification_method": "any",
                 "notification_priority": "high",
                 "send_credentials": [
                     {
                         "credential_method": "email",
                         "credential_type": "ses",
-                        "credential_value.$": "$._private_email_credentials"
+                        "credential_value.$": "$._private_email_credentials",
                     }
                 ],
-                "__Private_Parameters": [
-                    "send_credentials"
-                ]
+                "__Private_Parameters": ["send_credentials"],
             },
             "ResultPath": "$.ExceptionNotifyResult",
             "WaitTime": 86400,
-            "Next": "NotifyUserEnd"
+            "Next": "NotifyUserEnd",
         },
     }
 
 
-def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered_by, description=""):
+def flow_def(
+    sender_email,
+    admin_email,
+    flow_permissions,
+    administered_by,
+    description="",
+):
     return GlobusAutomateFlowDef(
         title="MDF Ingest Flow",
         subtitle="Ingest Materials Data Facility Submissions",
@@ -415,25 +451,19 @@ def flow_def(smtp_send_credentials, sender_email, flow_permissions, administered
         runnable_by=flow_permissions,
         administered_by=administered_by,
         input_schema={},
-
         flow_definition={
             "StartAt": "StartSubmission",
             "States": {
-                "StartSubmission": {
-                    "Type": "Pass",
-                    "Next": "Check Metadata Only"
-                },
+                "StartSubmission": {"Type": "Pass", "Next": "EmailSubmission"},
+                **email_submission_to_admin(sender_email, admin_email),
                 **check_update_metadata_only(),
                 **file_transfer_steps(),
-                **curation_steps(sender_email),
+                **curation_steps(sender_email, admin_email),
                 **mint_doi_steps(),
                 **search_ingest_steps(),
                 **notify_user_steps(sender_email),
                 **exception_state(sender_email),
-
-                "EndSubmission": {
-                    "Type": "Pass",
-                    "End": True
-                }
-            }
-        })
+                "EndSubmission": {"Type": "Pass", "End": True},
+            },
+        },
+    )
