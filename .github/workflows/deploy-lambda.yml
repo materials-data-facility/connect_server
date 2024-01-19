@@ -43,8 +43,10 @@ jobs:
         pip install --upgrade setuptools
         pip list
     - name: Check for vulnerabilities in libraries
+      # Safety is a tool that checks your installed dependencies for known security vulnerabilities.
+      # The free version stopped working with 3.0
       run: |
-        pip install safety
+        pip install safety==2.3.5
         pip freeze | safety check
 
     - name: Test with pytest
