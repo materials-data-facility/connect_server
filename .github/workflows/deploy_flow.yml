@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip wheel
-          pip install globus-sdk==3.28.0 mdf_toolbox==0.6.0
+          pip install globus-sdk==3.28.0 mdf_toolbox==0.7.0-rc.1
           pip list
 
       - name: Set env
