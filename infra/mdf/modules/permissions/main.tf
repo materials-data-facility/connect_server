@@ -20,6 +20,7 @@ resource "aws_iam_role" "lambda_execution_role" {
 data "aws_iam_policy_document" "lambda_logging_role_policy" {
   statement {
     actions = [
+      "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
