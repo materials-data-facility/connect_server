@@ -15,6 +15,7 @@ Untitled*.ipynb
 */dist/*
 *.egg*
 src/*
+.venv
 
 *.coverage*
 *.pytest_cache*
