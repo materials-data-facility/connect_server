@@ -71,7 +71,7 @@ def lambda_handler(event, context):
             'body': json.dumps(
                 {
                     "success": False,
-                    "error": "User must be a member of the required group: " + user_groups[required_group_membership]['name']
+                    "error": "User must be a member of the required group: " + required_group_membership
                 })
         }
 

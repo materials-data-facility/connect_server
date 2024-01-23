@@ -47,6 +47,7 @@ def authenticated_with_globus(mocker):
     os.environ['FLOW_SCOPE'] = 'flow-scope-1'
     os.environ['MDF_SECRETS_NAME'] = 'mdf-secrets'
     os.environ['MDF_AWS_REGION'] = 'us-east-1'
+    os.environ['REQUIRED_GROUP_MEMBERSHIP'] = '123-45-6789-123'
 
     environment = {
         'dynamo_manager': dynamo_manager,
@@ -57,7 +58,8 @@ def authenticated_with_globus(mocker):
             'principalId': 'principal@foo.com',
             'name': 'Bob Dobolina',
             'globus_dependent_token': "{'0c7ee169-cefc-4a23-81e1-dc323307c863': '12sdfkj23-8j'}",
-            'user_email': 'test@foo.com'
+            'user_email': 'test@foo.com',
+            'group_info': "{'123-45-6789-123': {'name': 'my-group', 'description': 'my-group-description'}}"
         }
     }
     return environment
