@@ -5,66 +5,93 @@ import boto3
 import json
 from utils import get_secret
 
-def generate_policy(principalId, effect, resource, message="", name=None, identities=[],
-                    user_id=None, dependent_token=None, user_email=None):
+
+def generate_policy(
+    principalId,
+    effect,
+    resource,
+    message="",
+    name=None,
+    identities=[],
+    user_id=None,
+    dependent_token=None,
+    user_email=None,
+):
     authResponse = {}
-    authResponse['principalId'] = principalId
+    authResponse["principalId"] = principalId
     if effect and resource:
         policyDocument = {}
-        policyDocument['Version'] = '2012-10-17'
-        policyDocument['Statement'] = [
-            {'Action': 'execute-api:Invoke',
-             'Effect': effect,
-             'Resource': resource
-             }
+        policyDocument["Version"] = "2012-10-17"
+        policyDocument["Statement"] = [
+            {"Action": "execute-api:Invoke", "Effect": effect, "Resource": resource}
         ]
-    authResponse['policyDocument'] = policyDocument
-    authResponse['context'] = {
-        'name': name,
-        'user_id': user_id,
-        'identities': str(identities),
-        'globus_dependent_token': str(dependent_token),
-        'user_email': user_email,
-        'message': message
+    authResponse["policyDocument"] = policyDocument
+    authResponse["context"] = {
+        "name": name,
+        "user_id": user_id,
+        "identities": str(identities),
+        "globus_dependent_token": str(dependent_token),
+        "user_email": user_email,
+        "message": message,
     }
     print("AuthResponse", authResponse)
     return authResponse
 
 
 def lambda_handler(event, context):
-    globus_secrets = get_secret(secret_name=os.environ['MDF_SECRETS_NAME'],
-                                region_name=os.environ['MDF_AWS_REGION'])
+    globus_secrets = get_secret(
+        secret_name=os.environ["MDF_SECRETS_NAME"],
+        region_name=os.environ["MDF_AWS_REGION"],
+    )
 
-    #Have to log the event to see why methodArn isn't appearing
+    # Have to log the event to see why methodArn isn't appearing
     print(json.dumps(event))
 
     auth_client = globus_sdk.ConfidentialAppAuthClient(
-        globus_secrets['API_CLIENT_ID'], globus_secrets['API_CLIENT_SECRET'])
+        globus_secrets["API_CLIENT_ID"], globus_secrets["API_CLIENT_SECRET"]
+    )
 
-    token = event['headers']['authorization'].replace("Bearer ", "")
+    cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(
+        auth_client, globus_sdk.GroupsClient.scopes.all
+    )
+
+    groups_client = globus_sdk.GroupsClient(authorizer=cc_authorizer)
+    groups = groups_client.get_my_groups()
+    print(f"groups {groups}")
+
+    token = event["headers"]["authorization"].replace("Bearer ", "")
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
     try:
-        dependent_token = auth_client.oauth2_get_dependent_tokens(token).by_resource_server
+        dependent_token = auth_client.oauth2_get_dependent_tokens(
+            token
+        ).by_resource_server
         print("Dependent token ", dependent_token)
 
         if not auth_res:
-            return generate_policy(None, 'Deny', event['routeArn'],
-                                   message='User not found')
+            return generate_policy(
+                None, "Deny", event["routeArn"], message="User not found"
+            )
 
-        if not auth_res['active']:
-            return generate_policy(None, 'Deny', event['routeArn'],
-                                   message='User account not active')
+        if not auth_res["active"]:
+            return generate_policy(
+                None, "Deny", event["routeArn"], message="User account not active"
+            )
 
         print("auth_res", auth_res)
         user_email = auth_res.get("email", "nobody@nowhere.com")
 
-        return generate_policy(auth_res['username'], 'Allow', event['routeArn'],
-                               name=auth_res["name"],
-                               identities=auth_res["identities_set"],
-                               user_id=auth_res['sub'],
-                               dependent_token=dependent_token,
-                               user_email=user_email)
+        return generate_policy(
+            auth_res["username"],
+            "Allow",
+            event["routeArn"],
+            name=auth_res["name"],
+            identities=auth_res["identities_set"],
+            user_id=auth_res["sub"],
+            dependent_token=dependent_token,
+            user_email=user_email,
+        )
     except:
-        return generate_policy(None, 'Deny', event['routeArn'],
-                               message='Invalid auth token')
+        return generate_policy(
+            None, "Deny", event["routeArn"], message="Invalid auth token"
+        )
