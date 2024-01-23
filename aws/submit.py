@@ -51,15 +51,29 @@ def lambda_handler(event, context):
     print("name ", name, "identities", identities)
     print("globus_dependent_token ", globus_dependent_token)
 
+    user_groups = eval(event['requestContext']['authorizer']['group_info'])
+    print("user_groups ", user_groups)
+
     run_as_scope = os.environ["RUN_AS_SCOPE"]
     monitor_by_group = os.environ['MONITOR_BY_GROUP']
     search_index_uuid = os.environ['SEARCH_INDEX_UUID']
     test_search_index_uuid = os.environ['TEST_SEARCH_INDEX_UUID']
+    required_group_membership = os.environ['REQUIRED_GROUP_MEMBERSHIP']
 
     access_token = event['headers']['authorization']
 
     dynamo_manager = DynamoManager()
     sourceid_manager = SourceIDManager()
+
+    if required_group_membership and required_group_membership not in user_groups:
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "User must be a member of the required group: " + user_groups[required_group_membership]['name']
+                })
+        }
 
     try:
         metadata = json.loads(event['body'], )
