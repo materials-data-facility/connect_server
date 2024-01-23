@@ -1,22 +1,15 @@
 import os
 
 import globus_sdk
-import boto3
 import json
 from utils import get_secret
 
 
-def generate_policy(
-    principalId,
-    effect,
-    resource,
-    message="",
-    name=None,
-    identities=[],
-    user_id=None,
-    dependent_token=None,
-    user_email=None,
-):
+def generate_policy(principalId, effect, resource, message="", name=None, identities=[],
+                    user_id=None, dependent_token=None, user_email=None,
+                    group_info=None):
+    if group_info is None:
+        group_info = {}
     authResponse = {}
     authResponse["principalId"] = principalId
     if effect and resource:
@@ -33,6 +26,7 @@ def generate_policy(
         "globus_dependent_token": str(dependent_token),
         "user_email": user_email,
         "message": message,
+        "group_info": str(group_info),
     }
     print("AuthResponse", authResponse)
     return authResponse
@@ -51,14 +45,6 @@ def lambda_handler(event, context):
         globus_secrets["API_CLIENT_ID"], globus_secrets["API_CLIENT_SECRET"]
     )
 
-    cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(
-        auth_client, globus_sdk.GroupsClient.scopes.all
-    )
-
-    groups_client = globus_sdk.GroupsClient(authorizer=cc_authorizer)
-    groups = groups_client.get_my_groups()
-    print(f"groups {groups}")
-
     token = event["headers"]["authorization"].replace("Bearer ", "")
 
     auth_res = auth_client.oauth2_token_introspect(token, include="identities_set")
@@ -66,17 +52,20 @@ def lambda_handler(event, context):
         dependent_token = auth_client.oauth2_get_dependent_tokens(
             token
         ).by_resource_server
-        print("Dependent token ", dependent_token)
+        print("Dependent tokens ", dependent_token)
+
+        groups_client = globus_sdk.GroupsClient(authorizer=globus_sdk.AccessTokenAuthorizer(dependent_token['groups.api.globus.org']["access_token"]))
+        groups = groups_client.get_my_groups()
+        group_info = {group["id"]: {"name": group["name"], "description": group["description"]} for group in groups}
+        print("Group info ", group_info)
 
         if not auth_res:
-            return generate_policy(
-                None, "Deny", event["routeArn"], message="User not found"
-            )
+            return generate_policy(None, "Deny", event["routeArn"],
+                                   message="User not found")
 
         if not auth_res["active"]:
-            return generate_policy(
-                None, "Deny", event["routeArn"], message="User account not active"
-            )
+            return generate_policy(None, "Deny", event["routeArn"],
+                                   message="User account not active")
 
         print("auth_res", auth_res)
         user_email = auth_res.get("email", "nobody@nowhere.com")
@@ -90,8 +79,8 @@ def lambda_handler(event, context):
             user_id=auth_res["sub"],
             dependent_token=dependent_token,
             user_email=user_email,
+            group_info=group_info,
         )
     except:
-        return generate_policy(
-            None, "Deny", event["routeArn"], message="Invalid auth token"
-        )
+        return generate_policy(None, "Deny", event["routeArn"],
+                               message="Invalid auth token")
