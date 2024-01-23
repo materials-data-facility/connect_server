@@ -283,30 +283,6 @@ def lambda_handler(event, context):
     # if new_custom:
     #     metadata["custom"] = new_custom
 
-    ### Move this to the start of the operation
-    # @Ben Or make this its own function that checks auth status against a group ID
-    # Check that user is in appropriate org group(s), if applicable
-    if submission_conf.get("permission_groups"):
-        for group_uuid in submission_conf["permission_groups"]:
-            try:
-                group_res = sourceid_manager.authenticate_token(access_token, group_uuid)
-            except Exception as e:
-                logger.error("Authentication failure: {}".format(repr(e)))
-                return {
-                    'statusCode': 500,
-                    'body': json.dumps(
-                        {
-                            "success": False,
-                            "error": "Authentication failed"
-                        })
-                }
-
-            if not group_res["success"]:
-                error_code = group_res.pop("error_code")
-                return {
-                    'statusCode': error_code,
-                    'body': json.dumps(group_res)
-                }
 
     status_info = {
         "source_id": source_name,
