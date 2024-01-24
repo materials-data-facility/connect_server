@@ -36,6 +36,7 @@ variable "env_vars" {
         TEST_SEARCH_INDEX_UUID="ab71134d-0b36-473d-aa7e-7b19b2124c88"
         FLOW_ID="0c7ee169-cefc-4a23-81e1-dc323307c863"
         FLOW_SCOPE= "https://auth.globus.org/scopes/0c7ee169-cefc-4a23-81e1-dc323307c863/flow_0c7ee169_cefc_4a23_81e1_dc323307c863_user"
+        REQUIRED_GROUP_MEMBERSHIP="cc192dca-3751-11e8-90c1-0a7c735d220a"
         }
 }
 

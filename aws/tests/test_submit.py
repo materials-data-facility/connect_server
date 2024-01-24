@@ -40,6 +40,10 @@ def test_update_metadata_only():
 def test_mint_doi():
     pass
 
+@scenario('submit_dataset.feature', 'Attempt to submit when not member of globus group')
+def test_not_member_of_globus_group():
+    pass
+
 @given('I have an update to another users record', target_fixture='mdf_submission')
 def mdf_other_user_datset(mdf, mdf_environment, mocker):
     mdf.set_source_name("my dataset")
@@ -53,6 +57,10 @@ def mdf_other_user_datset(mdf, mdf_environment, mocker):
 
     return mdf.get_submission()
 
+@given("I'm not a member of the MDF globus group", target_fixture='mdf_environment')
+def not_member_of_globus_group(mdf_environment):
+    mdf_environment['authorizer']['group_info'] = "{}"
+    return mdf_environment
 
 @given('I have an update for an existing dataset', target_fixture='mdf_submission')
 def mdf_other_user_datset(mdf, mdf_environment, mocker):
@@ -248,3 +256,5 @@ def verify_test_source_id(mdf_environment):
     assert dynamo_record['source_id'] == mdf_environment['source_id']+"-test"
     assert dynamo_record['action_id'] == 'action-id-1'
     return dynamo_record
+
+

@@ -51,15 +51,29 @@ def lambda_handler(event, context):
     print("name ", name, "identities", identities)
     print("globus_dependent_token ", globus_dependent_token)
 
+    user_groups = eval(event['requestContext']['authorizer']['group_info'])
+    print("user_groups ", user_groups)
+
     run_as_scope = os.environ["RUN_AS_SCOPE"]
     monitor_by_group = os.environ['MONITOR_BY_GROUP']
     search_index_uuid = os.environ['SEARCH_INDEX_UUID']
     test_search_index_uuid = os.environ['TEST_SEARCH_INDEX_UUID']
+    required_group_membership = os.environ['REQUIRED_GROUP_MEMBERSHIP']
 
     access_token = event['headers']['authorization']
 
     dynamo_manager = DynamoManager()
     sourceid_manager = SourceIDManager()
+
+    if required_group_membership and required_group_membership not in user_groups:
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": "User must be a member of the required group: " + required_group_membership
+                })
+        }
 
     try:
         metadata = json.loads(event['body'], )
@@ -269,30 +283,6 @@ def lambda_handler(event, context):
     # if new_custom:
     #     metadata["custom"] = new_custom
 
-    ### Move this to the start of the operation
-    # @Ben Or make this its own function that checks auth status against a group ID
-    # Check that user is in appropriate org group(s), if applicable
-    if submission_conf.get("permission_groups"):
-        for group_uuid in submission_conf["permission_groups"]:
-            try:
-                group_res = sourceid_manager.authenticate_token(access_token, group_uuid)
-            except Exception as e:
-                logger.error("Authentication failure: {}".format(repr(e)))
-                return {
-                    'statusCode': 500,
-                    'body': json.dumps(
-                        {
-                            "success": False,
-                            "error": "Authentication failed"
-                        })
-                }
-
-            if not group_res["success"]:
-                error_code = group_res.pop("error_code")
-                return {
-                    'statusCode': error_code,
-                    'body': json.dumps(group_res)
-                }
 
     status_info = {
         "source_id": source_name,

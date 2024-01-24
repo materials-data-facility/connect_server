@@ -38,6 +38,13 @@ Feature: Submit Dataset
         And I should receive a success result with test source-id, the generated uuid and version 1.0
 
 
+    Scenario: Attempt to submit when not member of globus group
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit
+        And I'm not a member of the MDF globus group
+        When I submit the dataset
+        Then I should receive a failure result
+
     Scenario: Attempt to update another users record
         Given I'm authenticated with MDF
         And I have an update to another users record
