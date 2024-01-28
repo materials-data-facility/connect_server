@@ -96,6 +96,7 @@ class TestAutomateManager:
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
         assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/1.0.1/'
+        assert result['transfer_items'][0]['dataset_path'] == '/mdf_open/myTestDataset/'
         print(result)
 
 
