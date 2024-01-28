@@ -93,10 +93,11 @@ class TestAutomateManager:
         assert result['destination_endpoint_id'] == '82f1b5c6-6e9b-11e5-ba47-22000b92c6ec'
         assert result['source_endpoint_id'] == 'e38ee745-6d04-11e5-ba46-22000b92c6ec'
         assert result['submitting-user-id'] == '12-33-55'
+        assert result['dataset_path'] == '/mdf_open/myTestDataset/'
+
         assert len(result['transfer_items']) == 1
         assert result['transfer_items'][0]['source_path'] == '/MDF/mdf_connect/test_files/canonical_datasets/dft/'
         assert result['transfer_items'][0]['destination_path'] == '/mdf_open/myTestDataset/1.0.1/'
-        assert result['transfer_items'][0]['dataset_path'] == '/mdf_open/myTestDataset/'
         print(result)
 
 

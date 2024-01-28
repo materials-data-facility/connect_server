@@ -177,6 +177,7 @@ class AutomateManager:
                                 "label": "MDF Flow Test Transfer1",
                                 "source_endpoint_id": None,
                                 "submitting-user-id": submitting_user_id,
+                                "dataset_path": destination_parsed.path+source_id+"/",
                                 "transfer_items": []
                                 }
 
@@ -214,7 +215,6 @@ class AutomateManager:
                                 "All datasets must come from the same globus endpoint")
                     user_transfer_inputs['transfer_items'].append(
                         {
-                            "dataset_path": destination_parsed.path+source_id+"/",
                             "destination_path": destination_parsed.path+source_id+"/"+version+"/",
                             "recursive": True,
                             "source_path": transfer_params['origin_path'][0]
