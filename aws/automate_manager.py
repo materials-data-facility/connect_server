@@ -127,6 +127,7 @@ class AutomateManager:
                 test_submit=is_test
             ),
             "search_index": search_index_uuid,
+            "creators_list": ", ".join([creator['creatorName'] for creator in mdf_rec["dc"]["creators"]]),
             # @Ben group_by_dir This will be an XTract flow option
             "group_by_dir": True,
             "dataset_mdata": mdf_rec,
@@ -177,6 +178,7 @@ class AutomateManager:
                                 "label": "MDF Flow Test Transfer1",
                                 "source_endpoint_id": None,
                                 "submitting-user-id": submitting_user_id,
+                                "dataset_path": destination_parsed.path+source_id+"/",
                                 "transfer_items": []
                                 }
 

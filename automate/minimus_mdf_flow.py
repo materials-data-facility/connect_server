@@ -45,10 +45,9 @@ def email_submission_to_admin(sender_email, admin_email):
                 "__Private_Parameters": ["send_credentials"],
             },
             "ResultPath": "$.EmailSubmissionResult",
-            "Next": "Check Metadata Only"
-            },
-        }
-
+            "Next": "Check Metadata Only",
+        },
+    }
 
 
 def check_update_metadata_only():
@@ -63,7 +62,7 @@ def check_update_metadata_only():
                     "Next": "ChooseCuration",
                 }
             ],
-            "Default": "CreateDestinationDir",
+            "Default": "CreateDatasetDir",
         }
     }
 
@@ -77,11 +76,23 @@ def file_transfer_steps():
         * Remove the temporary write permission
     """
     return {
-        "CreateDestinationDir": {
-            "Comment": "Create a destination directory for the transfered data",
+        "CreateDatasetDir": {
+            "Comment": "Insure the dataset directory exists before attempting to create the version subdirectory",
             "Type": "Action",
             "ActionUrl": "https://actions.globus.org/transfer/mkdir",
             "ExceptionOnActionFailure": False,
+            "Parameters": {
+                "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                "path.$": "$.user_transfer_inputs.dataset_path",
+            },
+            "ResultPath": "$.CreateDatasetDirResult",
+            "Next": "CreateDestinationDir",
+        },
+        "CreateDestinationDir": {
+            "Comment": "Create a destination directory for the transferred data",
+            "Type": "Action",
+            "ActionUrl": "https://actions.globus.org/transfer/mkdir",
+            "ExceptionOnActionFailure": True,
             "Parameters": {
                 "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
                 "path.$": "$.user_transfer_inputs.transfer_items[0].destination_path",
@@ -89,8 +100,13 @@ def file_transfer_steps():
             "ResultPath": "$.CreateDestinationDirResult",
             "Catch": [
                 {
-                    "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission",
+                    "ErrorEquals": [
+                        "ActionFailedException",
+                        "States.Runtime",
+                        "EndpointError",
+                    ],
+                    "ResultPath": "$.CreateDestinationDirResult",
+                    "Next": "ExceptionState",
                 }
             ],
             "Next": "UserPermissions",
@@ -111,8 +127,13 @@ def file_transfer_steps():
             "ResultPath": "$.UserPermissionResult",
             "Catch": [
                 {
-                    "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission",
+                    "ErrorEquals": [
+                        "ActionFailedException",
+                        "States.Runtime",
+                        "EndpointError",
+                    ],
+                    "ResultPath": "$.UserPermissionResult",
+                    "Next": "ExceptionState",
                 }
             ],
             "Next": "UserTransfer",
@@ -145,8 +166,13 @@ def file_transfer_steps():
             "ResultPath": "$.UndoUserPermissionResult",
             "Catch": [
                 {
-                    "ErrorEquals": ["ActionFailedException", "States.Runtime"],
-                    "Next": "FailUserPermission",
+                    "ErrorEquals": [
+                        "ActionFailedException",
+                        "States.Runtime",
+                        "EndpointError",
+                    ],
+                    "ResultPath": "$.UndoUserPermissionResult",
+                    "Next": "ExceptionState",
                 }
             ],
             "Next": "CheckUserTransfer",
@@ -160,25 +186,7 @@ def file_transfer_steps():
                     "Next": "ChooseCuration",
                 }
             ],
-            "Default": "FailUserTransfer",
-        },
-        "FailUserTransfer": {
-            "Type": "ExpressionEval",
-            "Parameters": {
-                "title": "MDF Submission Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed during transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserTransferResult.details`",
-            },
-            "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd",
-        },
-        "FailUserPermission": {
-            "Type": "ExpressionEval",
-            "Parameters": {
-                "title": "MDF Permission Settings Failed",
-                "message.=": "'Your MDF submission ' + `$.source_id` + ' failed to transfer, please try again or contact materialsdatafacility@uchicago.edu:\n' + `$.UserPermissionResult.details`",
-            },
-            "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd",
+            "Default": "ExceptionState",
         },
     }
 
@@ -283,10 +291,10 @@ def curation_steps(sender_email, admin_email):
             "Type": "ExpressionEval",
             "Parameters": {
                 "title": "MDF Submission Rejected",
-                "message.=": "'Your submission (' + `$.source_id` + ') was rejected by a curator and did not complete the publication process. The curator gave the following reason: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`",
+                "message.=": "'Your submission (' + `$.dataset_mdata.mdf.versioned_source_id` + ') was rejected by a curator and did not complete the publication process. The curator gave the following reason: '+ `$.CurateResult.details.output.CurationResult.details.parameters.user_input`",
             },
             "ResultPath": "$.FinalState",
-            "Next": "NotifyUserEnd",
+            "Next": "ExceptionState",
         },
     }
 
@@ -363,7 +371,7 @@ def search_ingest_steps():
     }
 
 
-def notify_user_steps(sender_email):
+def notify_user_steps(sender_email, email_template):
     """
     Check on the final status of the submission and notify the submitting user as
     appropriate
@@ -383,10 +391,18 @@ def notify_user_steps(sender_email):
             "ActionUrl": action_providers.notify,
             "ExceptionOnActionFailure": True,
             "Parameters": {
-                "body_template.$": "$.FinalState.message",
+                "body_mimetype": "text/html",
+                "body_template": email_template,
+                "body_variables": {
+                    "greeting.$": "$.dataset_mdata.dc.creators[0].givenName",
+                    "contributors.$": "$.creators_list",
+                    "title.$": "$.dataset_mdata.dc.titles[0].title",
+                    "year.$": "$.dataset_mdata.dc.publicationYear",
+                    "doi.$": "$.dataset_mdata.dc.identifier.identifier"
+                },
                 "destination.$": "$.submitting_user_email",
                 "sender": sender_email,
-                "subject.$": "$.FinalState.title",
+                "subject": "Dataset Accepted for Publication in the Materials Data Facility",
                 "send_credentials": [
                     {
                         "credential_method": "email",
@@ -417,7 +433,16 @@ def exception_state(sender_email):
                 "sender": sender_email,
                 "destination.$": "$.submitting_user_email",
                 "subject": "Submission Failed to Ingest",
-                "body_template.=": "'Submission ' + `$.source_id` + ' fatally errored processing in Flow '+ `$._context.action_id` + '. Please review the Flow log for details about this exception.'",
+                "body_template": """
+                <html><h1>Submission Failed to Ingest</h1>
+                    "Submission: $source_id received a fatal error while processing flow.
+                     Please review the <a href="https://app.globus.org/runs/$flow_log_link/logs"> Flow log </a> for details about this exception.
+                     </html>
+                """,
+                "body_variables": {
+                    "source_id.$": "$.dataset_mdata.mdf.source_id",
+                    "flow_log_link.$": "$._context.run_id",
+                },
                 "notification_method": "any",
                 "notification_priority": "high",
                 "send_credentials": [
@@ -431,7 +456,7 @@ def exception_state(sender_email):
             },
             "ResultPath": "$.ExceptionNotifyResult",
             "WaitTime": 86400,
-            "Next": "NotifyUserEnd",
+            "Next": "EndSubmission",
         },
     }
 
@@ -443,6 +468,11 @@ def flow_def(
     administered_by,
     description="",
 ):
+    # The success email is a nicely formatted html message. Read that from this file to make format testing easier
+    with open("success_email_template.html", "r") as f:
+        email_template = f.read()
+
+
     return GlobusAutomateFlowDef(
         title="MDF Ingest Flow",
         subtitle="Ingest Materials Data Facility Submissions",
@@ -461,7 +491,7 @@ def flow_def(
                 **curation_steps(sender_email, admin_email),
                 **mint_doi_steps(),
                 **search_ingest_steps(),
-                **notify_user_steps(sender_email),
+                **notify_user_steps(sender_email, email_template),
                 **exception_state(sender_email),
                 "EndSubmission": {"Type": "Pass", "End": True},
             },
