@@ -22,3 +22,8 @@ variable "dynamodb_write_capacity" {
   type = number
   description = "The write capacity for the DynamoDB table."
 }
+
+variable "dynamodb_read_capacity" {
+  type = number
+  description = "The read capacity for the DynamoDB table."
+}
