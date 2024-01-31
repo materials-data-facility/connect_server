@@ -394,7 +394,6 @@ def notify_user_steps(sender_email, email_template):
                 "body_mimetype": "text/html",
                 "body_template": email_template,
                 "body_variables": {
-                    "greeting.$": "$.dataset_mdata.dc.creators[0].givenName",
                     "contributors.$": "$.creators_list",
                     "title.$": "$.dataset_mdata.dc.titles[0].title",
                     "year.$": "$.dataset_mdata.dc.publicationYear",
