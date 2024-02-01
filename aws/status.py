@@ -25,9 +25,12 @@ def lambda_handler(event, context):
 
     print(status_rec)
 
-    print(automate_manager.get_log(status_rec['action_id']))
+    result ={
+        "original_submission": status_rec['original_submission'],
+        "flow_status":automate_manager.get_status(status_rec['action_id'])
+    }
 
     return {
         'statusCode': 200,
-        'body': json.dumps(automate_manager.get_status(status_rec['action_id']))
+        'body': json.dumps(result)
     }
