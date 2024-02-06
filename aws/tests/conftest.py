@@ -49,7 +49,10 @@ def mdf_rec():
                 },
             ],
         },
-        "mdf": {"source_id": "123-456-7890", "version": "1.0.1"},
+        "mdf": {"source_id": "123-456-7890", 
+                "version": "1.0.1", 
+                "versioned_source_id": "123-456-7890-1.0.1"
+                }
     }
 
 

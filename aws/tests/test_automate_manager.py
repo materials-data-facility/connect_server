@@ -198,7 +198,7 @@ class TestAutomateManager:
     
 
     @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
-    def test_mint_doi(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec):
+    def test_mint_doi(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec, set_environ):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
         os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
@@ -227,4 +227,27 @@ class TestAutomateManager:
 
         mock_flow.run_flow.assert_called()
         assert(mock_flow.run_flow.call_args[0][0]['mint_doi'])
+
+    @mock.patch('automate_manager.GlobusAutomateFlow', autospec=True)
+    def test_mdf_portal_link(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec, set_environ):
+        mock_flow = mocker.Mock()
+        mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
+        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        manager = AutomateManager(secrets, is_test=True)
+
+        data_sources = [
+            "https://app.globus.org/file-manager?destination_id=e38ee745-6d04-11e5-ba46-22000b92c6ec&destination_path=%2FMDF%2Fmdf_connect%2Ftest_files%2Fcanonical_datasets%2Fdft%2F"
+        ]
+        user_token = {'access_token': '1234567890'}
+        _ = manager.submit(mdf_rec=mdf_rec, organization=organization_mint_doi,
+                           submitting_user_token=user_token,
+                           submitting_user_id="12-33-55", monitor_by_id=["12-33-55",
+                                                                         "5fc63928-3752-11e8-9c6f-0e00fd09bf20"],
+                           submitting_user_email="foo@bar.com",
+                           search_index_uuid='098-765-4321',
+                           data_sources=data_sources, is_test=False,
+                           update_metadata_only=False)
+
+        mock_flow.run_flow.assert_called()
+        assert(mock_flow.run_flow.call_args[0][0]['mdf_portal_link'] == "https://acdc.alcf.anl.gov/mdf/detail/123-456-7890-1.0.1")
 

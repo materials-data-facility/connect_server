@@ -96,3 +96,10 @@ Feature: Submit Dataset
         And an automate flow started with a true mint DOI flag
         And the data destination should be the Petrel MDF directory
         And I should receive a success result with the generated uuid and version 1.0
+
+
+    Scenario: Submit Dataset with invalid organization
+        Given I'm authenticated with MDF
+        And I have a new MDF dataset to submit for an organization that does not exist
+        When I submit the dataset
+        Then I should receive a failure result
