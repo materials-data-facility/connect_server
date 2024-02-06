@@ -117,7 +117,7 @@ class AutomateManager:
         assert destination_parsed.scheme == 'globus'
 
         automate_rec = {
-            "mdf_portal_link": self.portal_url+mdf_rec["mdf"]["source_id"],
+            "mdf_portal_link": self.portal_url+mdf_rec["mdf"]["versioned_source_id"],
             "user_transfer_inputs": self.create_transfer_items(
                 data_sources=data_sources,
                 organization=organization,
