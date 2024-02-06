@@ -10,7 +10,7 @@ import jsonschema
 
 from automate_manager import AutomateManager
 from dynamo_manager import DynamoManager
-from organization import Organization
+from organization import Organization, OrganizationException
 from source_id_manager import SourceIDManager
 from utils import get_secret
 
@@ -115,13 +115,25 @@ def lambda_handler(event, context):
     print("+++Metadata+++", metadata)
 
     org_cannonical_name = metadata.get("mdf", {}).get("organization", "MDF Open")
+
     # MDF Connect Client needs to only allow one organization. Til then, we just
     # take the first one
     if type(org_cannonical_name) == list:
         org_cannonical_name = org_cannonical_name[0]
 
-    organization = Organization.from_schema_repo(org_cannonical_name)
-    print("######", organization)
+    try:
+        organization = Organization.from_schema_repo(org_cannonical_name)
+        print("######", organization)
+    except OrganizationException as e:
+        return {
+            'statusCode': 400,
+            'body': json.dumps(
+                {
+                    "success": False,
+                    "error": f"Organization: {org_cannonical_name} not found"
+                })
+        }
+
 
     # Validate input JSON
     # resourceType is always going to be Dataset, don't require from user

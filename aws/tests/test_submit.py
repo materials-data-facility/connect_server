@@ -21,6 +21,10 @@ def test_submit():
 def test_update_other_users_record():
     pass
 
+@scenario('submit_dataset.feature', 'Submit Dataset with invalid organization')
+def test_invalid_organization():
+    pass
+
 
 @scenario('submit_dataset.feature', 'Attempt to add a record with an existing source_id')
 def test_add_record_with_existing_source_id():
@@ -105,6 +109,10 @@ def mdf_datset(mdf, mdf_environment, mocker):
 
     return mdf.get_submission()
 
+@given("I have a new MDF dataset to submit for an organization that does not exist", target_fixture='mdf_submission')
+def invalid_org(mdf, mdf_environment):
+    mdf.set_organization("Not A Valid Organization")
+    return mdf.get_submission()
 
 @given('I have a new MDF dataset to submit with a source_id that already exists',
        target_fixture='mdf_submission')
