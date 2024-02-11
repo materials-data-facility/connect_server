@@ -335,6 +335,10 @@ def mint_doi_steps():
                         "publicationYear.$": "$.dataset_mdata.dc.publicationYear",
                         "url.$": "$.mdf_portal_link",
                     },
+                    "event": "publish",
+                    "types": {
+                        "resourceTypeGeneral": "Dataset"
+                    }
                 },
                 "__Private_Parameters": ["username", "password"],
             },
