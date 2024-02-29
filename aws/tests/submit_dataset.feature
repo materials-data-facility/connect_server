@@ -11,7 +11,7 @@ Feature: Submit Dataset
         And the previous_versions field should be empty
         And an automate flow started
         And the data destination should be the Petrel MDF directory
-        And the search subject should be the uuid with the version
+        And a new search record is inserted where the subject is the uuid with the version 1.0
         And I should receive a success result with the generated uuid and version 1.0
 
     Scenario: Submit Dataset With Provided source_id
@@ -66,6 +66,7 @@ Feature: Submit Dataset
         And the dynamo record should be version 1.1
         And the previous_versions field should be ['my dataset-1.0']
         And an automate flow started
+        And a new search record is inserted where the subject is the uuid with the version 1.1
         And I should receive a success result with the generated uuid and version 1.1
 
     Scenario: Update metadata only for a submitted dataset

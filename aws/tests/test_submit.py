@@ -205,10 +205,10 @@ def dyanmo_record_version(version_num, dynamo_record):
 def check_data_dest(automate_record):
     print("Autaomte", automate_record)
 
-@then("the search subject should be the uuid with the version")
-def check_search_index_subject(automate_record):
-    assert automate_record["mdf_rec"]["mdf"]["version"] == '1.0'
-    assert automate_record["mdf_rec"]["mdf"]['versioned_source_id'] == automate_record["mdf_rec"]["mdf"]["source_id"]+"-1.0"
+@then(parsers.parse("a new search record is inserted where the subject is the uuid with the version {version}"))
+def check_search_index_subject(automate_record, version):
+    assert automate_record["mdf_rec"]["mdf"]["version"] == version
+    assert automate_record["mdf_rec"]["mdf"]['versioned_source_id'] == automate_record["mdf_rec"]["mdf"]["source_id"]+"-"+version
 
 @then('an automate flow started that skips the file transfer', target_fixture="automate_record")
 def check_skip_file_transfer(mdf_environment):
