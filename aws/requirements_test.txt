@@ -1,4 +1,0 @@
-pytest
-pytest-bdd
-pytest-mock
-boto3

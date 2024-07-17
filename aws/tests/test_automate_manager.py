@@ -76,7 +76,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items(self, _, secrets, organization, set_environ):
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
@@ -103,7 +103,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_from_origin(self, _, secrets, organization):
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
@@ -126,7 +126,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_from_google_drive(self, _, secrets, organization):
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         os.environ['GDRIVE_EP'] = "f00dfd6c-edf4-4c8b-a4b1-be6ad92a4fbb"
         os.environ['GDRIVE_ROOT'] = "/Shared With Me"
         manager = AutomateManager(secrets, is_test=False)
@@ -151,7 +151,7 @@ class TestAutomateManager:
 
     @mock.patch('globus_automate_flow.GlobusAutomateFlow', autospec=True)
     def test_create_transfer_items_test_submit(self, _, secrets, organization, set_environ):
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=True)
 
         data_sources = [
@@ -177,7 +177,7 @@ class TestAutomateManager:
     def test_update_metadata_only(self, mock_automate, secrets, organization, mocker, mdf_rec):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=False)
 
         data_sources = [
@@ -201,7 +201,7 @@ class TestAutomateManager:
     def test_mint_doi(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec, set_environ):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=False)
         assert manager.datacite_username == "datacite_prod_usrname_1234"
         assert manager.datacite_password == "datacite_prod_passwrd_1234"
@@ -232,7 +232,7 @@ class TestAutomateManager:
     def test_mdf_portal_link(self, mock_automate, secrets, organization_mint_doi, mocker, mdf_rec, set_environ):
         mock_flow = mocker.Mock()
         mock_automate.from_existing_flow = mocker.Mock(return_value=mock_flow)
-        os.environ['PORTAL_URL'] = "https://acdc.alcf.anl.gov/mdf/detail/"
+        os.environ['PORTAL_URL'] = "https://materialsdatafacility.org/detail/"
         manager = AutomateManager(secrets, is_test=True)
 
         data_sources = [
@@ -249,5 +249,5 @@ class TestAutomateManager:
                            update_metadata_only=False)
 
         mock_flow.run_flow.assert_called()
-        assert(mock_flow.run_flow.call_args[0][0]['mdf_portal_link'] == "https://acdc.alcf.anl.gov/mdf/detail/123-456-7890-1.0.1")
+        assert(mock_flow.run_flow.call_args[0][0]['mdf_portal_link'] == "https://materialsdatafacility.org/detail/123-456-7890-1.0.1")
 
