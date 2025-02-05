@@ -114,7 +114,7 @@ def file_transfer_steps():
         "UserPermissions": {
             "Comment": "Temporarily add write permissions for the submitting user",
             "Type": "Action",
-            "ActionUrl": "https://transfer.actions.globus.org/set_permission",
+            "ActionUrl": "https://transfer.actions.globus.org/manage_permission",
             "ExceptionOnActionFailure": False,
             "Parameters": {
                 "operation": "CREATE",
