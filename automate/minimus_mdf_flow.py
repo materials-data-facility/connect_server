@@ -143,7 +143,7 @@ def file_transfer_steps():
             "Type": "Action",
             "ActionUrl": "https://transfer.actions.globus.org/transfer",
             "WaitTime": 86400,
-            "RunAs": "SubmittingUser",
+            "RunAs": "SubmittingUserV2",
             "Parameters": {
                 "source_endpoint.$": "$.user_transfer_inputs.source_endpoint_id",
                 "destination_endpoint.$": "$.user_transfer_inputs.destination_endpoint_id",

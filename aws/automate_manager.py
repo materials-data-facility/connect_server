@@ -148,7 +148,7 @@ class AutomateManager:
             "datacite_prefix": self.datacite_prefix,
             "datacite_as_test": is_test,
             "_tokens": {
-                'SubmittingUser': submitting_user_token['access_token']
+                'SubmittingUserV2': submitting_user_token['access_token']
             }
         }
 
