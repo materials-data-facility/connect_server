@@ -75,6 +75,7 @@ respectively. The flow ID is stored in the `flow_id` key.
 You can verify deployment of the flows in the 
 [Globus Automate Console](https://app.globus.org/flows/library).
 
+
 ## Deploy the MDF Connect Service
 The MDF Connect service is deployed via a GitHub action. The action is triggered
 by a push to the dev or main branch. The action will deploy the service to the
@@ -86,6 +87,11 @@ of the [Data Schemas Repo](https://github.com/materials-data-facility/data-schem
 
 The schema is deployed into the docker images used to serve up the lambda 
 functions. 
+
+## Reviewing Logs
+- [Dev Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Flambda$252FMDF-Connect2-submit-dev/log-events/)
+- [Prod Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Flambda$252FMDF-Connect2-submit-prod/log-events/)
+
 
 # Running Tests
 To run the tests first make sure that you are running python 3.7.10. Then install the dependencies:
