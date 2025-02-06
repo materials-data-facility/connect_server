@@ -64,12 +64,12 @@ print(mdf_flow)
 mdf_flow.save_flow("mdf_flow_info.prod.json")
 
 print("MDF Flow deployed", mdf_flow)
-submitting_user_scope_id = mdf_flow.get_scope_id_for_runAs_role("SubmittingUser")[
+submitting_user_scope_id = mdf_flow.get_scope_id_for_runAs_role("SubmittingUserV2")[
     "scopes"
 ][0]["id"]
 print(f"RunAs Dependent scope ID = {submitting_user_scope_id}")
 
-submitting_user_scope_uri = mdf_flow.get_scope_uri_for_runAs_role("SubmittingUser")
+submitting_user_scope_uri = mdf_flow.get_scope_uri_for_runAs_role("SubmittingUserV2")
 print(
     f"RunAs Dependent Scope URI (will appear in the dict of dependent scopes in the authorizer) = {submitting_user_scope_uri}"
 )
