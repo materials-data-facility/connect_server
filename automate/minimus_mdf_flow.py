@@ -79,7 +79,7 @@ def file_transfer_steps():
         "CreateDatasetDir": {
             "Comment": "Insure the dataset directory exists before attempting to create the version subdirectory",
             "Type": "Action",
-            "ActionUrl": "https://actions.globus.org/transfer/mkdir",
+            "ActionUrl": "https://transfer.actions.globus.org/mkdir",
             "ExceptionOnActionFailure": False,
             "Parameters": {
                 "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
@@ -91,7 +91,7 @@ def file_transfer_steps():
         "CreateDestinationDir": {
             "Comment": "Create a destination directory for the transferred data",
             "Type": "Action",
-            "ActionUrl": "https://actions.globus.org/transfer/mkdir",
+            "ActionUrl": "https://transfer.actions.globus.org/mkdir",
             "ExceptionOnActionFailure": True,
             "Parameters": {
                 "endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
@@ -114,7 +114,7 @@ def file_transfer_steps():
         "UserPermissions": {
             "Comment": "Temporarily add write permissions for the submitting user",
             "Type": "Action",
-            "ActionUrl": "https://actions.globus.org/transfer/set_permission",
+            "ActionUrl": "https://transfer.actions.globus.org/manage_permission",
             "ExceptionOnActionFailure": False,
             "Parameters": {
                 "operation": "CREATE",
@@ -141,14 +141,14 @@ def file_transfer_steps():
         "UserTransfer": {
             "Comment": "Copy from user's endpoint to organization's dataset destination",
             "Type": "Action",
-            "ActionUrl": "https://actions.globus.org/transfer/transfer",
+            "ActionUrl": "https://transfer.actions.globus.org/transfer",
             "WaitTime": 86400,
-            "RunAs": "SubmittingUser",
+            "RunAs": "SubmittingUserV2",
             "Parameters": {
-                "source_endpoint_id.$": "$.user_transfer_inputs.source_endpoint_id",
-                "destination_endpoint_id.$": "$.user_transfer_inputs.destination_endpoint_id",
+                "source_endpoint.$": "$.user_transfer_inputs.source_endpoint_id",
+                "destination_endpoint.$": "$.user_transfer_inputs.destination_endpoint_id",
                 "label.$": "$.user_transfer_inputs.label",
-                "transfer_items.$": "$.user_transfer_inputs.transfer_items",
+                "DATA.$": "$.user_transfer_inputs.transfer_items",
             },
             "ResultPath": "$.UserTransferResult",
             "Next": "UndoUserPermissions",
@@ -156,7 +156,7 @@ def file_transfer_steps():
         "UndoUserPermissions": {
             "Comment": "Remove temporary write permissions for the submitting user",
             "Type": "Action",
-            "ActionUrl": "https://actions.globus.org/transfer/set_permission",
+            "ActionUrl": "https://transfer.actions.globus.org/manage_permission",
             "ExceptionOnActionFailure": False,
             "Parameters": {
                 "operation": "DELETE",
