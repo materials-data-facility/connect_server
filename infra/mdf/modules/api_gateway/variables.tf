@@ -44,5 +44,45 @@ variable "submissions_lambda_function_name" {
     type        = string
 }
 
+variable "list_datasets_lambda_invoke_arn" {
+    description = "The invoke ARN of the List Datasets Lambda function"
+    type        = string
+}
+
+variable "list_datasets_lambda_function_name" {
+    description = "The name of the List Datasets Lambda function"
+    type        = string
+}
+
+variable "get_metadata_lambda_invoke_arn" {
+    description = "The invoke ARN of the Get Metadata Lambda function"
+    type        = string
+}
+
+variable "get_metadata_lambda_function_name" {
+    description = "The name of the Get Metadata Lambda function"
+    type        = string
+}
+
+variable "update_metadata_lambda_invoke_arn" {
+    description = "The invoke ARN of the Update Metadata Lambda function"
+    type        = string
+}
+
+variable "update_metadata_lambda_function_name" {
+    description = "The name of the Update Metadata Lambda function"
+    type        = string
+}
+
+variable "get_versions_lambda_invoke_arn" {
+    description = "The invoke ARN of the Get Versions Lambda function"
+    type        = string
+}
+
+variable "get_versions_lambda_function_name" {
+    description = "The name of the Get Versions Lambda function"
+    type        = string
+}
+
 
 

@@ -14,14 +14,15 @@ def email_submission_to_admin(sender_email, admin_email):
                 "destination": admin_email,
                 "subject": "Materials Data Facility Dataset Submission",
                 "body_template": """
-                <html><h1>New dataset submitted</h1>
-                    <p>A new dataset has been submitted to the Materials Data Facility. View the <a href="https://app.globus.org/runs/$flow_log_link">here</a></p>
+                <html><h1>$submission_type</h1>
+                    <p>$submission_description View the <a href="https://app.globus.org/runs/$flow_log_link">flow log here</a></p>
                      <table>
                         <tr><td>Submitting User</td><td>$submitting_user_email</td></tr>
                         <tr><td>Organization</td><td>$organization</td></tr>
                         <tr><td>Title</td><td>$title</td></tr>
                         <tr><td>Source ID</td><td>$source_id</td></tr>
                         <tr><td>Versioned Source ID</td><td>$versioned_source_id</td></tr>
+                        <tr><td>Update Type</td><td>$update_type</td></tr>
                      </table>
                 </html>
                 """,
@@ -32,6 +33,9 @@ def email_submission_to_admin(sender_email, admin_email):
                     "source_id.$": "$.dataset_mdata.mdf.source_id",
                     "versioned_source_id.$": "$.dataset_mdata.mdf.versioned_source_id",
                     "organization.$": "$.dataset_mdata.mdf.organization",
+                    "submission_type.$": "$.api_triggered ? 'API Metadata Update' : 'New Dataset Submitted'",
+                    "submission_description.$": "$.api_triggered ? 'A dataset metadata update was processed via the API.' : 'A new dataset has been submitted to the Materials Data Facility.'",
+                    "update_type.$": "$.update_metadata_only ? 'Metadata Only' : 'Full Dataset'"
                 },
                 "notification_method": "any",
                 "notification_priority": "high",
@@ -45,8 +49,25 @@ def email_submission_to_admin(sender_email, admin_email):
                 "__Private_Parameters": ["send_credentials"],
             },
             "ResultPath": "$.EmailSubmissionResult",
-            "Next": "Check Metadata Only",
+            "Next": "Check API Triggered",
         },
+    }
+
+
+def check_api_triggered():
+    return {
+        "Check API Triggered": {
+            "Comment": "Checks whether this is an API-triggered metadata update",
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.api_triggered",
+                    "BooleanEquals": True,
+                    "Next": "Check Metadata Only",
+                }
+            ],
+            "Default": "Check Metadata Only",
+        }
     }
 
 
@@ -489,6 +510,7 @@ def flow_def(
             "States": {
                 "StartSubmission": {"Type": "Pass", "Next": "EmailSubmission"},
                 **email_submission_to_admin(sender_email, admin_email),
+                **check_api_triggered(),
                 **check_update_metadata_only(),
                 **file_transfer_steps(),
                 **curation_steps(sender_email, admin_email),

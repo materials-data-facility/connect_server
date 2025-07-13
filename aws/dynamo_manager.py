@@ -14,14 +14,104 @@ logger = logging.getLogger(__name__)
 class DynamoManager:
     DMO_SCHEMA = {
         # "TableName": DMO_TABLE,
-        "AttributeDefinitions": [{
-            "AttributeName": "source_id",
-            "AttributeType": "S"
-        }],
-        "KeySchema": [{
-            "AttributeName": "source_id",
-            "KeyType": "HASH"
-        }],
+        "AttributeDefinitions": [
+            {
+                "AttributeName": "source_id",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "version",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "user_id",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "organization", 
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "updated_at",
+                "AttributeType": "S"
+            },
+            {
+                "AttributeName": "status",
+                "AttributeType": "S"
+            }
+        ],
+        "KeySchema": [
+            {
+                "AttributeName": "source_id",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "version",
+                "KeyType": "RANGE"
+            }
+        ],
+        "GlobalSecondaryIndexes": [
+            {
+                "IndexName": "user-updated-index",
+                "KeySchema": [
+                    {
+                        "AttributeName": "user_id",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "updated_at",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                },
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 10,
+                    "WriteCapacityUnits": 10
+                }
+            },
+            {
+                "IndexName": "organization-source-index",
+                "KeySchema": [
+                    {
+                        "AttributeName": "organization",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "source_id",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                },
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5
+                }
+            },
+            {
+                "IndexName": "status-updated-index",
+                "KeySchema": [
+                    {
+                        "AttributeName": "status",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "updated_at",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                },
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5
+                }
+            }
+        ],
         "ProvisionedThroughput": {
             "ReadCapacityUnits": 20,
             "WriteCapacityUnits": 20
@@ -384,3 +474,158 @@ class DynamoManager:
         assert len(response['Items']) == 1
 
         return response['Items'][0]
+
+    def query_user_datasets(self, user_id, limit=20, last_key=None, status_filter=None):
+        """Query datasets for a specific user using GSI for efficient retrieval.
+        
+        Arguments:
+        user_id (str): The user ID to query datasets for
+        limit (int): Maximum number of items to return (default 20)
+        last_key (dict): Last evaluated key for pagination
+        status_filter (str): Optional status filter (active, cancelled, etc.)
+        
+        Returns:
+        dict: Query results with success flag, results list, and last_key for pagination
+        """
+        tbl_res = self.get_dmo_table("status")
+        if not tbl_res["success"]:
+            return tbl_res
+        table = tbl_res["table"]
+        
+        # Query using user-updated-index GSI
+        query_kwargs = {
+            'IndexName': 'user-updated-index',
+            'KeyConditionExpression': Key('user_id').eq(user_id),
+            'Limit': limit,
+            'ScanIndexForward': False,  # Sort by updated_at descending (newest first)
+            'ConsistentRead': False  # GSI queries cannot be strongly consistent
+        }
+        
+        if last_key:
+            query_kwargs['ExclusiveStartKey'] = last_key
+            
+        if status_filter:
+            query_kwargs['FilterExpression'] = Attr('status').eq(status_filter)
+        
+        try:
+            response = table.query(**query_kwargs)
+            
+            # Group by source_id to get latest version of each dataset
+            datasets = {}
+            for item in response['Items']:
+                source_id = item['source_id']
+                if source_id not in datasets:
+                    datasets[source_id] = item
+                else:
+                    # Compare versions to keep the latest
+                    existing_version = datasets[source_id]['version']
+                    current_version = item['version']
+                    
+                    # Parse version for comparison (e.g., "1.2" vs "1.10")
+                    def parse_version(v):
+                        return [int(x) for x in v.split('.')]
+                    
+                    if parse_version(current_version) > parse_version(existing_version):
+                        datasets[source_id] = item
+            
+            return {
+                "success": True,
+                "results": list(datasets.values()),
+                "last_key": response.get('LastEvaluatedKey'),
+                "count": len(datasets)
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Query failed: {str(e)}"
+            }
+
+    def query_organization_datasets(self, organization, limit=50, last_key=None):
+        """Query datasets for a specific organization using GSI.
+        
+        Arguments:
+        organization (str): The organization to query datasets for
+        limit (int): Maximum number of items to return
+        last_key (dict): Last evaluated key for pagination
+        
+        Returns:
+        dict: Query results with success flag and results list
+        """
+        tbl_res = self.get_dmo_table("status")
+        if not tbl_res["success"]:
+            return tbl_res
+        table = tbl_res["table"]
+        
+        query_kwargs = {
+            'IndexName': 'organization-source-index',
+            'KeyConditionExpression': Key('organization').eq(organization),
+            'Limit': limit,
+            'ConsistentRead': False
+        }
+        
+        if last_key:
+            query_kwargs['ExclusiveStartKey'] = last_key
+        
+        try:
+            response = table.query(**query_kwargs)
+            return {
+                "success": True,
+                "results": response['Items'],
+                "last_key": response.get('LastEvaluatedKey')
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Organization query failed: {str(e)}"
+            }
+
+    def get_dataset_metadata(self, source_id, version=None):
+        """Get metadata for a specific dataset, optionally for a specific version.
+        
+        Arguments:
+        source_id (str): The source ID of the dataset
+        version (str): Optional specific version, if None gets latest version
+        
+        Returns:
+        dict: Dataset metadata or error
+        """
+        if version:
+            # Get specific version
+            return self.read_status_record(source_id, version)
+        else:
+            # Get latest version
+            latest = self.get_current_version(source_id)
+            return latest
+
+    def get_dataset_versions(self, source_id, limit=50):
+        """Get all versions of a dataset.
+        
+        Arguments:
+        source_id (str): The source ID of the dataset
+        limit (int): Maximum number of versions to return
+        
+        Returns:
+        dict: All versions of the dataset
+        """
+        tbl_res = self.get_dmo_table("status")
+        if not tbl_res["success"]:
+            return tbl_res
+        table = tbl_res["table"]
+        
+        try:
+            response = table.query(
+                KeyConditionExpression=Key('source_id').eq(source_id),
+                Limit=limit,
+                ScanIndexForward=False  # Get newest versions first
+            )
+            
+            return {
+                "success": True,
+                "results": response['Items']
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Version query failed: {str(e)}"
+            }

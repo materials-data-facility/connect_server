@@ -152,3 +152,111 @@ resource "aws_lambda_permission" "submissions_lambda_permission" {
 
   source_arn = "${aws_apigatewayv2_api.mdf_connect_api.execution_arn}/*/*"
 }
+
+
+# List Datasets
+resource "aws_apigatewayv2_integration" "list_datasets_integration" {
+  api_id = aws_apigatewayv2_api.mdf_connect_api.id
+
+  integration_type = "AWS_PROXY"
+  integration_uri  = var.list_datasets_lambda_invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "list_datasets_route" {
+  api_id    = aws_apigatewayv2_api.mdf_connect_api.id
+  route_key = "GET /datasets"
+  authorizer_id = aws_apigatewayv2_authorizer.mdf_connect_authorizer.id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.list_datasets_integration.id}"
+}
+
+resource "aws_lambda_permission" "list_datasets_lambda_permission" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = var.list_datasets_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+
+  source_arn = "${aws_apigatewayv2_api.mdf_connect_api.execution_arn}/*/*"
+}
+
+
+# Get Dataset Metadata
+resource "aws_apigatewayv2_integration" "get_metadata_integration" {
+  api_id = aws_apigatewayv2_api.mdf_connect_api.id
+
+  integration_type = "AWS_PROXY"
+  integration_uri  = var.get_metadata_lambda_invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "get_metadata_route" {
+  api_id    = aws_apigatewayv2_api.mdf_connect_api.id
+  route_key = "GET /datasets/{source_id}/metadata"
+  authorizer_id = aws_apigatewayv2_authorizer.mdf_connect_authorizer.id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.get_metadata_integration.id}"
+}
+
+resource "aws_lambda_permission" "get_metadata_lambda_permission" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = var.get_metadata_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+
+  source_arn = "${aws_apigatewayv2_api.mdf_connect_api.execution_arn}/*/*"
+}
+
+
+# Update Dataset Metadata
+resource "aws_apigatewayv2_integration" "update_metadata_integration" {
+  api_id = aws_apigatewayv2_api.mdf_connect_api.id
+
+  integration_type = "AWS_PROXY"
+  integration_uri  = var.update_metadata_lambda_invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "update_metadata_route" {
+  api_id    = aws_apigatewayv2_api.mdf_connect_api.id
+  route_key = "PATCH /datasets/{source_id}/metadata"
+  authorizer_id = aws_apigatewayv2_authorizer.mdf_connect_authorizer.id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.update_metadata_integration.id}"
+}
+
+resource "aws_lambda_permission" "update_metadata_lambda_permission" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = var.update_metadata_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+
+  source_arn = "${aws_apigatewayv2_api.mdf_connect_api.execution_arn}/*/*"
+}
+
+
+# Get Dataset Versions
+resource "aws_apigatewayv2_integration" "get_versions_integration" {
+  api_id = aws_apigatewayv2_api.mdf_connect_api.id
+
+  integration_type = "AWS_PROXY"
+  integration_uri  = var.get_versions_lambda_invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "get_versions_route" {
+  api_id    = aws_apigatewayv2_api.mdf_connect_api.id
+  route_key = "GET /datasets/{source_id}/versions"
+  authorizer_id = aws_apigatewayv2_authorizer.mdf_connect_authorizer.id
+  authorization_type = "CUSTOM"
+
+  target = "integrations/${aws_apigatewayv2_integration.get_versions_integration.id}"
+}
+
+resource "aws_lambda_permission" "get_versions_lambda_permission" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = var.get_versions_lambda_function_name
+  principal     = "apigateway.amazonaws.com"
+
+  source_arn = "${aws_apigatewayv2_api.mdf_connect_api.execution_arn}/*/*"
+}
