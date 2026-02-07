@@ -7,14 +7,12 @@ Generates citations in multiple formats:
 - DataCite XML (for DOI registration)
 """
 
-import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 
-from v2.request import parse_authorizer
-from v2.responses import bad_request, ok
+from v2.metadata import DatasetMetadata, Author, parse_metadata
 from v2.store import get_store
 
 
@@ -22,7 +20,6 @@ def _clean_bibtex_value(value: str) -> str:
     """Escape special characters for BibTeX."""
     if not value:
         return ""
-    # Escape special LaTeX characters
     replacements = [
         ("&", r"\&"),
         ("%", r"\%"),
@@ -41,99 +38,92 @@ def _clean_bibtex_value(value: str) -> str:
 
 def _make_bibtex_key(source_id: str, year: str) -> str:
     """Generate a BibTeX citation key."""
-    # Clean the source_id for use as a key
     key = re.sub(r"[^a-zA-Z0-9]", "_", source_id)
     return f"{key}_{year}" if year else key
 
 
-def _format_authors_bibtex(creators: List[Dict]) -> str:
+def _author_family_given(author: Author) -> tuple:
+    """Extract (family, given) from an Author, auto-parsing if needed."""
+    family = author.family_name or ""
+    given = author.given_name or ""
+    if not family and not given and author.name:
+        if "," in author.name:
+            parts = author.name.split(",", 1)
+            family = parts[0].strip()
+            given = parts[1].strip()
+        else:
+            parts = author.name.rsplit(" ", 1)
+            if len(parts) == 2:
+                given = parts[0].strip()
+                family = parts[1].strip()
+            else:
+                family = author.name
+    return family, given
+
+
+def _format_authors_bibtex(authors: List[Author]) -> str:
     """Format authors for BibTeX (Last, First and Last, First)."""
-    authors = []
-    for c in (creators or []):
-        if isinstance(c, dict):
-            family = c.get("familyName", "")
-            given = c.get("givenName", "")
-            if family and given:
-                authors.append(f"{family}, {given}")
-            elif c.get("creatorName"):
-                authors.append(c["creatorName"])
-        elif isinstance(c, str):
-            authors.append(c)
-    return " and ".join(authors) if authors else "Unknown"
+    names = []
+    for a in authors:
+        family, given = _author_family_given(a)
+        if family and given:
+            names.append(f"{family}, {given}")
+        else:
+            names.append(a.name)
+    return " and ".join(names) if names else "Unknown"
 
 
-def _format_authors_ris(creators: List[Dict]) -> List[str]:
+def _format_authors_ris(authors: List[Author]) -> List[str]:
     """Format authors for RIS (one AU tag per author)."""
-    authors = []
-    for c in (creators or []):
-        if isinstance(c, dict):
-            family = c.get("familyName", "")
-            given = c.get("givenName", "")
-            if family and given:
-                authors.append(f"{family}, {given}")
-            elif c.get("creatorName"):
-                authors.append(c["creatorName"])
-        elif isinstance(c, str):
-            authors.append(c)
-    return authors if authors else ["Unknown"]
+    names = []
+    for a in authors:
+        family, given = _author_family_given(a)
+        if family and given:
+            names.append(f"{family}, {given}")
+        else:
+            names.append(a.name)
+    return names if names else ["Unknown"]
 
 
-def _format_authors_apa(creators: List[Dict]) -> str:
+def _format_authors_apa(authors: List[Author]) -> str:
     """Format authors for APA style."""
-    authors = []
-    for c in (creators or []):
-        if isinstance(c, dict):
-            family = c.get("familyName", "")
-            given = c.get("givenName", "")
-            if family and given:
-                # APA: Last, F. M.
-                initials = ". ".join([n[0] for n in given.split() if n]) + "."
-                authors.append(f"{family}, {initials}")
-            elif c.get("creatorName"):
-                authors.append(c["creatorName"])
-        elif isinstance(c, str):
-            authors.append(c)
+    formatted = []
+    for a in authors:
+        family, given = _author_family_given(a)
+        if family and given:
+            initials = ". ".join([n[0] for n in given.split() if n]) + "."
+            formatted.append(f"{family}, {initials}")
+        else:
+            formatted.append(a.name)
 
-    if not authors:
+    if not formatted:
         return "Unknown"
-    elif len(authors) == 1:
-        return authors[0]
-    elif len(authors) == 2:
-        return f"{authors[0]} & {authors[1]}"
+    elif len(formatted) == 1:
+        return formatted[0]
+    elif len(formatted) == 2:
+        return f"{formatted[0]} & {formatted[1]}"
     else:
-        return ", ".join(authors[:-1]) + f", & {authors[-1]}"
+        return ", ".join(formatted[:-1]) + f", & {formatted[-1]}"
 
 
 def generate_bibtex(record: Dict[str, Any]) -> str:
     """Generate BibTeX citation."""
-    mdata_str = record.get("dataset_mdata") or "{}"
-    try:
-        mdata = json.loads(mdata_str) if isinstance(mdata_str, str) else (mdata_str or {})
-    except Exception:
-        mdata = {}
+    meta = parse_metadata(record)
 
-    dc = mdata.get("dc") or {}
-    mdf = mdata.get("mdf") or {}
-
-    # Extract fields
-    titles = dc.get("titles") or []
-    title = titles[0].get("title") if titles and isinstance(titles[0], dict) else str(titles[0]) if titles else "Untitled"
-
-    year = dc.get("publicationYear") or datetime.now().strftime("%Y")
-    publisher = dc.get("publisher") or "Materials Data Facility"
-    doi = mdf.get("doi") or ""
+    year = str(meta.publication_year or datetime.now().year)
     source_id = record.get("source_id", "unknown")
     version = record.get("version", "1.0")
+    doi = record.get("doi") or ""
 
     key = _make_bibtex_key(source_id, year)
-    authors = _format_authors_bibtex(dc.get("creators"))
+    authors = _format_authors_bibtex(meta.authors)
 
     lines = [
         f"@dataset{{{key},",
         f"  author = {{{_clean_bibtex_value(authors)}}},",
-        f"  title = {{{{{_clean_bibtex_value(title)}}}}},",
+        f"  title = {{{{{_clean_bibtex_value(meta.title)}}}}},",
         f"  year = {{{year}}},",
-        f"  publisher = {{{_clean_bibtex_value(publisher)}}},",
+        f"  publisher = {{{_clean_bibtex_value(meta.publisher)}}},",
         f"  version = {{{version}}},",
     ]
 
@@ -141,7 +131,6 @@ def generate_bibtex(record: Dict[str, Any]) -> str:
         lines.append(f"  doi = {{{doi}}},")
         lines.append(f"  url = {{https://doi.org/{doi}}},")
 
-    # Add note with MDF source_id
     lines.append(f"  note = {{MDF Source ID: {source_id}}},")
     lines.append("}")
 
@@ -150,92 +139,52 @@ def generate_bibtex(record: Dict[str, Any]) -> str:
 
 def generate_ris(record: Dict[str, Any]) -> str:
     """Generate RIS citation (for EndNote, Zotero, Mendeley)."""
-    mdata_str = record.get("dataset_mdata") or "{}"
-    try:
-        mdata = json.loads(mdata_str) if isinstance(mdata_str, str) else (mdata_str or {})
-    except Exception:
-        mdata = {}
+    meta = parse_metadata(record)
 
-    dc = mdata.get("dc") or {}
-    mdf = mdata.get("mdf") or {}
-
-    # Extract fields
-    titles = dc.get("titles") or []
-    title = titles[0].get("title") if titles and isinstance(titles[0], dict) else str(titles[0]) if titles else "Untitled"
-
-    year = dc.get("publicationYear") or datetime.now().strftime("%Y")
-    publisher = dc.get("publisher") or "Materials Data Facility"
-    doi = mdf.get("doi") or ""
+    year = str(meta.publication_year or datetime.now().year)
     source_id = record.get("source_id", "unknown")
-
-    # Extract description
-    descriptions = dc.get("descriptions") or []
-    abstract = ""
-    if descriptions:
-        if isinstance(descriptions[0], dict):
-            abstract = descriptions[0].get("description", "")
-        else:
-            abstract = str(descriptions[0])
+    doi = record.get("doi") or ""
 
     lines = [
-        "TY  - DATA",  # Type: Dataset
-        f"TI  - {title}",
+        "TY  - DATA",
+        f"TI  - {meta.title}",
     ]
 
-    # Add authors
-    for author in _format_authors_ris(dc.get("creators")):
+    for author in _format_authors_ris(meta.authors):
         lines.append(f"AU  - {author}")
 
     lines.extend([
         f"PY  - {year}",
-        f"PB  - {publisher}",
+        f"PB  - {meta.publisher}",
     ])
 
     if doi:
         lines.append(f"DO  - {doi}")
         lines.append(f"UR  - https://doi.org/{doi}")
 
-    if abstract:
-        lines.append(f"AB  - {abstract}")
+    if meta.description:
+        lines.append(f"AB  - {meta.description}")
 
-    # Add keywords
-    for subj in (dc.get("subjects") or []):
-        if isinstance(subj, dict):
-            lines.append(f"KW  - {subj.get('subject', '')}")
-        elif isinstance(subj, str):
-            lines.append(f"KW  - {subj}")
+    for kw in meta.keywords:
+        lines.append(f"KW  - {kw}")
 
     lines.append(f"N1  - MDF Source ID: {source_id}")
-    lines.append("ER  - ")  # End of record
+    lines.append("ER  - ")
 
     return "\n".join(lines)
 
 
 def generate_apa(record: Dict[str, Any]) -> str:
     """Generate APA style citation (plain text)."""
-    mdata_str = record.get("dataset_mdata") or "{}"
-    try:
-        mdata = json.loads(mdata_str) if isinstance(mdata_str, str) else (mdata_str or {})
-    except Exception:
-        mdata = {}
+    meta = parse_metadata(record)
 
-    dc = mdata.get("dc") or {}
-    mdf = mdata.get("mdf") or {}
-
-    # Extract fields
-    titles = dc.get("titles") or []
-    title = titles[0].get("title") if titles and isinstance(titles[0], dict) else str(titles[0]) if titles else "Untitled"
-
-    year = dc.get("publicationYear") or datetime.now().strftime("%Y")
-    publisher = dc.get("publisher") or "Materials Data Facility"
-    doi = mdf.get("doi")
+    year = str(meta.publication_year or datetime.now().year)
     version = record.get("version", "1.0")
+    doi = record.get("doi")
 
-    authors = _format_authors_apa(dc.get("creators"))
+    authors = _format_authors_apa(meta.authors)
 
-    # APA format for datasets:
-    # Author, A. A., & Author, B. B. (Year). Title of dataset (Version X.X) [Data set]. Publisher. https://doi.org/xxxxx
-    citation = f"{authors} ({year}). {title} (Version {version}) [Data set]. {publisher}."
+    citation = f"{authors} ({year}). {meta.title} (Version {version}) [Data set]. {meta.publisher}."
 
     if doi:
         citation += f" https://doi.org/{doi}"
@@ -245,135 +194,74 @@ def generate_apa(record: Dict[str, Any]) -> str:
 
 def generate_datacite_xml(record: Dict[str, Any]) -> str:
     """Generate DataCite XML for DOI registration."""
-    mdata_str = record.get("dataset_mdata") or "{}"
-    try:
-        mdata = json.loads(mdata_str) if isinstance(mdata_str, str) else (mdata_str or {})
-    except Exception:
-        mdata = {}
+    meta = parse_metadata(record)
+    doi = record.get("doi") or "10.xxxxx/pending"
 
-    dc = mdata.get("dc") or {}
-    mdf = mdata.get("mdf") or {}
-
-    # Create root element
     root = ET.Element("resource")
     root.set("xmlns", "http://datacite.org/schema/kernel-4")
     root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
     root.set("xsi:schemaLocation", "http://datacite.org/schema/kernel-4 http://schema.datacite.org/meta/kernel-4/metadata.xsd")
 
-    # Identifier (DOI or placeholder)
+    # Identifier
     identifier = ET.SubElement(root, "identifier")
     identifier.set("identifierType", "DOI")
-    identifier.text = mdf.get("doi") or "10.xxxxx/pending"
+    identifier.text = doi
 
     # Creators
     creators_elem = ET.SubElement(root, "creators")
-    for c in (dc.get("creators") or [{"creatorName": "Unknown"}]):
+    for a in meta.authors:
         creator = ET.SubElement(creators_elem, "creator")
-        if isinstance(c, dict):
-            name = ET.SubElement(creator, "creatorName")
-            name.text = c.get("creatorName") or f"{c.get('familyName', '')}, {c.get('givenName', '')}".strip(", ")
-            if c.get("givenName"):
-                given = ET.SubElement(creator, "givenName")
-                given.text = c["givenName"]
-            if c.get("familyName"):
-                family = ET.SubElement(creator, "familyName")
-                family.text = c["familyName"]
-            if c.get("affiliation"):
-                affil = ET.SubElement(creator, "affiliation")
-                affil.text = c["affiliation"]
+        family, given = _author_family_given(a)
+        name_elem = ET.SubElement(creator, "creatorName")
+        if family and given:
+            name_elem.text = f"{family}, {given}"
         else:
-            name = ET.SubElement(creator, "creatorName")
-            name.text = str(c)
+            name_elem.text = a.name
+        if given:
+            given_elem = ET.SubElement(creator, "givenName")
+            given_elem.text = given
+        if family:
+            family_elem = ET.SubElement(creator, "familyName")
+            family_elem.text = family
+        for aff in a.affiliations:
+            affil = ET.SubElement(creator, "affiliation")
+            affil.text = aff
 
     # Titles
     titles_elem = ET.SubElement(root, "titles")
-    for t in (dc.get("titles") or [{"title": "Untitled"}]):
-        title = ET.SubElement(titles_elem, "title")
-        title.text = t.get("title") if isinstance(t, dict) else str(t)
+    title = ET.SubElement(titles_elem, "title")
+    title.text = meta.title
 
     # Publisher
     publisher = ET.SubElement(root, "publisher")
-    publisher.text = dc.get("publisher") or "Materials Data Facility"
+    publisher.text = meta.publisher
 
     # Publication Year
     pub_year = ET.SubElement(root, "publicationYear")
-    pub_year.text = str(dc.get("publicationYear") or datetime.now().year)
+    pub_year.text = str(meta.publication_year or datetime.now().year)
 
     # Resource Type
     resource_type = ET.SubElement(root, "resourceType")
     resource_type.set("resourceTypeGeneral", "Dataset")
-    resource_type.text = "Dataset"
+    resource_type.text = meta.resource_type or "Dataset"
 
     # Descriptions
-    if dc.get("descriptions"):
+    if meta.description:
         descriptions_elem = ET.SubElement(root, "descriptions")
-        for d in dc["descriptions"]:
-            desc = ET.SubElement(descriptions_elem, "description")
-            desc.set("descriptionType", d.get("descriptionType", "Abstract") if isinstance(d, dict) else "Abstract")
-            desc.text = d.get("description") if isinstance(d, dict) else str(d)
+        desc = ET.SubElement(descriptions_elem, "description")
+        desc.set("descriptionType", "Abstract")
+        desc.text = meta.description
 
     # Subjects
-    if dc.get("subjects"):
+    if meta.keywords:
         subjects_elem = ET.SubElement(root, "subjects")
-        for s in dc["subjects"]:
+        for kw in meta.keywords:
             subj = ET.SubElement(subjects_elem, "subject")
-            subj.text = s.get("subject") if isinstance(s, dict) else str(s)
+            subj.text = kw
 
     # Version
-    version = ET.SubElement(root, "version")
-    version.text = str(record.get("version", "1.0"))
+    version_elem = ET.SubElement(root, "version")
+    version_elem.text = str(record.get("version", "1.0"))
 
-    # Format XML with indentation
     ET.indent(root)
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
-
-
-def lambda_handler(event, context):
-    """Get citation for a dataset.
-
-    GET /citation/{source_id}?format=bibtex&version=1.0
-
-    Supported formats: bibtex, ris, apa, datacite, all
-    """
-    path_params = event.get("pathParameters") or {}
-    query_params = event.get("queryStringParameters") or {}
-
-    source_id = path_params.get("source_id")
-    version = query_params.get("version")
-    fmt = query_params.get("format", "all").lower()
-
-    if not source_id:
-        return bad_request("source_id is required")
-
-    store = get_store()
-    record = store.get(source_id, version=version)
-
-    if not record:
-        return bad_request(f"Dataset not found: {source_id}")
-
-    # Generate requested format(s)
-    result = {
-        "success": True,
-        "source_id": source_id,
-        "version": record.get("version"),
-    }
-
-    if fmt == "bibtex":
-        result["bibtex"] = generate_bibtex(record)
-        result["content_type"] = "application/x-bibtex"
-    elif fmt == "ris":
-        result["ris"] = generate_ris(record)
-        result["content_type"] = "application/x-research-info-systems"
-    elif fmt == "apa":
-        result["apa"] = generate_apa(record)
-        result["content_type"] = "text/plain"
-    elif fmt == "datacite":
-        result["datacite"] = generate_datacite_xml(record)
-        result["content_type"] = "application/xml"
-    else:  # all
-        result["bibtex"] = generate_bibtex(record)
-        result["ris"] = generate_ris(record)
-        result["apa"] = generate_apa(record)
-        result["datacite"] = generate_datacite_xml(record)
-
-    return ok(result)

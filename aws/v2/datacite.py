@@ -9,9 +9,8 @@ Configuration:
     DATACITE_PREFIX: DOI prefix (e.g., "10.18126")
 """
 
-import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -238,6 +237,14 @@ class DataCiteClient:
             }
         }
 
+    def test_connection(self) -> Dict[str, Any]:
+        """Test connectivity to DataCite API."""
+        try:
+            response = self._client.get(f"{self.api_url}/heartbeat")
+            return {"success": response.status_code == 200, "status_code": response.status_code}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
     def close(self):
         """Close HTTP client."""
         self._client.close()
@@ -268,7 +275,7 @@ class MockDataCiteClient:
             "url": url,
             "metadata": metadata,
             "state": "findable" if publish else "draft",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
         return {

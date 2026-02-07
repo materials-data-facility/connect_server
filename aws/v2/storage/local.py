@@ -27,7 +27,7 @@ class LocalStorage(StorageBackend):
         """
         self.base_path = Path(
             base_path or os.environ.get("FILE_STORE_PATH", "/tmp/mdf_files")
-        )
+        ).resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -36,7 +36,12 @@ class LocalStorage(StorageBackend):
 
     def _full_path(self, path: str) -> Path:
         """Get full filesystem path."""
-        return self.base_path / path
+        candidate = (self.base_path / path).resolve()
+        try:
+            candidate.relative_to(self.base_path)
+        except ValueError as exc:
+            raise ValueError(f"Invalid storage path: {path!r}") from exc
+        return candidate
 
     def _meta_path(self, file_path: Path) -> Path:
         """Get metadata file path for a file."""
@@ -97,14 +102,20 @@ class LocalStorage(StorageBackend):
 
     def get_file(self, path: str) -> Optional[bytes]:
         """Retrieve file contents."""
-        full_path = self._full_path(path)
+        try:
+            full_path = self._full_path(path)
+        except ValueError:
+            return None
         if full_path.exists() and full_path.is_file():
             return full_path.read_bytes()
         return None
 
     def get_download_url(self, path: str, expires_in: int = 3600) -> Optional[str]:
         """Get download URL (file:// URL for local)."""
-        full_path = self._full_path(path)
+        try:
+            full_path = self._full_path(path)
+        except ValueError:
+            return None
         if full_path.exists():
             return f"file://{full_path}"
         return None
@@ -128,7 +139,11 @@ class LocalStorage(StorageBackend):
 
     def list_files(self, stream_id: str) -> List[FileMetadata]:
         """List all files in a stream."""
-        stream_path = self._full_path(f"streams/{stream_id}")
+        try:
+            safe_stream_id = self._sanitize_stream_id(stream_id)
+            stream_path = self._full_path(f"streams/{safe_stream_id}")
+        except ValueError:
+            return []
         files = []
 
         if not stream_path.exists():
@@ -157,7 +172,10 @@ class LocalStorage(StorageBackend):
 
     def delete_file(self, path: str) -> bool:
         """Delete a file."""
-        full_path = self._full_path(path)
+        try:
+            full_path = self._full_path(path)
+        except ValueError:
+            return False
         meta_path = self._meta_path(full_path)
 
         deleted = False
@@ -171,7 +189,11 @@ class LocalStorage(StorageBackend):
 
     def delete_stream_files(self, stream_id: str) -> int:
         """Delete all files for a stream."""
-        stream_path = self._full_path(f"streams/{stream_id}")
+        try:
+            safe_stream_id = self._sanitize_stream_id(stream_id)
+            stream_path = self._full_path(f"streams/{safe_stream_id}")
+        except ValueError:
+            return 0
 
         if not stream_path.exists():
             return 0
@@ -184,7 +206,11 @@ class LocalStorage(StorageBackend):
 
     def get_stream_size(self, stream_id: str) -> int:
         """Get total size of all files in a stream."""
-        stream_path = self._full_path(f"streams/{stream_id}")
+        try:
+            safe_stream_id = self._sanitize_stream_id(stream_id)
+            stream_path = self._full_path(f"streams/{safe_stream_id}")
+        except ValueError:
+            return 0
 
         if not stream_path.exists():
             return 0

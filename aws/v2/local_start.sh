@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local MDF v2 server startup
+# Local MDF v2 FastAPI server startup.
 # Usage: STORE_BACKEND=sqlite SQLITE_PATH=/tmp/mdf_connect_v2.db ./local_start.sh
 
 export STORE_BACKEND=${STORE_BACKEND:-sqlite}
 export SQLITE_PATH=${SQLITE_PATH:-/tmp/mdf_connect_v2.db}
-export TINYDB_PATH=${TINYDB_PATH:-/tmp/mdf_connect_v2.json}
-export USE_MOCK_FLOW=${USE_MOCK_FLOW:-true}
+export STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+export ASYNC_DISPATCH_MODE=${ASYNC_DISPATCH_MODE:-inline}
+export AUTH_MODE=${AUTH_MODE:-dev}
+export ALLOW_ALL_CURATORS=${ALLOW_ALL_CURATORS:-true}
+export USE_MOCK_DATACITE=${USE_MOCK_DATACITE:-true}
 export LOCAL_HOST=${LOCAL_HOST:-127.0.0.1}
 export LOCAL_PORT=${LOCAL_PORT:-8080}
-export START_FLOW_SIM=${START_FLOW_SIM:-false}
 export FORCE_RESTART=${FORCE_RESTART:-false}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PID_FILE="${SCRIPT_DIR}/.local_server.pid"
-FLOW_PID_FILE="${SCRIPT_DIR}/.flow_sim.pid"
+LOG_FILE="${SCRIPT_DIR}/.local_server.log"
 
 if [[ -f "${PID_FILE}" ]]; then
   PID=$(cat "${PID_FILE}")
@@ -33,17 +36,19 @@ if [[ -f "${PID_FILE}" ]]; then
   fi
 fi
 
-python "${SCRIPT_DIR}/local_server.py" &
+(
+  cd "${ROOT_DIR}"
+  python3 -m v2.app.main
+) >"${LOG_FILE}" 2>&1 &
 PID=$!
+sleep 1
+if ! kill -0 "${PID}" >/dev/null 2>&1; then
+  echo "Failed to start local server. Last log lines:"
+  tail -n 40 "${LOG_FILE}" || true
+  exit 1
+fi
 
 printf "%s" "${PID}" > "${PID_FILE}"
-
-FLOW_PID=""
-if [[ "${START_FLOW_SIM}" == "true" || "${START_FLOW_SIM}" == "1" ]]; then
-  python "${SCRIPT_DIR}/flow_simulator.py" &
-  FLOW_PID=$!
-  printf "%s" "${FLOW_PID}" > "${FLOW_PID_FILE}"
-fi
 
 cat <<MSG
 Local MDF v2 server running:
@@ -52,12 +57,14 @@ Local MDF v2 server running:
 Config:
   STORE_BACKEND=${STORE_BACKEND}
   SQLITE_PATH=${SQLITE_PATH}
-  TINYDB_PATH=${TINYDB_PATH}
-  USE_MOCK_FLOW=${USE_MOCK_FLOW}
-  START_FLOW_SIM=${START_FLOW_SIM}
+  STORAGE_BACKEND=${STORAGE_BACKEND}
+  ASYNC_DISPATCH_MODE=${ASYNC_DISPATCH_MODE}
+  AUTH_MODE=${AUTH_MODE}
+  ALLOW_ALL_CURATORS=${ALLOW_ALL_CURATORS}
+  USE_MOCK_DATACITE=${USE_MOCK_DATACITE}
   FORCE_RESTART=${FORCE_RESTART}
+  LOG_FILE=${LOG_FILE}
 
 Stop with:
   kill ${PID} && rm -f ${PID_FILE}
-  ${FLOW_PID:+kill ${FLOW_PID} && rm -f ${FLOW_PID_FILE}}
 MSG

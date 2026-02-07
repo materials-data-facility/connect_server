@@ -2,7 +2,8 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+import re
 from typing import Any, BinaryIO, Dict, List, Optional
 
 
@@ -22,7 +23,7 @@ class FileMetadata:
 
     def __post_init__(self):
         if not self.stored_at:
-            self.stored_at = datetime.utcnow().isoformat() + "Z"
+            self.stored_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -195,8 +196,31 @@ class StorageBackend(ABC):
 
     def _build_path(self, stream_id: str, filename: str) -> str:
         """Build a storage path for a file."""
-        date_prefix = datetime.utcnow().strftime("%Y-%m-%d")
-        return f"streams/{stream_id}/{date_prefix}/{filename}"
+        safe_stream_id = self._sanitize_stream_id(stream_id)
+        safe_filename = self._sanitize_filename(filename)
+        date_prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return f"streams/{safe_stream_id}/{date_prefix}/{safe_filename}"
+
+    def _sanitize_stream_id(self, stream_id: str) -> str:
+        value = (stream_id or "").strip()
+        if not value:
+            raise ValueError("stream_id is required")
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+            raise ValueError(f"Invalid stream_id: {stream_id!r}")
+        return value
+
+    def _sanitize_filename(self, filename: str) -> str:
+        normalized = (filename or "").replace("\\", "/").strip("/")
+        if not normalized:
+            raise ValueError("filename is required")
+        parts = normalized.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise ValueError(f"Invalid filename: {filename!r}")
+        allowed = re.compile(r"^[A-Za-z0-9._()+=,@ -]+$")
+        for part in parts:
+            if not allowed.fullmatch(part):
+                raise ValueError(f"Invalid filename segment: {part!r}")
+        return normalized
 
     def _compute_checksum(self, content: bytes) -> str:
         """Compute MD5 checksum of content."""

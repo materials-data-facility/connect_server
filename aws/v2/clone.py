@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 
@@ -147,11 +148,24 @@ class StreamCloner:
         """Download file from Globus HTTPS endpoint."""
         if not self.token:
             raise ValueError("No Globus token available. Run test_globus_upload.py to authenticate.")
+        self._validate_globus_url(url)
 
         headers = {"Authorization": f"Bearer {self.token}"}
         response = self._client.get(url, headers=headers)
         response.raise_for_status()
         return response.content
+
+    def _validate_globus_url(self, url: str) -> None:
+        parsed = urlparse(url)
+        if parsed.scheme != "https":
+            raise ValueError("Only https URLs are allowed for clone operations")
+
+        configured = os.environ.get("GLOBUS_HTTPS_SERVER", "data.materialsdatafacility.org")
+        allow_list = os.environ.get("GLOBUS_ALLOWED_HOSTS", "")
+        hosts = {configured}
+        hosts.update({h.strip() for h in allow_list.split(",") if h.strip()})
+        if parsed.hostname not in hosts:
+            raise ValueError(f"Refusing to send token to untrusted host: {parsed.hostname}")
 
     def clone_from_url(
         self,

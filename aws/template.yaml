@@ -1,29 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: MDF Connect v2 Backend - Serverless data publishing service
-
-# ============================================================================
-# DEPLOYMENT GUIDE
-# ============================================================================
-#
-# Prerequisites:
-#   brew install aws-sam-cli  # or: pip install aws-sam-cli
-#   aws configure             # set up AWS credentials
-#
-# Deploy to dev:
-#   sam build && sam deploy --config-env dev
-#
-# Deploy to production:
-#   sam build && sam deploy --config-env prod
-#
-# Local testing:
-#   sam local start-api       # runs API on localhost:3000
-#   python -m v2.local_server # alternative: pure Python server
-#
-# View logs:
-#   sam logs -n SubmitFunction --stack-name mdf-connect-v2-dev --tail
-#
-# ============================================================================
+Description: MDF Connect v2 Backend - Single FastAPI Lambda via Mangum
 
 Parameters:
   Environment:
@@ -31,333 +8,340 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
     Description: Deployment environment
-
-  DomainName:
+  AuthMode:
     Type: String
-    Default: ""
-    Description: Custom domain name (optional, e.g., api.materialsdatafacility.org)
+    Default: dev
+    AllowedValues: [dev, production]
+    Description: "dev = X-User-Id headers (no Globus). production = Globus token introspection."
+  GlobusClientId:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus OAuth client ID. Only needed when AuthMode=production."
+  GlobusClientSecret:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "Globus OAuth client secret. Only needed when AuthMode=production."
+  DataCiteUsername:
+    Type: String
+    Default: "not-configured"
+    Description: "DataCite repository ID for DOI minting."
+  DataCitePassword:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "DataCite repository password."
+  DataCiteApiUrl:
+    Type: String
+    Default: "https://api.test.datacite.org"
+    Description: "DataCite API endpoint."
+  DataCitePrefix:
+    Type: String
+    Default: "10.18126"
+    Description: "DOI prefix for DataCite minting."
+  SearchIndexUUID:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus Search index UUID for v2 production."
+  TestSearchIndexUUID:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus Search index UUID for v2 test/staging."
+  HttpApiThrottleRate:
+    Type: Number
+    Default: 100
+    Description: "API Gateway steady-state request rate per second."
+  HttpApiThrottleBurst:
+    Type: Number
+    Default: 200
+    Description: "API Gateway burst request limit."
+  ApiTimeoutSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 3
+    MaxValue: 30
+    Description: "API Lambda timeout in seconds (bounded to API Gateway integration timeout)."
+  ApiMemorySizeMb:
+    Type: Number
+    Default: 256
+    MinValue: 128
+    MaxValue: 10240
+    Description: "API Lambda memory size in MB."
+  AsyncWorkerTimeoutSeconds:
+    Type: Number
+    Default: 60
+    MinValue: 3
+    MaxValue: 900
+    Description: "Async worker Lambda timeout in seconds."
+  AsyncWorkerMemorySizeMb:
+    Type: Number
+    Default: 256
+    MinValue: 128
+    MaxValue: 10240
+    Description: "Async worker Lambda memory size in MB."
+  ApiReservedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: "Reserved concurrency cap for API Lambda to control runaway spend."
+  AsyncWorkerReservedConcurrency:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    Description: "Reserved concurrency cap for async worker Lambda."
+  AsyncWorkerBatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 10
+    Description: "SQS batch size for async worker event source."
+  AsyncWorkerBatchWindowSeconds:
+    Type: Number
+    Default: 5
+    MinValue: 0
+    MaxValue: 300
+    Description: "SQS maximum batching window to reduce Lambda invoke count."
+  AsyncQueueMessageRetentionSeconds:
+    Type: Number
+    Default: 345600
+    MinValue: 60
+    MaxValue: 1209600
+    Description: "SQS async queue message retention in seconds."
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: "CloudWatch Logs retention period for Lambda log groups."
+  StorageBackend:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "local", "s3", "globus"]
+    Description: "File storage backend. 'auto' selects local for dev, globus for prod."
+  UseMockDatacite:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "true", "false"]
+    Description: "Mock DataCite for DOI minting. 'auto' = true for dev, false for prod."
+  AllowAllCurators:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "true", "false"]
+    Description: "Allow all users to curate. 'auto' = true for dev, false for prod."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
-  HasCustomDomain: !Not [!Equals [!Ref DomainName, ""]]
+  IsDevAuth: !Equals [!Ref AuthMode, dev]
+  UseAutoStorage: !Equals [!Ref StorageBackend, "auto"]
+  UseAutoMockDatacite: !Equals [!Ref UseMockDatacite, "auto"]
+  UseAutoAllowCurators: !Equals [!Ref AllowAllCurators, "auto"]
+  CreateStreamFilesBucket: !Not [!Equals [!Ref AuthMode, dev]]
 
 Globals:
   Function:
-    Runtime: python3.11
+    Runtime: python3.12
     Timeout: 30
     MemorySize: 256
-    Environment:
-      Variables:
-        ENVIRONMENT: !Ref Environment
-        STORE_BACKEND: dynamodb
-        DYNAMO_SUBMISSIONS_TABLE: !Ref SubmissionsTable
-        DYNAMO_STREAMS_TABLE: !Ref StreamsTable
-        LOG_LEVEL: !If [IsProd, INFO, DEBUG]
-    Layers:
-      - !Ref DependenciesLayer
 
 Resources:
   # ===========================================================================
-  # API Gateway
+  # Single Lambda Function (FastAPI + Mangum)
   # ===========================================================================
 
-  Api:
-    Type: AWS::Serverless::Api
-    Properties:
-      StageName: !Ref Environment
-      Description: MDF Connect v2 API
-      Cors:
-        AllowOrigin: "'*'"
-        AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type,Authorization'"
-      Auth:
-        DefaultAuthorizer: GlobusAuthorizer
-        Authorizers:
-          GlobusAuthorizer:
-            FunctionArn: !GetAtt AuthorizerFunction.Arn
-            Identity:
-              Headers:
-                - Authorization
-
-  # ===========================================================================
-  # Lambda Functions - Dataset Publishing
-  # ===========================================================================
-
-  SubmitFunction:
+  ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: v2.submit.lambda_handler
+      Handler: v2.app.main.handler
       CodeUri: .
-      Description: Submit new dataset
+      Description: MDF Connect v2 API (FastAPI)
+      Timeout: !Ref ApiTimeoutSeconds
+      MemorySize: !Ref ApiMemorySizeMb
+      ReservedConcurrentExecutions: !Ref ApiReservedConcurrency
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          STORE_BACKEND: dynamo
+          ASYNC_DISPATCH_MODE: !If [IsDevAuth, "inline", "sqs"]
+          ASYNC_QUEUE_URL: !Ref AsyncJobsQueue
+          AUTH_MODE: !Ref AuthMode
+          DYNAMO_SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          DYNAMO_STREAMS_TABLE: !Ref StreamsTable
+          STORAGE_BACKEND: !If
+            - UseAutoStorage
+            - !If [IsDevAuth, "local", "globus"]
+            - !Ref StorageBackend
+          GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_PREFIX: "streams/"
+          GLOBUS_CLIENT_ID: !Ref GlobusClientId
+          GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
+          USE_MOCK_DATACITE: !If
+            - UseAutoMockDatacite
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref UseMockDatacite
+          DATACITE_USERNAME: !Ref DataCiteUsername
+          DATACITE_PASSWORD: !Ref DataCitePassword
+          DATACITE_API_URL: !Ref DataCiteApiUrl
+          DATACITE_PREFIX: !Ref DataCitePrefix
+          SEARCH_INDEX_UUID: !Ref SearchIndexUUID
+          TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
+          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          ALLOW_ALL_CURATORS: !If
+            - UseAutoAllowCurators
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref AllowAllCurators
+          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          SEARCH_MAX_RESULTS: "50"
+          SEARCH_MAX_DATASET_SCAN: "1000"
+          SEARCH_MAX_STREAM_SCAN: "2000"
       Events:
-        Api:
-          Type: Api
+        CatchAll:
+          Type: HttpApi
           Properties:
-            RestApiId: !Ref Api
-            Path: /submit
-            Method: POST
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        Root:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SubmissionsTable
-
-  StatusFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.status.lambda_handler
-      CodeUri: .
-      Description: Get dataset status
-      Events:
-        GetById:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /status/{source_id}
-            Method: GET
-        GetAll:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /status
-            Method: GET
-            Auth:
-              Authorizer: NONE
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubmissionsTable
-
-  SubmissionsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.submissions.lambda_handler
-      CodeUri: .
-      Description: List submissions
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /submissions
-            Method: GET
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubmissionsTable
-
-  CardFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.dataset_card.lambda_handler
-      CodeUri: .
-      Description: Get dataset preview card
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /card/{source_id}
-            Method: GET
-            Auth:
-              Authorizer: NONE
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubmissionsTable
-
-  CitationFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.citation.lambda_handler
-      CodeUri: .
-      Description: Get dataset citation
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /citation/{source_id}
-            Method: GET
-            Auth:
-              Authorizer: NONE
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubmissionsTable
-
-  SearchFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.search.lambda_handler
-      CodeUri: .
-      Description: Search datasets and streams
-      Timeout: 60
-      MemorySize: 512
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /search
-            Method: GET
-            Auth:
-              Authorizer: NONE
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubmissionsTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref StreamsTable
-
-  # ===========================================================================
-  # Lambda Functions - Streaming
-  # ===========================================================================
-
-  StreamCreateFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_create.lambda_handler
-      CodeUri: .
-      Description: Create data stream
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/create
-            Method: POST
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref StreamsTable
-
-  StreamAppendFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_append.lambda_handler
-      CodeUri: .
-      Description: Append to data stream
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}/append
-            Method: POST
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref StreamsTable
-
-  StreamUploadFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_upload.lambda_handler
-      CodeUri: .
-      Description: Upload files to stream
-      Timeout: 60
-      MemorySize: 512
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}/upload
-            Method: POST
-      Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
-            BucketName: !Ref FilesBucket
+            BucketName: !Sub "mdf-stream-files-${Environment}"
+        - Statement:
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt AsyncJobsQueue.Arn
 
-  StreamFilesFunction:
+  AsyncWorkerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: v2.stream_upload.list_files_handler
+      Handler: v2.async_worker.lambda_handler
       CodeUri: .
-      Description: List files in stream
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}/files
-            Method: GET
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref StreamsTable
-        - S3ReadPolicy:
-            BucketName: !Ref FilesBucket
-
-  StreamStatusFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_status.lambda_handler
-      CodeUri: .
-      Description: Get stream status
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}
-            Method: GET
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref StreamsTable
-
-  StreamCloseFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_close.lambda_handler
-      CodeUri: .
-      Description: Close data stream
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}/close
-            Method: POST
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref StreamsTable
-
-  StreamSnapshotFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.stream_snapshot.lambda_handler
-      CodeUri: .
-      Description: Create stream snapshot (publish to dataset)
-      Timeout: 120
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref Api
-            Path: /stream/{stream_id}/snapshot
-            Method: POST
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref StreamsTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref SubmissionsTable
-
-  # ===========================================================================
-  # Authorizer
-  # ===========================================================================
-
-  AuthorizerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Handler: v2.authorizer.lambda_handler
-      CodeUri: .
-      Description: Globus Auth token validation
+      Description: MDF Connect v2 async job worker
+      Timeout: !Ref AsyncWorkerTimeoutSeconds
+      MemorySize: !Ref AsyncWorkerMemorySizeMb
+      ReservedConcurrentExecutions: !Ref AsyncWorkerReservedConcurrency
       Environment:
         Variables:
-          GLOBUS_CLIENT_ID: "{{resolve:ssm:/mdf/globus-client-id}}"
+          ENVIRONMENT: !Ref Environment
+          STORE_BACKEND: dynamo
+          ASYNC_DISPATCH_MODE: inline
+          AUTH_MODE: !Ref AuthMode
+          DYNAMO_SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          DYNAMO_STREAMS_TABLE: !Ref StreamsTable
+          STORAGE_BACKEND: !If
+            - UseAutoStorage
+            - !If [IsDevAuth, "local", "globus"]
+            - !Ref StorageBackend
+          GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_PREFIX: "streams/"
+          GLOBUS_CLIENT_ID: !Ref GlobusClientId
+          GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
+          USE_MOCK_DATACITE: !If
+            - UseAutoMockDatacite
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref UseMockDatacite
+          DATACITE_USERNAME: !Ref DataCiteUsername
+          DATACITE_PASSWORD: !Ref DataCitePassword
+          DATACITE_API_URL: !Ref DataCiteApiUrl
+          DATACITE_PREFIX: !Ref DataCitePrefix
+          SEARCH_INDEX_UUID: !Ref SearchIndexUUID
+          TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
+          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          ALLOW_ALL_CURATORS: !If
+            - UseAutoAllowCurators
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref AllowAllCurators
+          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+      Events:
+        AsyncQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AsyncJobsQueue.Arn
+            BatchSize: !Ref AsyncWorkerBatchSize
+            MaximumBatchingWindowInSeconds: !Ref AsyncWorkerBatchWindowSeconds
       Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mdf/*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubmissionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StreamsTable
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-stream-files-${Environment}"
+        - SQSPollerPolicy:
+            QueueName: !GetAtt AsyncJobsQueue.QueueName
+
+  # ===========================================================================
+  # HTTP API (v2 - cheaper than REST API v1)
+  # ===========================================================================
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: MDF Connect v2 API
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref HttpApiThrottleRate
+        ThrottlingBurstLimit: !Ref HttpApiThrottleBurst
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-User-Id
+          - X-User-Email
+          - X-User-Name
+          - X-Globus-Token
+
+  # ===========================================================================
+  # S3 Bucket for Stream File Storage
+  # ===========================================================================
+
+  StreamFilesBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateStreamFilesBucket
+    Properties:
+      BucketName: !Sub "mdf-stream-files-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
 
   # ===========================================================================
   # DynamoDB Tables
   # ===========================================================================
+
+  AsyncJobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "mdf-async-jobs-${Environment}"
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: !Ref AsyncQueueMessageRetentionSeconds
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApiFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  AsyncWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AsyncWorkerFunction}"
+      RetentionInDays: !Ref LogRetentionDays
 
   SubmissionsTable:
     Type: AWS::DynamoDB::Table
@@ -427,55 +411,14 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # ===========================================================================
-  # S3 Bucket for Stream Files
-  # ===========================================================================
-
-  FilesBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      LifecycleConfiguration:
-        Rules:
-          - Id: ExpireOldVersions
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-
-  # ===========================================================================
-  # Dependencies Layer
-  # ===========================================================================
-
-  DependenciesLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: !Sub "mdf-dependencies-${Environment}"
-      Description: Python dependencies for MDF functions
-      ContentUri: ./layers/dependencies/
-      CompatibleRuntimes:
-        - python3.11
-    Metadata:
-      BuildMethod: python3.11
-
 # ===========================================================================
 # Outputs
 # ===========================================================================
 
 Outputs:
   ApiUrl:
-    Description: API Gateway URL
-    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Description: HTTP API URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
     Export:
       Name: !Sub "${AWS::StackName}-ApiUrl"
 
@@ -487,6 +430,6 @@ Outputs:
     Description: DynamoDB table for streams
     Value: !Ref StreamsTable
 
-  FilesBucketName:
-    Description: S3 bucket for stream files
-    Value: !Ref FilesBucket
+  AsyncJobsQueueUrl:
+    Description: SQS queue URL for async jobs
+    Value: !Ref AsyncJobsQueue

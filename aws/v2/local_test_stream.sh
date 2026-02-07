@@ -26,8 +26,7 @@ echo "${CREATE_RES}"
 STREAM_ID=$(python - <<'PY'
 import json,sys
 res=json.loads(sys.stdin.read())
-body=json.loads(res["body"])
-print(body["stream"]["stream_id"])
+print(res["stream_id"])
 PY
 <<< "${CREATE_RES}")
 

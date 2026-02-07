@@ -1,57 +1,43 @@
 """S3 storage backend for MDF v2.
 
-Secondary storage option using AWS S3.
+For staging and production deployments where Globus HTTPS is not needed.
 
 Configuration:
-    S3_BUCKET: Bucket name
-    S3_PREFIX: Key prefix (default: streams/)
-    S3_REGION: AWS region (default: us-east-1)
+    S3_BUCKET: S3 bucket name for file storage
+    S3_PREFIX: Key prefix within the bucket (default: "streams/")
 """
 
-import json
+import io
 import os
-from datetime import datetime
 from typing import Any, BinaryIO, Dict, List, Optional
+
+import boto3
+from botocore.exceptions import ClientError
 
 from v2.storage.base import FileMetadata, StorageBackend
 
 
 class S3Storage(StorageBackend):
-    """Storage backend using AWS S3."""
+    """S3 storage backend for staging/production."""
 
     def __init__(
         self,
         bucket: Optional[str] = None,
         prefix: Optional[str] = None,
-        region: Optional[str] = None,
     ):
-        """Initialize S3 storage.
-
-        Args:
-            bucket: S3 bucket name
-            prefix: Key prefix (default: streams/)
-            region: AWS region
-        """
-        import boto3
-
-        self.bucket = bucket or os.environ.get("S3_BUCKET")
+        self.bucket = bucket or os.environ.get("S3_BUCKET", "")
         if not self.bucket:
-            raise ValueError("S3_BUCKET is required")
-
-        self.prefix = (prefix or os.environ.get("S3_PREFIX", "streams/")).rstrip("/")
-        self.region = region or os.environ.get("S3_REGION", "us-east-1")
-
-        self._s3 = boto3.client("s3", region_name=self.region)
+            raise ValueError("S3_BUCKET environment variable is required for S3 storage backend")
+        self.prefix = prefix or os.environ.get("S3_PREFIX", "streams/")
+        self._s3 = boto3.client("s3")
 
     @property
     def backend_name(self) -> str:
         return "s3"
 
-    def _full_key(self, path: str) -> str:
-        """Build full S3 key from path."""
-        if path.startswith(self.prefix):
-            return path
-        return f"{self.prefix}/{path.lstrip('/')}"
+    def _s3_key(self, path: str) -> str:
+        """Build a full S3 key from a storage path."""
+        return f"{self.prefix}{path}" if not path.startswith(self.prefix) else path
 
     def store_file(
         self,
@@ -60,21 +46,15 @@ class S3Storage(StorageBackend):
         content: bytes,
         content_type: str = "application/octet-stream",
         metadata: Optional[Dict[str, Any]] = None,
-        **kwargs,  # Accept user_token etc. (S3 uses IAM, not user tokens)
+        **kwargs,
     ) -> FileMetadata:
-        """Store a file in S3."""
         path = self._build_path(stream_id, filename)
-        key = self._full_key(path)
+        key = self._s3_key(path)
         checksum = self._compute_checksum(content)
 
-        # Store with metadata
-        s3_metadata = {
-            "checksum-md5": checksum,
-            "original-filename": filename,
-            "stream-id": stream_id,
-        }
+        s3_metadata = {}
         if metadata:
-            s3_metadata["custom-metadata"] = json.dumps(metadata)
+            s3_metadata = {k: str(v) for k, v in metadata.items()}
 
         self._s3.put_object(
             Bucket=self.bucket,
@@ -103,35 +83,36 @@ class S3Storage(StorageBackend):
         content_type: str = "application/octet-stream",
         metadata: Optional[Dict[str, Any]] = None,
     ) -> FileMetadata:
-        """Store a file from stream using multipart upload for large files."""
         path = self._build_path(stream_id, filename)
-        key = self._full_key(path)
+        key = self._s3_key(path)
 
-        # For large files, use multipart upload
-        # For simplicity, read all and compute checksum
-        content = file_obj.read()
-        checksum = self._compute_checksum(content)
-
-        s3_metadata = {
-            "checksum-md5": checksum,
-            "original-filename": filename,
-            "stream-id": stream_id,
-        }
+        s3_metadata = {}
         if metadata:
-            s3_metadata["custom-metadata"] = json.dumps(metadata)
+            s3_metadata = {k: str(v) for k, v in metadata.items()}
 
-        self._s3.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=content,
-            ContentType=content_type,
-            Metadata=s3_metadata,
+        self._s3.upload_fileobj(
+            file_obj,
+            self.bucket,
+            key,
+            ExtraArgs={
+                "ContentType": content_type,
+                "Metadata": s3_metadata,
+            },
         )
+
+        # Read back for checksum if possible, otherwise use empty
+        checksum = ""
+        try:
+            file_obj.seek(0)
+            content = file_obj.read()
+            checksum = self._compute_checksum(content)
+        except Exception:
+            pass
 
         return FileMetadata(
             filename=filename,
             path=path,
-            size_bytes=len(content),
+            size_bytes=size_bytes,
             checksum_md5=checksum,
             content_type=content_type,
             storage_backend=self.backend_name,
@@ -139,22 +120,21 @@ class S3Storage(StorageBackend):
         )
 
     def get_file(self, path: str) -> Optional[bytes]:
-        """Retrieve file from S3."""
-        key = self._full_key(path)
-
+        key = self._s3_key(path)
         try:
-            response = self._s3.get_object(Bucket=self.bucket, Key=key)
-            return response["Body"].read()
-        except self._s3.exceptions.NoSuchKey:
-            return None
-        except Exception as e:
-            if "NoSuchKey" in str(e):
+            resp = self._s3.get_object(Bucket=self.bucket, Key=key)
+            return resp["Body"].read()
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchKey":
                 return None
             raise
 
     def get_download_url(self, path: str, expires_in: int = 3600) -> Optional[str]:
-        """Get pre-signed download URL."""
-        key = self._full_key(path)
+        key = self._s3_key(path)
+        try:
+            self._s3.head_object(Bucket=self.bucket, Key=key)
+        except ClientError:
+            return None
 
         return self._s3.generate_presigned_url(
             "get_object",
@@ -169,9 +149,8 @@ class S3Storage(StorageBackend):
         content_type: str = "application/octet-stream",
         expires_in: int = 3600,
     ) -> Optional[Dict[str, Any]]:
-        """Get pre-signed upload URL for direct S3 upload."""
         path = self._build_path(stream_id, filename)
-        key = self._full_key(path)
+        key = self._s3_key(path)
 
         url = self._s3.generate_presigned_url(
             "put_object",
@@ -186,92 +165,75 @@ class S3Storage(StorageBackend):
         return {
             "url": url,
             "method": "PUT",
-            "path": path,
             "headers": {"Content-Type": content_type},
+            "path": path,
             "expires_in": expires_in,
         }
 
     def list_files(self, stream_id: str) -> List[FileMetadata]:
-        """List files in a stream."""
-        prefix = self._full_key(f"streams/{stream_id}/")
+        safe_stream_id = self._sanitize_stream_id(stream_id)
+        prefix = self._s3_key(f"streams/{safe_stream_id}/")
 
         files = []
         paginator = self._s3.get_paginator("list_objects_v2")
-
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                # Get metadata
-                try:
-                    head = self._s3.head_object(Bucket=self.bucket, Key=key)
-                    s3_meta = head.get("Metadata", {})
+                # Extract filename from key (last path component)
+                filename = key.rsplit("/", 1)[-1]
+                # Strip the prefix to get the storage path
+                path = key[len(self.prefix):] if key.startswith(self.prefix) else key
 
-                    custom_meta = {}
-                    if s3_meta.get("custom-metadata"):
-                        try:
-                            custom_meta = json.loads(s3_meta["custom-metadata"])
-                        except Exception:
-                            pass
+                files.append(FileMetadata(
+                    filename=filename,
+                    path=path,
+                    size_bytes=obj["Size"],
+                    checksum_md5=obj.get("ETag", "").strip('"'),
+                    content_type=self._guess_content_type(filename),
+                    stored_at=obj["LastModified"].isoformat().replace("+00:00", "Z"),
+                    storage_backend=self.backend_name,
+                ))
 
-                    # Extract path relative to prefix
-                    path = key[len(self.prefix):].lstrip("/") if key.startswith(self.prefix) else key
-
-                    files.append(FileMetadata(
-                        filename=s3_meta.get("original-filename", key.split("/")[-1]),
-                        path=path,
-                        size_bytes=obj["Size"],
-                        checksum_md5=s3_meta.get("checksum-md5", ""),
-                        content_type=head.get("ContentType", "application/octet-stream"),
-                        stored_at=obj["LastModified"].isoformat() + "Z",
-                        storage_backend=self.backend_name,
-                        custom_metadata=custom_meta,
-                    ))
-                except Exception:
-                    # If we can't get metadata, create basic entry
-                    path = key[len(self.prefix):].lstrip("/") if key.startswith(self.prefix) else key
-                    files.append(FileMetadata(
-                        filename=key.split("/")[-1],
-                        path=path,
-                        size_bytes=obj["Size"],
-                        checksum_md5="",
-                        stored_at=obj["LastModified"].isoformat() + "Z",
-                        storage_backend=self.backend_name,
-                    ))
-
-        # Sort by stored_at descending
         files.sort(key=lambda x: x.stored_at, reverse=True)
         return files
 
     def delete_file(self, path: str) -> bool:
-        """Delete a file from S3."""
-        key = self._full_key(path)
-
+        key = self._s3_key(path)
         try:
-            self._s3.delete_object(Bucket=self.bucket, Key=key)
-            return True
-        except Exception:
+            self._s3.head_object(Bucket=self.bucket, Key=key)
+        except ClientError:
             return False
 
-    def delete_stream_files(self, stream_id: str) -> int:
-        """Delete all files for a stream."""
-        prefix = self._full_key(f"streams/{stream_id}/")
+        self._s3.delete_object(Bucket=self.bucket, Key=key)
+        return True
 
-        # List and delete
+    def delete_stream_files(self, stream_id: str) -> int:
+        safe_stream_id = self._sanitize_stream_id(stream_id)
+        prefix = self._s3_key(f"streams/{safe_stream_id}/")
+
         count = 0
         paginator = self._s3.get_paginator("list_objects_v2")
-
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
-            if objects:
-                self._s3.delete_objects(
-                    Bucket=self.bucket,
-                    Delete={"Objects": objects},
-                )
-                count += len(objects)
+            objects = page.get("Contents", [])
+            if not objects:
+                continue
+            delete_keys = [{"Key": obj["Key"]} for obj in objects]
+            self._s3.delete_objects(
+                Bucket=self.bucket,
+                Delete={"Objects": delete_keys},
+            )
+            count += len(delete_keys)
 
         return count
 
     def get_stream_size(self, stream_id: str) -> int:
-        """Get total size of all files in a stream."""
-        files = self.list_files(stream_id)
-        return sum(f.size_bytes for f in files)
+        safe_stream_id = self._sanitize_stream_id(stream_id)
+        prefix = self._s3_key(f"streams/{safe_stream_id}/")
+
+        total = 0
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                total += obj["Size"]
+
+        return total

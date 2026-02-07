@@ -1,10 +1,11 @@
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from v2.config import AWS_REGION, DYNAMO_ENDPOINT_URL, DYNAMO_SUBMISSIONS_TABLE
+from v2.submission_utils import latest_version
 
 
 class SubmissionStore:
@@ -12,13 +13,17 @@ class SubmissionStore:
         """Get a submission, optionally by version. If no version, gets latest."""
         if version:
             return self.get_submission(source_id, version)
-        # Get latest version
+        # Get latest version using semantic version sorting
         versions = self.list_versions(source_id)
         if not versions:
             return None
-        # Sort by version descending and return latest
-        versions.sort(key=lambda x: x.get("version", "0"), reverse=True)
-        return versions[0]
+        latest = latest_version(versions)
+        if not latest:
+            return None
+        for item in versions:
+            if item.get("version") == latest:
+                return item
+        return None
 
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
         raise NotImplementedError
@@ -27,6 +32,10 @@ class SubmissionStore:
         raise NotImplementedError
 
     def put_submission(self, record: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def upsert_submission(self, record: Dict[str, Any]) -> None:
+        """Put a submission without condition check (for updates like curation)."""
         raise NotImplementedError
 
     def update_status(self, source_id: str, version: str, status: str) -> None:
@@ -43,6 +52,9 @@ class SubmissionStore:
         raise NotImplementedError
 
     def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
+    def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
         raise NotImplementedError
 
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
@@ -76,8 +88,11 @@ class DynamoSubmissionStore(SubmissionStore):
             ConditionExpression="attribute_not_exists(source_id) AND attribute_not_exists(version)",
         )
 
+    def upsert_submission(self, record: Dict[str, Any]) -> None:
+        self.table.put_item(Item=record)
+
     def update_status(self, source_id: str, version: str, status: str) -> None:
-        now = datetime.utcnow().isoformat("T") + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self.table.update_item(
             Key={"source_id": source_id, "version": version},
             UpdateExpression="SET #status = :status, updated_at = :updated_at",
@@ -110,19 +125,58 @@ class DynamoSubmissionStore(SubmissionStore):
         return resp.get("Items", []), resp.get("LastEvaluatedKey")
 
     def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
-        # Not implemented for Dynamo in local mode.
-        return []
+        # Scan with pagination because FilterExpression is applied post-scan.
+        from boto3.dynamodb.conditions import Attr
+        if not statuses:
+            return []
+        filter_expr = Attr("status").eq(statuses[0])
+        for s in statuses[1:]:
+            filter_expr = filter_expr | Attr("status").eq(s)
+        items: List[Dict[str, Any]] = []
+        last_key = None
+        while len(items) < limit:
+            kwargs: Dict[str, Any] = {"FilterExpression": filter_expr}
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = self.table.scan(**kwargs)
+            for item in resp.get("Items", []):
+                items.append(item)
+                if len(items) >= limit:
+                    break
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return items[:limit]
+
+    def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        self.table.update_item(
+            Key={"source_id": source_id, "version": version},
+            UpdateExpression="SET dataset_profile = :profile, updated_at = :updated_at",
+            ExpressionAttributeValues={":profile": profile_json, ":updated_at": now},
+        )
 
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         # Scan is expensive but acceptable for search
-        resp = self.table.scan(Limit=limit)
-        return resp.get("Items", [])
+        items: List[Dict[str, Any]] = []
+        last_key = None
+        while len(items) < limit:
+            page_limit = min(limit - len(items), 1000)
+            kwargs: Dict[str, Any] = {"Limit": page_limit}
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = self.table.scan(**kwargs)
+            items.extend(resp.get("Items", []))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return items[:limit]
 
 
 class SqliteSubmissionStore(SubmissionStore):
     def __init__(self, path: Optional[str] = None):
         db_path = path or os.environ.get("SQLITE_PATH", "/tmp/mdf_connect_v2.db")
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -151,6 +205,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     rejected_by TEXT,
                     rejection_reason TEXT,
                     curation_history TEXT,
+                    dataset_profile TEXT,
                     PRIMARY KEY (source_id, version)
                 )
                 """
@@ -164,6 +219,11 @@ class SqliteSubmissionStore(SubmissionStore):
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status)"
             )
+            # Migration: add dataset_profile column if missing
+            cur = self.conn.execute("PRAGMA table_info(submissions)")
+            col_names = {row["name"] for row in cur.fetchall()}
+            if "dataset_profile" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_profile TEXT")
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -176,6 +236,11 @@ class SqliteSubmissionStore(SubmissionStore):
         if data.get("curation_history"):
             try:
                 data["curation_history"] = json.loads(data["curation_history"])
+            except Exception:
+                pass
+        if data.get("dataset_profile"):
+            try:
+                data["dataset_profile"] = json.loads(data["dataset_profile"])
             except Exception:
                 pass
         return data
@@ -195,8 +260,7 @@ class SqliteSubmissionStore(SubmissionStore):
         )
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
-    def put_submission(self, record: Dict[str, Any]) -> None:
-        # Serialize JSON fields
+    def _write_submission(self, record: Dict[str, Any]) -> None:
         dataset_mdata = record.get("dataset_mdata")
         if isinstance(dataset_mdata, dict):
             dataset_mdata = json.dumps(dataset_mdata)
@@ -205,6 +269,10 @@ class SqliteSubmissionStore(SubmissionStore):
         if isinstance(curation_history, list):
             curation_history = json.dumps(curation_history)
 
+        dataset_profile = record.get("dataset_profile")
+        if isinstance(dataset_profile, dict):
+            dataset_profile = json.dumps(dataset_profile)
+
         with self.conn:
             self.conn.execute(
                 """
@@ -212,8 +280,8 @@ class SqliteSubmissionStore(SubmissionStore):
                     source_id, version, versioned_source_id, user_id, user_email,
                     organization, status, dataset_mdata, test, created_at, updated_at, action_id,
                     doi, published_at, approved_at, approved_by, rejected_at, rejected_by,
-                    rejection_reason, curation_history
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rejection_reason, curation_history, dataset_profile
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -236,11 +304,18 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("rejected_by"),
                     record.get("rejection_reason"),
                     curation_history,
+                    dataset_profile,
                 ),
             )
 
+    def put_submission(self, record: Dict[str, Any]) -> None:
+        self._write_submission(record)
+
+    def upsert_submission(self, record: Dict[str, Any]) -> None:
+        self._write_submission(record)
+
     def update_status(self, source_id: str, version: str, status: str) -> None:
-        now = datetime.utcnow().isoformat("T") + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.conn:
             self.conn.execute(
                 "UPDATE submissions SET status = ?, updated_at = ? WHERE source_id = ? AND version = ?",
@@ -288,6 +363,14 @@ class SqliteSubmissionStore(SubmissionStore):
         cur = self.conn.execute(query, (*statuses, limit))
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
+    def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self.conn:
+            self.conn.execute(
+                "UPDATE submissions SET dataset_profile = ?, updated_at = ? WHERE source_id = ? AND version = ?",
+                (profile_json, now, source_id, version),
+            )
+
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         cur = self.conn.execute(
             "SELECT * FROM submissions ORDER BY updated_at DESC LIMIT ?",
@@ -296,95 +379,10 @@ class SqliteSubmissionStore(SubmissionStore):
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
 
-class TinyDBSubmissionStore(SubmissionStore):
-    def __init__(self, path: Optional[str] = None):
-        try:
-            from tinydb import TinyDB
-        except Exception as exc:
-            raise RuntimeError("TinyDB is not installed. pip install tinydb") from exc
-
-        db_path = path or os.environ.get("TINYDB_PATH", "/tmp/mdf_connect_v2.json")
-        self.db = TinyDB(db_path)
-        self.table = self.db.table("submissions")
-
-    def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
-        from tinydb import Query
-
-        query = Query()
-        return self.table.get((query.source_id == source_id) & (query.version == version))
-
-    def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
-        from tinydb import Query
-
-        query = Query()
-        return self.table.search(query.source_id == source_id)
-
-    def put_submission(self, record: Dict[str, Any]) -> None:
-        from tinydb import Query
-
-        query = Query()
-        existing = self.table.get(
-            (query.source_id == record.get("source_id"))
-            & (query.version == record.get("version"))
-        )
-        if existing:
-            raise ValueError("Record already exists for source_id/version")
-        self.table.insert(record)
-
-    def update_status(self, source_id: str, version: str, status: str) -> None:
-        from tinydb import Query
-
-        now = datetime.utcnow().isoformat("T") + "Z"
-        query = Query()
-        self.table.update(
-            {"status": status, "updated_at": now},
-            (query.source_id == source_id) & (query.version == version),
-        )
-
-    def list_by_user(self, user_id: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
-        from tinydb import Query
-
-        query = Query()
-        rows = self.table.search(query.user_id == user_id)
-        rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        offset = int(start_key.get("offset")) if start_key and "offset" in start_key else 0
-        page = rows[offset : offset + limit]
-        next_key = {"offset": offset + limit} if len(page) == limit else None
-        return page, next_key
-
-    def list_by_org(self, organization: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
-        from tinydb import Query
-
-        query = Query()
-        rows = self.table.search(query.organization == organization)
-        rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        offset = int(start_key.get("offset")) if start_key and "offset" in start_key else 0
-        page = rows[offset : offset + limit]
-        next_key = {"offset": offset + limit} if len(page) == limit else None
-        return page, next_key
-
-    def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
-        if not statuses:
-            return []
-        from tinydb import Query
-
-        query = Query()
-        rows = self.table.search(query.status.one_of(statuses))
-        rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        return rows[:limit]
-
-    def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
-        rows = self.table.all()
-        rows.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        return rows[:limit]
-
-
 def get_store() -> SubmissionStore:
     backend = os.environ.get("STORE_BACKEND", "dynamo").lower()
     if backend == "sqlite":
         return SqliteSubmissionStore()
-    if backend == "tinydb":
-        return TinyDBSubmissionStore()
     return DynamoSubmissionStore()
 
 

@@ -592,7 +592,7 @@ def demo_summary():
         "  • Full-text search across datasets and streams\n"
         "  • Data preview (CSV stats, JSON structure, text)\n"
         "  • Clone/download from Globus to local\n\n"
-        "[dim]Start the local server: python v2/local_server.py[/dim]",
+        "[dim]Start the local server: cd cs/aws && ./deploy.sh local[/dim]",
         border_style="green",
     ))
     console.print()

@@ -21,7 +21,7 @@ def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
     """Get the configured storage backend.
 
     Args:
-        backend_type: Override the backend type (globus, s3, local)
+        backend_type: Override the backend type (globus, local)
 
     Returns:
         StorageBackend instance

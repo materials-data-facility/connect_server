@@ -32,8 +32,7 @@ echo "${SUBMIT_RES}"
 SOURCE_ID=$(python - <<'PY'
 import json,sys
 res=json.loads(sys.stdin.read())
-body=json.loads(res["body"])
-print(body["source_id"])
+print(res["source_id"])
 PY
 <<< "${SUBMIT_RES}")
 

@@ -23,12 +23,15 @@ Authentication (in order of priority):
 
 import hashlib
 import json
+import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, BinaryIO, Dict, List, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 from v2.storage.base import FileMetadata, StorageBackend
 
@@ -120,6 +123,7 @@ class GlobusHTTPSStorage(StorageBackend):
         client_secret = os.environ.get("GLOBUS_CLIENT_SECRET")
 
         if client_id and client_secret:
+            logger.info("Using client credentials flow for Globus HTTPS token")
             return self._get_client_credentials_token(client_id, client_secret)
 
         raise ValueError(
@@ -128,21 +132,26 @@ class GlobusHTTPSStorage(StorageBackend):
         )
 
     def _get_client_credentials_token(self, client_id: str, client_secret: str) -> str:
-        """Get token using client credentials flow."""
+        """Get token using client credentials flow for HTTPS endpoint access."""
         # Check if we have a cached valid token
         if self._access_token and self._token_expires_at:
-            if datetime.utcnow() < self._token_expires_at:
+            if datetime.now(timezone.utc) < self._token_expires_at:
                 return self._access_token
 
-        # Request new token
+        # Request token scoped to the HTTPS endpoint (data access)
+        scope = f"urn:globus:auth:scope:{self.https_server}:all"
+        logger.info("Requesting client credentials token for scope: %s", scope)
+
         response = self._client.post(
             "https://auth.globus.org/v2/oauth2/token",
             data={
                 "grant_type": "client_credentials",
-                "scope": "https://auth.globus.org/scopes/actions.globus.org/transfer/transfer",
+                "scope": scope,
             },
             auth=(client_id, client_secret),
         )
+        if response.status_code != 200:
+            logger.error("Client credentials token request failed: %s %s", response.status_code, response.text)
         response.raise_for_status()
 
         data = response.json()
@@ -150,7 +159,7 @@ class GlobusHTTPSStorage(StorageBackend):
         # Cache token with some buffer before expiry
         expires_in = data.get("expires_in", 3600)
         from datetime import timedelta
-        self._token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in - 60)
+        self._token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
 
         return self._access_token
 
@@ -163,10 +172,23 @@ class GlobusHTTPSStorage(StorageBackend):
 
     def _full_url(self, path: str) -> str:
         """Build full URL for a path."""
+        safe_path = self._sanitize_remote_path(path)
         # Ensure path doesn't double up the base
-        if path.startswith(self.base_path):
-            path = path[len(self.base_path):]
-        return f"{self.base_url}/{path.lstrip('/')}"
+        if safe_path.startswith(self.base_path):
+            safe_path = safe_path[len(self.base_path):]
+        return f"{self.base_url}/{safe_path.lstrip('/')}"
+
+    def _sanitize_remote_path(self, path: str) -> str:
+        value = (path or "").replace("\\", "/").strip()
+        if not value:
+            raise ValueError("path is required")
+        if "://" in value:
+            raise ValueError("path must not be a URL")
+        if value.startswith("/"):
+            value = value.lstrip("/")
+        if ".." in value.split("/"):
+            raise ValueError("path traversal is not allowed")
+        return value
 
     def _build_path(self, stream_id: str, filename: str) -> str:
         """Build a flat storage path for Globus HTTPS.
@@ -177,10 +199,10 @@ class GlobusHTTPSStorage(StorageBackend):
         Globus HTTPS doesn't auto-create parent directories, so we use
         a flat naming scheme instead of nested directories.
         """
-        date_prefix = datetime.utcnow().strftime("%Y%m%d")
-        # Sanitize filename to avoid path issues
-        safe_filename = filename.replace("/", "_").replace("\\", "_")
-        return f"{stream_id}_{date_prefix}_{safe_filename}"
+        date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
+        safe_stream_id = self._sanitize_stream_id(stream_id)
+        safe_filename = self._sanitize_filename(filename).replace("/", "_")
+        return f"{safe_stream_id}_{date_prefix}_{safe_filename}"
 
     def store_file(
         self,
@@ -203,8 +225,18 @@ class GlobusHTTPSStorage(StorageBackend):
         # Compute checksum before upload
         checksum = self._compute_checksum(content)
 
-        # Use user token if provided, otherwise fall back to server token
-        token = user_token or self._get_token()
+        # Prefer user token (they authenticated with the data scope and
+        # have write access to the endpoint); fall back to server credentials
+        # for background operations (e.g., async worker) where no user token.
+        if user_token:
+            token = user_token
+            logger.info("Using user token for Globus upload")
+        else:
+            try:
+                token = self._get_token()
+                logger.info("Using server token for Globus upload (len=%d)", len(token))
+            except Exception as exc:
+                raise ValueError(f"No authentication available for Globus storage: {exc}")
 
         # Upload file
         response = self._client.put(
@@ -278,7 +310,10 @@ class GlobusHTTPSStorage(StorageBackend):
 
     def get_file(self, path: str) -> Optional[bytes]:
         """Retrieve file contents via HTTPS GET."""
-        url = self._full_url(path)
+        try:
+            url = self._full_url(path)
+        except ValueError:
+            return None
 
         try:
             response = self._client.get(url, headers=self._headers())
@@ -297,7 +332,10 @@ class GlobusHTTPSStorage(StorageBackend):
         """
         # The download URL is just the HTTPS endpoint URL
         # Client will need to provide auth token
-        return self._full_url(path)
+        try:
+            return self._full_url(path)
+        except ValueError:
+            return None
 
     def get_upload_url(
         self,
@@ -318,9 +356,9 @@ class GlobusHTTPSStorage(StorageBackend):
             "method": "PUT",
             "path": path,
             "headers": {
-                "Authorization": f"Bearer {self._get_token()}",
                 "Content-Type": content_type,
             },
+            "auth_type": "bearer",
             "expires_in": expires_in,
         }
 
@@ -330,7 +368,11 @@ class GlobusHTTPSStorage(StorageBackend):
         Uses cached metadata. In production, query DynamoDB.
         """
         # Flat structure: {stream_id}_{date}_{filename}
-        prefix = f"{stream_id}_"
+        try:
+            safe_stream_id = self._sanitize_stream_id(stream_id)
+        except ValueError:
+            return []
+        prefix = f"{safe_stream_id}_"
         files = [
             meta for path, meta in self._metadata_cache.items()
             if path.startswith(prefix)
@@ -341,12 +383,16 @@ class GlobusHTTPSStorage(StorageBackend):
 
     def delete_file(self, path: str) -> bool:
         """Delete a file via HTTPS DELETE."""
-        url = self._full_url(path)
+        try:
+            safe_path = self._sanitize_remote_path(path)
+            url = self._full_url(safe_path)
+        except ValueError:
+            return False
 
         try:
             response = self._client.delete(url, headers=self._headers())
             response.raise_for_status()
-            self._metadata_cache.pop(path, None)
+            self._metadata_cache.pop(safe_path, None)
             return True
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
