@@ -44,7 +44,7 @@ class DataCiteClient:
         """
         self.username = username or os.environ.get("DATACITE_USERNAME")
         self.password = password or os.environ.get("DATACITE_PASSWORD")
-        self.prefix = prefix or os.environ.get("DATACITE_PREFIX", "10.18126")
+        self.prefix = prefix or os.environ.get("DATACITE_PREFIX", "10.23677")
 
         if api_url:
             self.api_url = api_url

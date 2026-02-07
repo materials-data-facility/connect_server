@@ -47,7 +47,7 @@ s3_bucket = "mdf-sam-deployments-staging"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=staging AuthMode=production UseMockDatacite=true AllowAllCurators=true DataCiteUsername=globus DataCitePassword=fhy77$g3 DataCiteApiUrl=https://api.test.datacite.org"
+parameter_overrides = "Environment=staging AuthMode=production UseMockDatacite=true AllowAllCurators=true DataCiteUsername=Globus.TEST DataCitePassword=NTroFAzElE DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false"
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================

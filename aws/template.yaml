@@ -37,7 +37,7 @@ Parameters:
     Description: "DataCite API endpoint."
   DataCitePrefix:
     Type: String
-    Default: "10.18126"
+    Default: "10.23677"
     Description: "DOI prefix for DataCite minting."
   SearchIndexUUID:
     Type: String
