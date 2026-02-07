@@ -94,13 +94,6 @@ def test_async_submission_doi_job_with_sqlite_worker(async_sqlite_env):
     assert submit.status_code == 200
     source_id = submit.json()["source_id"]
 
-    to_pending = client.post(
-        "/status/update",
-        headers=headers,
-        json={"source_id": source_id, "version": "1.0", "status": "pending_curation"},
-    )
-    assert to_pending.status_code == 200
-
     approve = client.post(
         f"/curation/{source_id}/approve",
         headers=headers,
@@ -109,8 +102,8 @@ def test_async_submission_doi_job_with_sqlite_worker(async_sqlite_env):
     assert approve.status_code == 200
     approve_body = approve.json()
     assert approve_body["status"] == "approved"
-    assert approve_body["doi_job"]["queued"] is True
-    assert approve_body["doi_job"]["mode"] == "sqlite"
+    assert approve_body["publish_job"]["queued"] is True
+    assert approve_body["publish_job"]["mode"] == "sqlite"
 
     before = client.get(f"/status/{source_id}")
     assert before.status_code == 200
