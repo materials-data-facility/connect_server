@@ -166,7 +166,7 @@ def test_status_update_requires_curator(tmp_path: Path, monkeypatch: pytest.Monk
     allowed = client.post(
         "/status/update",
         headers={"X-User-Id": "submitter"},
-        json={"source_id": source_id, "version": "1.0", "status": "processing"},
+        json={"source_id": source_id, "version": "1.0", "status": "approved"},
     )
     assert allowed.status_code == 200
 

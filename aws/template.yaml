@@ -189,6 +189,10 @@ Resources:
             - UseAutoAllowCurators
             - !If [IsDevAuth, "true", "false"]
             - !Ref AllowAllCurators
+          CORS_ALLOWED_ORIGINS: !If
+            - IsProd
+            - "https://materialsdatafacility.org,https://app.materialsdatafacility.org"
+            - "*"
           LOG_LEVEL: !If [IsProd, INFO, DEBUG]
           SEARCH_MAX_RESULTS: "50"
           SEARCH_MAX_DATASET_SCAN: "1000"

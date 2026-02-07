@@ -35,9 +35,16 @@ class GlobusSearchClient:
             raise RuntimeError("GLOBUS_CLIENT_ID and GLOBUS_CLIENT_SECRET required for Globus Search")
 
         confidential_client = globus_sdk.ConfidentialAppAuthClient(client_id, client_secret)
-        token_response = confidential_client.oauth2_client_credentials_tokens()
+        token_response = confidential_client.oauth2_client_credentials_tokens(
+            requested_scopes="urn:globus:auth:scope:search.api.globus.org:all"
+        )
         search_token = token_response.by_resource_server.get("search.api.globus.org", {})
-        access_token = search_token.get("access_token") if isinstance(search_token, dict) else search_token.access_token
+        access_token = search_token.get("access_token") if isinstance(search_token, dict) else getattr(search_token, "access_token", None)
+        if not access_token:
+            raise RuntimeError(
+                "Failed to obtain Globus Search access token. "
+                "Ensure the app has the 'urn:globus:auth:scope:search.api.globus.org:all' scope configured."
+            )
 
         authorizer = globus_sdk.AccessTokenAuthorizer(access_token)
         self._client = globus_sdk.SearchClient(authorizer=authorizer)
@@ -76,7 +83,7 @@ class GlobusSearchClient:
                 "year": meta.publication_year or datetime.now().year,
                 "description": meta.description or "",
                 "subjects": meta.keywords,
-                "license": meta.license or "",
+                "license": meta.license.identifier or meta.license.name if meta.license else "",
             },
             "data": {
                 "location": location,

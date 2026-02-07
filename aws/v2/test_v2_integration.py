@@ -196,6 +196,7 @@ def test_path_validation_edge_cases(local_env: Path):
 
 
 def test_curation_reject_transition_rules(local_env: Path):
+    """Submissions land as pending_curation; reject works once, then fails on double-reject."""
     client = TestClient(app)
     headers = {"X-User-Id": "curator-user"}
 
@@ -211,20 +212,7 @@ def test_curation_reject_transition_rules(local_env: Path):
     assert submit.status_code == 200
     source_id = submit.json()["source_id"]
 
-    reject_too_early = client.post(
-        f"/curation/{source_id}/reject",
-        headers=headers,
-        json={"reason": "needs curation first"},
-    )
-    assert reject_too_early.status_code == 400
-
-    to_pending = client.post(
-        "/status/update",
-        headers=headers,
-        json={"source_id": source_id, "version": "1.0", "status": "pending_curation"},
-    )
-    assert to_pending.status_code == 200
-
+    # Submission is already pending_curation — reject should succeed immediately
     reject = client.post(
         f"/curation/{source_id}/reject",
         headers=headers,
@@ -232,6 +220,14 @@ def test_curation_reject_transition_rules(local_env: Path):
     )
     assert reject.status_code == 200
     assert reject.json()["status"] == "rejected"
+
+    # Rejecting again should fail — it's no longer pending_curation
+    reject_again = client.post(
+        f"/curation/{source_id}/reject",
+        headers=headers,
+        json={"reason": "double reject"},
+    )
+    assert reject_again.status_code == 400
 
 
 def test_search_limit_is_capped(local_env: Path):

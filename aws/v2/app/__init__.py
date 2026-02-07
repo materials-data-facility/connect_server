@@ -11,9 +11,12 @@ logging.basicConfig(level=getattr(logging, _log_level, logging.INFO))
 
 app = FastAPI(title="MDF Connect v2")
 
+_cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-User-Id", "X-User-Email", "X-User-Name", "X-Globus-Token"],
     allow_credentials=True,
