@@ -65,6 +65,8 @@ class DataCiteClient:
         metadata: Dict[str, Any],
         url: Optional[str] = None,
         publish: bool = True,
+        doi_suffix: Optional[str] = None,
+        related_identifiers: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Mint a new DOI for a dataset.
 
@@ -73,12 +75,14 @@ class DataCiteClient:
             metadata: DataCite metadata (titles, creators, etc.)
             url: Landing page URL (defaults to MDF URL)
             publish: Whether to publish immediately (vs draft)
+            doi_suffix: Override DOI suffix (e.g. for version-specific DOIs)
+            related_identifiers: DataCite relatedIdentifiers list
 
         Returns:
             Dict with doi, url, state
         """
         # Generate DOI
-        suffix = self._generate_suffix(source_id)
+        suffix = doi_suffix or self._generate_suffix(source_id)
         doi = f"{self.prefix}/{suffix}"
 
         # Default landing page URL
@@ -86,7 +90,7 @@ class DataCiteClient:
             url = f"https://materialsdatafacility.org/detail/{source_id}"
 
         # Build DataCite payload
-        payload = self._build_payload(doi, url, metadata, publish)
+        payload = self._build_payload(doi, url, metadata, publish, related_identifiers)
 
         # Check if DOI already exists
         existing = self.get_doi(doi)
@@ -96,6 +100,26 @@ class DataCiteClient:
         else:
             # Create new DOI
             return self._create_doi(payload)
+
+    def update_metadata(
+        self,
+        doi: str,
+        metadata: Dict[str, Any],
+        url: Optional[str] = None,
+        related_identifiers: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """Update metadata on an existing DOI without minting a new one.
+
+        Used when a new version inherits the dataset DOI and we want to
+        update the DataCite record to reflect the latest version's metadata.
+        """
+        payload = self._build_payload(
+            doi, url or "", metadata, publish=True, related_identifiers=related_identifiers,
+        )
+        # Remove url from payload if not provided (don't overwrite)
+        if not url:
+            payload["data"]["attributes"].pop("url", None)
+        return self._update_doi(doi, payload)
 
     def get_doi(self, doi: str) -> Optional[Dict[str, Any]]:
         """Get DOI metadata."""
@@ -169,6 +193,7 @@ class DataCiteClient:
         url: str,
         metadata: Dict[str, Any],
         publish: bool = True,
+        related_identifiers: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Build DataCite API payload."""
         # Extract metadata fields
@@ -226,6 +251,12 @@ class DataCiteClient:
         elif metadata.get("license"):
             attributes["rightsList"] = [{"rights": metadata["license"]}]
 
+        if metadata.get("fundingReferences"):
+            attributes["fundingReferences"] = metadata["fundingReferences"]
+
+        if related_identifiers:
+            attributes["relatedIdentifiers"] = related_identifiers
+
         # State: draft, registered, or findable
         if publish:
             attributes["event"] = "publish"
@@ -257,14 +288,21 @@ class MockDataCiteClient:
         self.prefix = prefix
         self._dois: Dict[str, Dict] = {}
 
+    def _generate_suffix(self, source_id: str) -> str:
+        suffix = source_id.replace("_", "-").lower()
+        valid_chars = "abcdefghijklmnopqrstuvwxyz0123456789-."
+        return "".join(c if c in valid_chars else "-" for c in suffix)
+
     def mint_doi(
         self,
         source_id: str,
         metadata: Dict[str, Any],
         url: Optional[str] = None,
         publish: bool = True,
+        doi_suffix: Optional[str] = None,
+        related_identifiers: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        suffix = source_id.replace("_", "-").lower()
+        suffix = doi_suffix or source_id.replace("_", "-").lower()
         doi = f"{self.prefix}/{suffix}"
 
         if not url:
@@ -274,6 +312,7 @@ class MockDataCiteClient:
             "doi": doi,
             "url": url,
             "metadata": metadata,
+            "related_identifiers": related_identifiers or [],
             "state": "findable" if publish else "draft",
             "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
@@ -283,6 +322,29 @@ class MockDataCiteClient:
             "doi": doi,
             "url": url,
             "state": "findable" if publish else "draft",
+            "mock": True,
+        }
+
+    def update_metadata(
+        self,
+        doi: str,
+        metadata: Dict[str, Any],
+        url: Optional[str] = None,
+        related_identifiers: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        existing = self._dois.get(doi, {})
+        existing["metadata"] = metadata
+        if url:
+            existing["url"] = url
+        if related_identifiers:
+            existing["related_identifiers"] = related_identifiers
+        self._dois[doi] = existing
+        return {
+            "success": True,
+            "doi": doi,
+            "url": existing.get("url"),
+            "state": existing.get("state", "findable"),
+            "updated": True,
             "mock": True,
         }
 

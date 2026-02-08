@@ -166,6 +166,15 @@ async def submit(
 
     versioned_source_id = "{}-{}".format(source_id, version)
 
+    # Propagate dataset_doi from prior published versions
+    inherited_dataset_doi = None
+    if update and existing_versions:
+        for v in existing_versions:
+            ddoi = v.get("dataset_doi") or v.get("doi")
+            if ddoi and v.get("status") == "published":
+                inherited_dataset_doi = ddoi
+                break
+
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
         "source_id": source_id,
@@ -181,6 +190,8 @@ async def submit(
         "created_at": now,
         "updated_at": now,
     }
+    if inherited_dataset_doi:
+        record["dataset_doi"] = inherited_dataset_doi
 
     try:
         store.put_submission(record)

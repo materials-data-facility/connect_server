@@ -50,7 +50,9 @@ class GlobusSearchClient:
         self._client = globus_sdk.SearchClient(authorizer=authorizer)
         return self._client
 
-    def build_gmeta_entry(self, submission: Dict[str, Any]) -> Dict[str, Any]:
+    def build_gmeta_entry(
+        self, submission: Dict[str, Any], version_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Build a GMetaEntry from a submission record."""
         from v2.metadata import parse_metadata
 
@@ -67,15 +69,23 @@ class GlobusSearchClient:
         data_sources = meta.data_sources or []
         location = data_sources[0] if data_sources else None
 
+        mdf_block: Dict[str, Any] = {
+            "source_id": source_id,
+            "source_name": source_id.rsplit("-", 1)[0] if "-" in source_id else source_id,
+            "version": version,
+            "organization": submission.get("organization", ""),
+            "acl": acl,
+            "ingest_date": submission.get("created_at", datetime.now(timezone.utc).isoformat()),
+        }
+
+        dataset_doi = submission.get("dataset_doi")
+        if dataset_doi:
+            mdf_block["dataset_doi"] = dataset_doi
+        if version_count is not None:
+            mdf_block["version_count"] = version_count
+
         content = {
-            "mdf": {
-                "source_id": source_id,
-                "source_name": source_id.rsplit("-", 1)[0] if "-" in source_id else source_id,
-                "version": version,
-                "organization": submission.get("organization", ""),
-                "acl": acl,
-                "ingest_date": submission.get("created_at", datetime.now(timezone.utc).isoformat()),
-            },
+            "mdf": mdf_block,
             "dc": {
                 "title": meta.title,
                 "creators": [{"name": a.name} for a in meta.authors],
@@ -92,7 +102,8 @@ class GlobusSearchClient:
             },
         }
 
-        doi = submission.get("doi")
+        # dc.doi = version-specific DOI if present, otherwise dataset DOI
+        doi = submission.get("doi") or submission.get("dataset_doi")
         if doi:
             content["dc"]["doi"] = doi
 
@@ -102,10 +113,10 @@ class GlobusSearchClient:
             "content": content,
         }
 
-    def ingest(self, submission: Dict[str, Any]) -> Dict[str, Any]:
+    def ingest(self, submission: Dict[str, Any], version_count: Optional[int] = None) -> Dict[str, Any]:
         """Ingest a submission into the Globus Search index."""
         client = self._get_client()
-        entry = self.build_gmeta_entry(submission)
+        entry = self.build_gmeta_entry(submission, version_count=version_count)
 
         ingest_doc = {
             "ingest_type": "GMetaEntry",
@@ -159,13 +170,15 @@ class MockGlobusSearchClient:
         self.test_mode = test_mode
         self._entries: Dict[str, Dict[str, Any]] = {}
 
-    def build_gmeta_entry(self, submission: Dict[str, Any]) -> Dict[str, Any]:
+    def build_gmeta_entry(
+        self, submission: Dict[str, Any], version_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
         # Re-use the real implementation's logic
         real = GlobusSearchClient.__new__(GlobusSearchClient)
-        return real.build_gmeta_entry(submission)
+        return real.build_gmeta_entry(submission, version_count=version_count)
 
-    def ingest(self, submission: Dict[str, Any]) -> Dict[str, Any]:
-        entry = self.build_gmeta_entry(submission)
+    def ingest(self, submission: Dict[str, Any], version_count: Optional[int] = None) -> Dict[str, Any]:
+        entry = self.build_gmeta_entry(submission, version_count=version_count)
         self._entries[entry["subject"]] = entry
         return {"success": True, "mock": True, "subject": entry["subject"]}
 

@@ -198,6 +198,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     updated_at TEXT,
                     action_id TEXT,
                     doi TEXT,
+                    dataset_doi TEXT,
                     published_at TEXT,
                     approved_at TEXT,
                     approved_by TEXT,
@@ -219,11 +220,13 @@ class SqliteSubmissionStore(SubmissionStore):
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status)"
             )
-            # Migration: add dataset_profile column if missing
+            # Migrations: add columns if missing
             cur = self.conn.execute("PRAGMA table_info(submissions)")
             col_names = {row["name"] for row in cur.fetchall()}
             if "dataset_profile" not in col_names:
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_profile TEXT")
+            if "dataset_doi" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_doi TEXT")
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -279,9 +282,9 @@ class SqliteSubmissionStore(SubmissionStore):
                 INSERT OR REPLACE INTO submissions (
                     source_id, version, versioned_source_id, user_id, user_email,
                     organization, status, dataset_mdata, test, created_at, updated_at, action_id,
-                    doi, published_at, approved_at, approved_by, rejected_at, rejected_by,
+                    doi, dataset_doi, published_at, approved_at, approved_by, rejected_at, rejected_by,
                     rejection_reason, curation_history, dataset_profile
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -297,6 +300,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("updated_at"),
                     record.get("action_id"),
                     record.get("doi"),
+                    record.get("dataset_doi"),
                     record.get("published_at"),
                     record.get("approved_at"),
                     record.get("approved_by"),

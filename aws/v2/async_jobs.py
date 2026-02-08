@@ -289,9 +289,13 @@ def _process_mint_submission_doi(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not submission:
         return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
 
-    doi_result = _mint_doi_for_submission(submission)
+    all_versions = store.list_versions(source_id)
+    doi_result = _mint_doi_for_submission(submission, all_versions=all_versions, mint_doi=True)
     if doi_result.get("success"):
-        submission["doi"] = doi_result.get("doi")
+        if doi_result.get("doi"):
+            submission["doi"] = doi_result["doi"]
+        if doi_result.get("dataset_doi"):
+            submission["dataset_doi"] = doi_result["dataset_doi"]
         submission["status"] = "published"
         submission["published_at"] = _utc_now()
         submission["updated_at"] = _utc_now()
@@ -314,25 +318,34 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not submission:
         return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
 
+    # Look up all versions for DOI versioning context
+    all_versions = store.list_versions(source_id)
+
     result: Dict[str, Any] = {"source_id": source_id, "version": version}
 
-    # Step 1: Mint DOI (if requested)
-    if mint_doi:
-        try:
-            doi_result = _mint_doi_for_submission(submission)
-            result["doi"] = doi_result
-            if doi_result.get("success"):
-                submission["doi"] = doi_result.get("doi")
-            else:
-                logger.warning("DOI minting failed for %s: %s", source_id, doi_result.get("error"))
-        except Exception:
-            logger.exception("DOI minting error for %s", source_id)
-            result["doi"] = {"success": False, "error": "DOI minting exception"}
+    # Step 1: DOI handling (mint new or update existing dataset DOI)
+    # Always call _mint_doi_for_submission — it handles both mint_doi=True
+    # (mint new DOI) and mint_doi=False (update dataset DOI metadata only)
+    try:
+        doi_result = _mint_doi_for_submission(
+            submission, all_versions=all_versions, mint_doi=mint_doi,
+        )
+        result["doi"] = doi_result
+        if doi_result.get("success"):
+            if doi_result.get("doi"):
+                submission["doi"] = doi_result["doi"]
+            if doi_result.get("dataset_doi"):
+                submission["dataset_doi"] = doi_result["dataset_doi"]
+        else:
+            logger.warning("DOI handling failed for %s: %s", source_id, doi_result.get("error"))
+    except Exception:
+        logger.exception("DOI handling error for %s", source_id)
+        result["doi"] = {"success": False, "error": "DOI handling exception"}
 
     # Step 2: Ingest into Globus Search
     try:
         search_client = get_search_client()
-        search_result = search_client.ingest(submission)
+        search_result = search_client.ingest(submission, version_count=len(all_versions))
         result["search_ingest"] = search_result
         if not search_result.get("success"):
             logger.warning("Search ingest failed for %s: %s", source_id, search_result.get("error"))
