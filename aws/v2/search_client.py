@@ -78,6 +78,15 @@ class GlobusSearchClient:
             "ingest_date": submission.get("created_at", datetime.now(timezone.utc).isoformat()),
         }
 
+        mdf_block["domains"] = meta.domains
+
+        if meta.external_doi:
+            mdf_block["external_doi"] = meta.external_doi
+        if meta.external_url:
+            mdf_block["external_url"] = meta.external_url
+        if meta.external_source:
+            mdf_block["external_source"] = meta.external_source
+
         dataset_doi = submission.get("dataset_doi")
         if dataset_doi:
             mdf_block["dataset_doi"] = dataset_doi

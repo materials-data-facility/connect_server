@@ -419,3 +419,150 @@ class TestMockSearchClient:
         # Should get results (from DynamoDB fallback since mock has no ingest)
         body = search.json()
         assert "results" in body
+
+
+# =========================================================================
+# Domains and external import fields
+# =========================================================================
+
+
+class TestDomainsAndExternalImport:
+    """Round-trip tests for domains and external import provenance fields."""
+
+    def test_domains_round_trip(self, env):
+        """Submit with domains, verify they appear in /status."""
+        client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "domains": ["materials", "chemistry"],
+        }
+        resp = client.post("/submit", headers=HEADERS, json=submission)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        status = client.get(f"/status/{source_id}")
+        mdata = status.json()["submission"]["dataset_mdata"]
+        assert mdata["domains"] == ["materials", "chemistry"]
+
+    def test_external_import_round_trip(self, env):
+        """Submit with external import fields, verify they appear in /status."""
+        client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "external_doi": "10.1234/ext-dataset",
+            "external_url": "https://zenodo.org/record/12345",
+            "external_source": "Zenodo",
+        }
+        resp = client.post("/submit", headers=HEADERS, json=submission)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        status = client.get(f"/status/{source_id}")
+        mdata = status.json()["submission"]["dataset_mdata"]
+        assert mdata["external_doi"] == "10.1234/ext-dataset"
+        assert mdata["external_url"] == "https://zenodo.org/record/12345"
+        assert mdata["external_source"] == "Zenodo"
+
+    def test_combined_domains_and_external_import(self, env):
+        """Submit with both domains and external fields, verify all appear."""
+        client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "domains": ["physics"],
+            "external_doi": "10.5678/phys",
+            "external_url": "https://arxiv.org/abs/2301.00001",
+            "external_source": "arXiv",
+        }
+        resp = client.post("/submit", headers=HEADERS, json=submission)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        status = client.get(f"/status/{source_id}")
+        mdata = status.json()["submission"]["dataset_mdata"]
+        assert mdata["domains"] == ["physics"]
+        assert mdata["external_doi"] == "10.5678/phys"
+        assert mdata["external_url"] == "https://arxiv.org/abs/2301.00001"
+        assert mdata["external_source"] == "arXiv"
+
+    def test_domains_empty_by_default(self, env):
+        """Submit without domains, verify dataset_mdata has domains: []."""
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        status = client.get(f"/status/{source_id}")
+        mdata = status.json()["submission"]["dataset_mdata"]
+        assert mdata["domains"] == []
+
+    def test_external_fields_absent_by_default(self, env):
+        """Submit without external fields, verify they are None in dataset_mdata."""
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        status = client.get(f"/status/{source_id}")
+        mdata = status.json()["submission"]["dataset_mdata"]
+        assert mdata.get("external_doi") is None
+        assert mdata.get("external_url") is None
+        assert mdata.get("external_source") is None
+
+    def test_domains_in_search_index(self, env):
+        """Approve with domains, verify GMetaEntry mdf block contains them."""
+        import v2.search_client as sc
+
+        # Reset mock singleton so we get a fresh client
+        sc._mock_client = None
+
+        client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "domains": ["materials", "chemistry"],
+        }
+        resp = client.post("/submit", headers=HEADERS, json=submission)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        # Approve (inline dispatch triggers search ingest)
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": False},
+        )
+        assert approve.status_code == 200
+
+        # Inspect the mock search client's stored entries
+        mock_client = sc.get_search_client()
+        assert len(mock_client._entries) >= 1
+        entry = list(mock_client._entries.values())[0]
+        mdf_block = entry["content"]["mdf"]
+        assert mdf_block["domains"] == ["materials", "chemistry"]
+
+    def test_external_import_still_mints_own_doi(self, env):
+        """Submit with external_doi, approve with mint_doi=True, verify MDF mints its own DOI."""
+        client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "external_doi": "10.9999/someone-elses-doi",
+        }
+        resp = client.post("/submit", headers=HEADERS, json=submission)
+        assert resp.status_code == 200
+        source_id = resp.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert approve.status_code == 200
+        assert approve.json()["status"] == "published"
+
+        status = client.get(f"/status/{source_id}")
+        sub = status.json()["submission"]
+        # MDF minted its own DOI, distinct from the external one
+        assert sub.get("doi") is not None
+        assert sub["doi"] != "10.9999/someone-elses-doi"
+        # External DOI is preserved in metadata
+        mdata = sub["dataset_mdata"]
+        assert mdata["external_doi"] == "10.9999/someone-elses-doi"

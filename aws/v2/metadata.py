@@ -114,6 +114,7 @@ class DatasetMetadata(BaseModel):
     methods: List[str] = Field(default_factory=list)
     facility: Optional[str] = None
     fields_of_science: List[str] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)
 
     # ML-Ready Data Structure
     ml: Optional[MLMetadata] = None
@@ -126,6 +127,11 @@ class DatasetMetadata(BaseModel):
     data_type: Optional[str] = None
     formats: List[str] = Field(default_factory=list)
     language: str = "en"
+
+    # External Import Provenance
+    external_doi: Optional[str] = None
+    external_url: Optional[str] = None
+    external_source: Optional[str] = None
 
     # MDF Platform
     organization: Optional[str] = None

@@ -60,6 +60,9 @@ def _extract_searchable_text(record: Dict[str, Any]) -> str:
         parts.append(meta.facility)
     parts.extend(meta.fields_of_science)
     parts.extend(meta.tags)
+    parts.extend(meta.domains)
+    if meta.external_source:
+        parts.append(meta.external_source)
 
     # ML metadata
     if meta.ml:
