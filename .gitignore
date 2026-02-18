@@ -26,6 +26,8 @@ travis.tar
 .mdfsecrets
 .mdfsecrets.*
 aws/python
+aws/.aws-sam/
 .idea/
 secrets.env
+.DS_Store
 
