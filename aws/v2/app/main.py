@@ -17,6 +17,8 @@ if __name__ == "__main__":
     os.environ.setdefault("ASYNC_DISPATCH_MODE", "inline")
     os.environ.setdefault("AUTH_MODE", "dev")
     os.environ.setdefault("ALLOW_ALL_CURATORS", "true")
+    os.environ.setdefault("CURATOR_GROUP_IDS", "")
+    os.environ.setdefault("REQUIRED_GROUP_MEMBERSHIP", "")
     os.environ.setdefault("USE_MOCK_DATACITE", "true")
 
     uvicorn.run("v2.app:app", host="127.0.0.1", port=8080, reload=True)

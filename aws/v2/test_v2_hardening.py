@@ -244,3 +244,47 @@ def test_curation_without_version_uses_latest(tmp_path: Path, monkeypatch: pytes
     resp = client.get("/curation/src-1", headers={"X-User-Id": "curator"})
     assert resp.status_code == 200
     assert resp.json()["submission"]["version"] == "1.10"
+
+
+def test_submit_requires_submitter_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """In production auth mode the submitter group is enforced; in dev mode it's bypassed."""
+    db_path = tmp_path / "store.db"
+    file_store = tmp_path / "files"
+    monkeypatch.setenv("STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SQLITE_PATH", str(db_path))
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
+    monkeypatch.setenv("REQUIRED_GROUP_MEMBERSHIP", "cc192dca-3751-11e8-90c1-0a7c735d220a")
+    reset_storage_backend()
+
+    client = TestClient(app)
+    payload = {"title": "Dataset", "authors": [{"name": "A"}], "data_sources": ["https://example.com/a.csv"]}
+
+    # In dev mode, group check is bypassed — submit should succeed
+    resp = client.post("/submit", headers={"X-User-Id": "anybody"}, json=payload)
+    assert resp.status_code == 200
+
+    # Switch to production auth mode — without group membership, should be denied.
+    # We can't do full Globus auth in tests, so we test the is_submitter function directly.
+    from v2.app.auth import is_submitter, AUTH_MODE
+    from v2.app.models import AuthContext
+
+    monkeypatch.setattr("v2.app.auth.AUTH_MODE", "production")
+
+    no_groups = AuthContext(user_id="outsider", group_info={})
+    assert is_submitter(no_groups) is False
+
+    has_group = AuthContext(
+        user_id="member",
+        group_info={"cc192dca-3751-11e8-90c1-0a7c735d220a": {"name": "MDF"}},
+    )
+    assert is_submitter(has_group) is True
+
+    # Empty REQUIRED_GROUP_MEMBERSHIP means everyone is allowed
+    monkeypatch.setenv("REQUIRED_GROUP_MEMBERSHIP", "")
+    assert is_submitter(no_groups) is True
+
+    # Restore
+    monkeypatch.setattr("v2.app.auth.AUTH_MODE", "dev")

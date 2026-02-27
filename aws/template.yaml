@@ -127,6 +127,14 @@ Parameters:
     Default: "auto"
     AllowedValues: ["auto", "true", "false"]
     Description: "Allow all users to curate. 'auto' = true for dev, false for prod."
+  CuratorGroupIds:
+    Type: String
+    Default: "3ce2c53e-3752-11e8-891c-0e00fd09bf20"
+    Description: "Comma-separated Globus group UUIDs whose members may curate."
+  RequiredGroupMembership:
+    Type: String
+    Default: "cc192dca-3751-11e8-90c1-0a7c735d220a"
+    Description: "Globus group UUID required to submit datasets."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
@@ -189,6 +197,8 @@ Resources:
             - UseAutoAllowCurators
             - !If [IsDevAuth, "true", "false"]
             - !Ref AllowAllCurators
+          CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
+          REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
           CORS_ALLOWED_ORIGINS: !If
             - IsProd
             - "https://materialsdatafacility.org,https://app.materialsdatafacility.org"
@@ -264,6 +274,8 @@ Resources:
             - UseAutoAllowCurators
             - !If [IsDevAuth, "true", "false"]
             - !Ref AllowAllCurators
+          CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
+          REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
           LOG_LEVEL: !If [IsProd, INFO, DEBUG]
       Events:
         AsyncQueueEvent:

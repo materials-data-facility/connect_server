@@ -15,6 +15,7 @@ from v2.app.auth import (
     ensure_submission_owner_or_curator,
     get_auth,
     is_curator,
+    require_submitter,
 )
 from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext, StatusUpdateRequest
@@ -134,7 +135,7 @@ def _flip_latest_on_prior(store: SubmissionStore, prior_record: Dict[str, Any]) 
 @router.post("/submit")
 async def submit(
     metadata: dict,
-    auth: AuthContext = Depends(get_auth),
+    auth: AuthContext = Depends(require_submitter),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     user_id = auth.user_id

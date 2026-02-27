@@ -335,6 +335,8 @@ local_server() {
     export USE_MOCK_DATACITE=true
     export AUTH_MODE=dev
     export ALLOW_ALL_CURATORS=true
+    export CURATOR_GROUP_IDS=
+    export REQUIRED_GROUP_MEMBERSHIP=
 
     python3 -m v2.app.main
 }

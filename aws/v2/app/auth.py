@@ -156,3 +156,31 @@ async def require_curator(
     if not is_curator(auth):
         raise HTTPException(status_code=403, detail="You do not have curator permissions")
     return auth
+
+
+def is_submitter(auth: AuthContext) -> bool:
+    """Check whether the user is allowed to submit datasets.
+
+    In dev-auth mode (or when REQUIRED_GROUP_MEMBERSHIP is empty) everyone
+    is allowed. In production the user must belong to the submitter group.
+    """
+    if AUTH_MODE == "dev":
+        return True
+
+    required = os.environ.get("REQUIRED_GROUP_MEMBERSHIP", "").strip()
+    if not required:
+        return True
+
+    user_groups = set((auth.group_info or {}).keys())
+    return required in user_groups
+
+
+async def require_submitter(
+    auth: AuthContext = Depends(get_auth),
+) -> AuthContext:
+    if not is_submitter(auth):
+        raise HTTPException(
+            status_code=403,
+            detail="You must be a member of the MDF submitters group to submit datasets",
+        )
+    return auth
