@@ -13,6 +13,8 @@ JOB_PROFILE_SUBMISSION = "profile_submission"
 JOB_MINT_STREAM_DOI = "mint_stream_doi"
 JOB_MINT_SUBMISSION_DOI = "mint_submission_doi"
 JOB_PUBLISH_SUBMISSION = "publish_submission"
+JOB_TRANSFER_DATA = "transfer_data"
+JOB_CLEANUP_TRANSFERS = "cleanup_transfers"
 
 
 def _utc_now() -> str:
@@ -218,6 +220,27 @@ def enqueue_publish_job(source_id: str, version: str, mint_doi: bool = True) -> 
     return get_job_dispatcher().dispatch(JOB_PUBLISH_SUBMISSION, payload)
 
 
+def enqueue_transfer_job(
+    source_id: str,
+    version: str,
+    data_sources: List[str],
+    user_transfer_token: str,
+    user_identity_id: str,
+) -> Dict[str, Any]:
+    payload = {
+        "source_id": source_id,
+        "version": version,
+        "data_sources": data_sources,
+        "user_transfer_token": user_transfer_token,
+        "user_identity_id": user_identity_id,
+    }
+    return get_job_dispatcher().dispatch(JOB_TRANSFER_DATA, payload)
+
+
+def enqueue_cleanup_transfers_job() -> Dict[str, Any]:
+    return get_job_dispatcher().dispatch(JOB_CLEANUP_TRANSFERS, {})
+
+
 def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if job_type == JOB_PROFILE_SUBMISSION:
         return _process_profile_submission(payload)
@@ -227,6 +250,10 @@ def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return _process_mint_submission_doi(payload)
     if job_type == JOB_PUBLISH_SUBMISSION:
         return _process_publish_submission(payload)
+    if job_type == JOB_TRANSFER_DATA:
+        return _process_transfer_data(payload)
+    if job_type == JOB_CLEANUP_TRANSFERS:
+        return _process_cleanup_transfers(payload)
     raise ValueError(f"Unknown job type: {job_type}")
 
 
@@ -303,6 +330,118 @@ def _process_mint_submission_doi(payload: Dict[str, Any]) -> Dict[str, Any]:
     return doi_result
 
 
+def _process_transfer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Initiate Globus transfers for data sources on external endpoints."""
+    from v2.store import get_store
+    from v2.transfer import extract_transfer_sources, initiate_transfer
+
+    source_id = payload["source_id"]
+    version = payload["version"]
+    data_sources = payload["data_sources"]
+    user_transfer_token = payload["user_transfer_token"]
+    user_identity_id = payload["user_identity_id"]
+
+    store = get_store()
+    submission = store.get_submission(source_id, version)
+    if not submission:
+        return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
+
+    transfer_sources = extract_transfer_sources(data_sources)
+    if not transfer_sources:
+        return {"success": True, "message": "No external transfers needed"}
+
+    results = []
+    for src in transfer_sources:
+        try:
+            result = initiate_transfer(
+                source_endpoint=src["source_endpoint"],
+                source_path=src["source_path"],
+                source_id=source_id,
+                version=version,
+                user_transfer_token=user_transfer_token,
+                user_identity_id=user_identity_id,
+            )
+            results.append(result)
+        except Exception as exc:
+            logger.exception("Transfer initiation failed for %s", src["uri"])
+            results.append({"error": str(exc), "uri": src["uri"]})
+
+    # Store transfer state in the submission record
+    successful = [r for r in results if "task_id" in r]
+    if successful:
+        submission["transfer_task_ids"] = [r["task_id"] for r in successful]
+        submission["transfer_acl_rule_ids"] = [r.get("acl_rule_id") for r in successful if r.get("acl_rule_id")]
+        submission["transfer_status"] = "active"
+        submission["transfer_destination"] = successful[0].get("destination_path", "")
+        submission["transfer_initiated_at"] = successful[0].get("initiated_at", _utc_now())
+        submission["updated_at"] = _utc_now()
+        store.upsert_submission(submission)
+
+    return {
+        "success": len(successful) > 0,
+        "source_id": source_id,
+        "version": version,
+        "transfers_initiated": len(successful),
+        "transfers_failed": len(results) - len(successful),
+        "results": results,
+    }
+
+
+def _process_cleanup_transfers(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Scan for submissions with active transfers and clean up completed/stale ones."""
+    from v2.store import get_store
+    from v2.transfer import cleanup_stale_transfers
+
+    store = get_store()
+
+    # Scan for all submissions with active transfers.
+    # DynamoDB scan is fine here — runs 4x/day, table is small.
+    active_submissions = store.scan_by_transfer_status("active")
+    if not active_submissions:
+        return {"success": True, "checked": 0, "cleaned": 0}
+
+    modified = cleanup_stale_transfers(active_submissions)
+
+    # Persist any modified submissions
+    cleaned = 0
+    for sub in modified:
+        sub["updated_at"] = _utc_now()
+        store.upsert_submission(sub)
+        if sub.get("transfer_status") != "active":
+            cleaned += 1
+
+    return {
+        "success": True,
+        "checked": len(active_submissions),
+        "cleaned": cleaned,
+    }
+
+
+def _update_prior_versions_search(store, search_client, source_id: str, current_version: str, all_versions: list) -> None:
+    """Re-ingest prior versions into search with latest=false."""
+    for v_record in all_versions:
+        v = v_record.get("version")
+        if v == current_version:
+            continue
+        if v_record.get("status") != "published":
+            continue
+        # Ensure the prior version's metadata has latest=false
+        mdata = v_record.get("dataset_mdata")
+        if isinstance(mdata, str):
+            try:
+                mdata = json.loads(mdata)
+            except Exception:
+                continue
+        if isinstance(mdata, dict) and mdata.get("latest") is not False:
+            mdata["latest"] = False
+            v_record["dataset_mdata"] = json.dumps(mdata)
+            v_record["updated_at"] = _utc_now()
+            store.upsert_submission(v_record)
+        # Re-ingest into search with latest=false
+        search_client.ingest(v_record, version_count=len(all_versions))
+        logger.info("Updated prior version %s v%s search entry with latest=false", source_id, v)
+
+
 def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Publish a submission: mint DOI (optional), ingest into search, update status."""
     from v2.curation import _mint_doi_for_submission
@@ -352,6 +491,13 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         logger.exception("Search ingest error for %s", source_id)
         result["search_ingest"] = {"success": False, "error": "Search ingest exception"}
+
+    # Step 2b: If this is a new version, re-ingest prior version with latest=false
+    if len(all_versions) > 1:
+        try:
+            _update_prior_versions_search(store, search_client, source_id, version, all_versions)
+        except Exception:
+            logger.warning("Failed to update prior version search entries for %s", source_id, exc_info=True)
 
     # Step 3: Update status to published
     now = _utc_now()

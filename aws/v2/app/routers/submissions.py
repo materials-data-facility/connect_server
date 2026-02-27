@@ -9,7 +9,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from v2.async_jobs import enqueue_profile_job
+from v2.async_jobs import enqueue_profile_job, enqueue_transfer_job
+from v2.transfer import check_transfer_status, cleanup_transfer_acl
 from v2.app.auth import (
     ensure_submission_owner_or_curator,
     get_auth,
@@ -94,6 +95,42 @@ def _normalize_record(record: Dict[str, Any]) -> Dict[str, Any]:
     return record
 
 
+def _extract_dependent_transfer_token(auth) -> Optional[str]:
+    """Extract the user's Globus Transfer token from dependent tokens.
+
+    The server performs a dependent token exchange on the user's auth token
+    to obtain tokens for downstream services (groups, transfer, etc.).
+    """
+    dep = auth.dependent_token
+    if not dep:
+        return None
+
+    # dependent_token is a dict keyed by resource server
+    transfer_entry = dep.get("transfer.api.globus.org")
+    if not transfer_entry:
+        return None
+
+    if isinstance(transfer_entry, dict):
+        return transfer_entry.get("access_token")
+    return getattr(transfer_entry, "access_token", None)
+
+
+def _flip_latest_on_prior(store: SubmissionStore, prior_record: Dict[str, Any]) -> None:
+    """Set latest=false in the prior version's metadata."""
+    mdata = prior_record.get("dataset_mdata")
+    if isinstance(mdata, str):
+        try:
+            mdata = json.loads(mdata)
+        except Exception:
+            return
+    if not isinstance(mdata, dict):
+        return
+    mdata["latest"] = False
+    prior_record["dataset_mdata"] = json.dumps(mdata)
+    prior_record["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    store.upsert_submission(prior_record)
+
+
 @router.post("/submit")
 async def submit(
     metadata: dict,
@@ -168,12 +205,44 @@ async def submit(
 
     # Propagate dataset_doi from prior published versions
     inherited_dataset_doi = None
+    previous_version_id = None
+    root_version_id = None
     if update and existing_versions:
         for v in existing_versions:
             ddoi = v.get("dataset_doi") or v.get("doi")
             if ddoi and v.get("status") == "published":
                 inherited_dataset_doi = ddoi
                 break
+        # Build version chain: previous_version = the latest existing version's id
+        previous_version_id = "{}-{}".format(source_id, latest_ver)
+        # Root version: inherit from prior, or use the earliest version
+        prior_record = next(
+            (v for v in existing_versions if v.get("version") == latest_ver), None
+        )
+        if prior_record:
+            prior_mdata = prior_record.get("dataset_mdata")
+            if isinstance(prior_mdata, str):
+                try:
+                    prior_mdata = json.loads(prior_mdata)
+                except Exception:
+                    prior_mdata = {}
+            if isinstance(prior_mdata, dict):
+                root_version_id = prior_mdata.get("root_version")
+        if not root_version_id:
+            # Earliest version is the root
+            earliest_ver = sorted(
+                existing_versions, key=lambda v: v.get("version", "0")
+            )[0]
+            root_version_id = "{}-{}".format(source_id, earliest_ver.get("version", "1.0"))
+
+    # Populate versioning fields in metadata
+    flat["version"] = version
+    flat["latest"] = True
+    if update:
+        flat["previous_version"] = previous_version_id
+        flat["root_version"] = root_version_id
+    else:
+        flat["root_version"] = versioned_source_id
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
@@ -192,6 +261,13 @@ async def submit(
     }
     if inherited_dataset_doi:
         record["dataset_doi"] = inherited_dataset_doi
+
+    # Flip latest=false on prior version's metadata
+    if update and prior_record:
+        try:
+            _flip_latest_on_prior(store, prior_record)
+        except Exception:
+            logger.warning("Failed to flip latest on prior version %s", latest_ver, exc_info=True)
 
     try:
         store.put_submission(record)
@@ -220,6 +296,31 @@ async def submit(
     if profile_jobs:
         response["profile_jobs"] = profile_jobs
 
+    # Transfer jobs for data on external Globus endpoints
+    from v2.transfer import NCSA_MDF_COLLECTION_UUID, extract_transfer_sources
+
+    transfer_sources = extract_transfer_sources(data_sources)
+    if transfer_sources:
+        # Extract user's transfer token from dependent tokens
+        user_transfer_token = _extract_dependent_transfer_token(auth)
+        if user_transfer_token:
+            try:
+                transfer_result = enqueue_transfer_job(
+                    source_id=source_id,
+                    version=version,
+                    data_sources=data_sources,
+                    user_transfer_token=user_transfer_token,
+                    user_identity_id=auth.user_id,
+                )
+                response["transfer_job"] = transfer_result
+            except Exception:
+                logger.debug("Transfer job dispatch failed for %s", source_id, exc_info=True)
+        else:
+            response["transfer_warning"] = (
+                "Data sources reference external Globus endpoints but no transfer token "
+                "was available. Run 'mdf login' to authenticate with transfer scope."
+            )
+
     return response
 
 
@@ -233,14 +334,79 @@ async def get_status(
         record = store.get_submission(source_id, version)
         if not record:
             return {"success": False, "error": "Submission not found"}
-        return {"success": True, "submission": _normalize_record(record)}
+    else:
+        versions = store.list_versions(source_id)
+        if not versions:
+            return {"success": False, "error": "Submission not found"}
+        latest_ver = latest_version(versions)
+        record = next((item for item in versions if item.get("version") == latest_ver), versions[-1])
 
-    versions = store.list_versions(source_id)
-    if not versions:
-        return {"success": False, "error": "Submission not found"}
-    latest_ver = latest_version(versions)
-    latest = next((item for item in versions if item.get("version") == latest_ver), versions[-1])
-    return {"success": True, "submission": _normalize_record(latest)}
+    # Inline transfer status check — single Globus API call (~200ms)
+    if record.get("transfer_status") == "active":
+        _inline_transfer_check(record, store)
+
+    normalized = _normalize_record(record)
+    result = {"success": True, "submission": normalized}
+
+    # Include transfer status in response when present
+    if record.get("transfer_status"):
+        result["transfer"] = {
+            "status": record.get("transfer_status"),
+            "bytes_transferred": record.get("transfer_bytes_transferred", 0),
+            "files_transferred": record.get("transfer_files_transferred", 0),
+            "destination": record.get("transfer_destination", ""),
+        }
+
+    return result
+
+
+def _inline_transfer_check(record: Dict[str, Any], store: SubmissionStore) -> None:
+    """Check Globus transfer status inline and update the submission record."""
+    task_ids = record.get("transfer_task_ids", [])
+    if not task_ids:
+        return
+
+    all_succeeded = True
+    any_failed = False
+    total_bytes = 0
+    total_files = 0
+
+    for task_id in task_ids:
+        try:
+            status = check_transfer_status(task_id)
+            total_bytes += status.get("bytes_transferred", 0)
+            total_files += status.get("files_transferred", 0)
+
+            if status["status"] == "SUCCEEDED":
+                continue
+            elif status["status"] in ("FAILED", "INACTIVE"):
+                any_failed = True
+                all_succeeded = False
+            else:
+                all_succeeded = False
+        except Exception:
+            logger.debug("Inline transfer check failed for task %s", task_id, exc_info=True)
+            all_succeeded = False
+
+    record["transfer_bytes_transferred"] = total_bytes
+    record["transfer_files_transferred"] = total_files
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    if all_succeeded or any_failed:
+        record["transfer_status"] = "succeeded" if all_succeeded else "failed"
+        # Clean up ACL rules
+        for acl_id in record.get("transfer_acl_rule_ids", []):
+            try:
+                cleanup_transfer_acl(acl_id)
+            except Exception:
+                logger.debug("ACL cleanup failed for %s", acl_id, exc_info=True)
+        record["updated_at"] = now
+        store.upsert_submission(record)
+    else:
+        # Still active — persist progress
+        record["updated_at"] = now
+        store.upsert_submission(record)
 
 
 @router.get("/status")

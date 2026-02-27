@@ -57,6 +57,10 @@ class SubmissionStore:
     def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
         raise NotImplementedError
 
+    def scan_by_transfer_status(self, transfer_status: str) -> List[Dict[str, Any]]:
+        """Return submissions with the given transfer_status (e.g. 'active')."""
+        raise NotImplementedError
+
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         """List all submissions (for search)."""
         raise NotImplementedError
@@ -147,6 +151,24 @@ class DynamoSubmissionStore(SubmissionStore):
             if not last_key:
                 break
         return items[:limit]
+
+    def scan_by_transfer_status(self, transfer_status: str) -> List[Dict[str, Any]]:
+        from boto3.dynamodb.conditions import Attr
+
+        items: List[Dict[str, Any]] = []
+        last_key = None
+        while True:
+            kwargs: Dict[str, Any] = {
+                "FilterExpression": Attr("transfer_status").eq(transfer_status),
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = self.table.scan(**kwargs)
+            items.extend(resp.get("Items", []))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return items
 
     def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -366,6 +388,11 @@ class SqliteSubmissionStore(SubmissionStore):
         )
         cur = self.conn.execute(query, (*statuses, limit))
         return [self._row_to_dict(row) for row in cur.fetchall()]
+
+    def scan_by_transfer_status(self, transfer_status: str) -> List[Dict[str, Any]]:
+        # Transfer fields aren't persisted in the SQLite schema (dev-only store).
+        # Globus transfers only run in production with DynamoDB.
+        return []
 
     def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

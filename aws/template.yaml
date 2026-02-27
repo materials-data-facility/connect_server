@@ -69,7 +69,7 @@ Parameters:
     Description: "API Lambda memory size in MB."
   AsyncWorkerTimeoutSeconds:
     Type: Number
-    Default: 60
+    Default: 120
     MinValue: 3
     MaxValue: 900
     Description: "Async worker Lambda timeout in seconds."
@@ -272,6 +272,12 @@ Resources:
             Queue: !GetAtt AsyncJobsQueue.Arn
             BatchSize: !Ref AsyncWorkerBatchSize
             MaximumBatchingWindowInSeconds: !Ref AsyncWorkerBatchWindowSeconds
+        TransferCleanupSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(6 hours)
+            Description: "Periodic cleanup of stale Globus transfers and ACL rules"
+            Enabled: true
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SubmissionsTable

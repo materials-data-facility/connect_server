@@ -1,12 +1,22 @@
 import argparse
 import json
+import logging
 import time
 from typing import Any, Dict
 
 from v2.async_jobs import handle_sqs_event, run_sqlite_worker_once
 
+logger = logging.getLogger(__name__)
+
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    # EventBridge scheduled events have "source": "aws.events"
+    if event.get("source") == "aws.events":
+        from v2.async_jobs import JOB_CLEANUP_TRANSFERS, process_job
+
+        logger.info("Handling EventBridge scheduled event: %s", event.get("detail-type"))
+        return process_job(JOB_CLEANUP_TRANSFERS, {})
+
     return handle_sqs_event(event)
 
 
