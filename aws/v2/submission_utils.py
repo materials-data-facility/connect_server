@@ -22,12 +22,14 @@ def latest_version(items: List[Dict[str, Any]]) -> Optional[str]:
     return versions_sorted[-1]
 
 
-def increment_version(current: Optional[str]) -> str:
+def increment_version(current: Optional[str], major: bool = False) -> str:
     if not current:
         return "1.0"
     try:
-        major, minor = current.split(".")
-        return "{}.{}".format(major, int(minor) + 1)
+        maj, _min = current.split(".")
+        if major:
+            return "{}.0".format(int(maj) + 1)
+        return "{}.{}".format(maj, int(_min) + 1)
     except Exception:
         return "1.0"
 

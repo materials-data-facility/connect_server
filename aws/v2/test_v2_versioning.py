@@ -82,7 +82,10 @@ def _status(client, source_id, version=None):
 
 
 class TestVersioningDOILifecycle:
-    """Full versioning lifecycle: v1.0 → v1.1 (inherit) → v1.2 (version DOI)."""
+    """Full versioning lifecycle: v1.0 → v2.0 (inherit) → v3.0 (version DOI).
+
+    Note: updates with new data_sources produce major version bumps.
+    """
 
     def test_v10_gets_dataset_doi(self, env):
         """v1.0 with mint_doi=True gets both doi and dataset_doi."""
@@ -99,8 +102,8 @@ class TestVersioningDOILifecycle:
         assert sub["dataset_doi"] is not None
         assert sub["doi"] == sub["dataset_doi"]
 
-    def test_v11_inherits_dataset_doi(self, env):
-        """v1.1 (update, mint_doi=False) inherits dataset_doi, no version doi."""
+    def test_major_update_inherits_dataset_doi(self, env):
+        """v2.0 (update with new data, mint_doi=False) inherits dataset_doi."""
         client = TestClient(app)
 
         # Publish v1.0
@@ -110,24 +113,22 @@ class TestVersioningDOILifecycle:
         v10 = _status(client, source_id, version="1.0")
         dataset_doi = v10["dataset_doi"]
 
-        # Submit v1.1
+        # Submit v2.0 (update with new data_sources → major bump)
         r2 = _submit(client, extra={
-            "title": "Updated Dataset v1.1",
+            "title": "Updated Dataset v2.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        assert r2["version"] == "1.1"
+        assert r2["version"] == "2.0"
 
-        _approve(client, source_id, mint_doi=False, version="1.1")
+        _approve(client, source_id, mint_doi=False, version="2.0")
 
-        v11 = _status(client, source_id, version="1.1")
-        assert v11["status"] == "published"
-        # v1.1 should NOT have its own version doi (doi field stays None or unset)
-        # but dataset_doi should be inherited from v1.0
-        assert v11["dataset_doi"] == dataset_doi
+        v20 = _status(client, source_id, version="2.0")
+        assert v20["status"] == "published"
+        assert v20["dataset_doi"] == dataset_doi
 
-    def test_v12_gets_version_specific_doi(self, env):
-        """v1.2 (update, mint_doi=True) gets version-specific DOI different from dataset DOI."""
+    def test_major_update_gets_version_specific_doi(self, env):
+        """v3.0 (update with data, mint_doi=True) gets version-specific DOI."""
         client = TestClient(app)
 
         # Publish v1.0
@@ -137,33 +138,32 @@ class TestVersioningDOILifecycle:
         v10 = _status(client, source_id, version="1.0")
         dataset_doi = v10["dataset_doi"]
 
-        # Submit and publish v1.1 (inherit)
+        # Submit and publish v2.0
         _submit(client, extra={
-            "title": "Updated Dataset v1.1",
+            "title": "Updated Dataset v2.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        _approve(client, source_id, mint_doi=False, version="1.1")
+        _approve(client, source_id, mint_doi=False, version="2.0")
 
-        # Submit and publish v1.2 (new version DOI)
+        # Submit and publish v3.0 (new version DOI)
         r3 = _submit(client, extra={
-            "title": "Updated Dataset v1.2",
+            "title": "Updated Dataset v3.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        assert r3["version"] == "1.2"
-        _approve(client, source_id, mint_doi=True, version="1.2")
+        assert r3["version"] == "3.0"
+        _approve(client, source_id, mint_doi=True, version="3.0")
 
-        v12 = _status(client, source_id, version="1.2")
-        assert v12["status"] == "published"
-        assert v12["doi"] is not None
-        assert v12["dataset_doi"] == dataset_doi
-        # Version DOI should be different from dataset DOI (has -v1.2 suffix)
-        assert v12["doi"] != dataset_doi
-        assert "-v1.2" in v12["doi"]
+        v30 = _status(client, source_id, version="3.0")
+        assert v30["status"] == "published"
+        assert v30["doi"] is not None
+        assert v30["dataset_doi"] == dataset_doi
+        assert v30["doi"] != dataset_doi
+        assert "-v3.0" in v30["doi"]
 
     def test_full_lifecycle_three_versions(self, env):
-        """Full lifecycle: three versions with different DOI strategies."""
+        """Full lifecycle: three major versions with different DOI strategies."""
         client = TestClient(app)
 
         # v1.0: mint dataset DOI
@@ -172,31 +172,31 @@ class TestVersioningDOILifecycle:
         _approve(client, source_id, mint_doi=True)
         v10 = _status(client, source_id, version="1.0")
 
-        # v1.1: inherit DOI
+        # v2.0: inherit DOI (update with data → major)
         _submit(client, extra={
-            "title": "Updated v1.1",
+            "title": "Updated v2.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        _approve(client, source_id, mint_doi=False, version="1.1")
-        v11 = _status(client, source_id, version="1.1")
+        _approve(client, source_id, mint_doi=False, version="2.0")
+        v20 = _status(client, source_id, version="2.0")
 
-        # v1.2: version-specific DOI
+        # v3.0: version-specific DOI (update with data → major)
         _submit(client, extra={
-            "title": "Updated v1.2",
+            "title": "Updated v3.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        _approve(client, source_id, mint_doi=True, version="1.2")
-        v12 = _status(client, source_id, version="1.2")
+        _approve(client, source_id, mint_doi=True, version="3.0")
+        v30 = _status(client, source_id, version="3.0")
 
         # Verify DOI structure
         dataset_doi = v10["dataset_doi"]
-        assert v10["doi"] == dataset_doi  # v1.0: doi == dataset_doi
-        assert v11["dataset_doi"] == dataset_doi  # v1.1: inherits dataset_doi
-        assert v12["dataset_doi"] == dataset_doi  # v1.2: same dataset_doi
-        assert v12["doi"] != dataset_doi  # v1.2: has own version DOI
-        assert "-v1.2" in v12["doi"]
+        assert v10["doi"] == dataset_doi
+        assert v20["dataset_doi"] == dataset_doi
+        assert v30["dataset_doi"] == dataset_doi
+        assert v30["doi"] != dataset_doi
+        assert "-v3.0" in v30["doi"]
 
 
 class TestVersioningDatasetDOIPropagation:
@@ -213,15 +213,15 @@ class TestVersioningDatasetDOIPropagation:
         v10 = _status(client, source_id, version="1.0")
         dataset_doi = v10["dataset_doi"]
 
-        # Submit v1.1 — check that dataset_doi is set before approval
+        # Submit v2.0 (has data_sources → major bump) — check dataset_doi set before approval
         _submit(client, extra={
-            "title": "Updated v1.1",
+            "title": "Updated v2.0",
             "update": True,
             "extensions": {"mdf_source_id": source_id},
         })
-        v11_pending = _status(client, source_id, version="1.1")
-        assert v11_pending["status"] == "pending_curation"
-        assert v11_pending.get("dataset_doi") == dataset_doi
+        v20_pending = _status(client, source_id, version="2.0")
+        assert v20_pending["status"] == "pending_curation"
+        assert v20_pending.get("dataset_doi") == dataset_doi
 
 
 class TestVersioningSearchIndex:
@@ -431,3 +431,174 @@ class TestVersioningCurationLogic:
         assert "-v1.2" in result["doi"]
         assert result["dataset_doi"] == "10.99999/test-ds"
         assert result["doi"] != result["dataset_doi"]
+
+
+class TestMajorMinorVersioning:
+    """Major/minor version detection: new data → major bump, metadata-only → minor bump."""
+
+    def test_new_data_causes_major_bump(self, env):
+        """Update with data_sources → version goes from 1.0 to 2.0."""
+        client = TestClient(app)
+
+        r1 = _submit(client)
+        source_id = r1["source_id"]
+        assert r1["version"] == "1.0"
+
+        r2 = _submit(client, extra={
+            "title": "New data update",
+            "update": True,
+            "extensions": {"mdf_source_id": source_id},
+            "data_sources": ["https://example.com/new-data.csv"],
+        })
+        assert r2["version"] == "2.0"
+
+    def test_metadata_only_causes_minor_bump(self, env):
+        """Update without data_sources → version goes from 1.0 to 1.1."""
+        client = TestClient(app)
+
+        r1 = _submit(client)
+        source_id = r1["source_id"]
+        assert r1["version"] == "1.0"
+
+        r2 = _submit(client, extra={
+            "title": "Metadata-only update",
+            "update": True,
+            "data_sources": [],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r2["version"] == "1.1"
+
+    def test_metadata_only_inherits_data_sources(self, env):
+        """Metadata-only update inherits data_sources from prior version."""
+        client = TestClient(app)
+
+        r1 = _submit(client, extra={
+            "data_sources": ["https://example.com/original-data.csv"],
+        })
+        source_id = r1["source_id"]
+
+        r2 = _submit(client, extra={
+            "title": "Metadata-only update",
+            "update": True,
+            "data_sources": [],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r2["version"] == "1.1"
+
+        # Check that v1.1 inherited data_sources from v1.0
+        sub = _status(client, source_id, version="1.1")
+        mdata = sub.get("dataset_mdata")
+        if isinstance(mdata, str):
+            mdata = json.loads(mdata)
+        assert mdata["data_sources"] == ["https://example.com/original-data.csv"]
+
+    def test_version_chain_major_minor_mixed(self, env):
+        """Chain: 1.0 → 2.0 → 2.1 → 3.0 with correct version numbers."""
+        client = TestClient(app)
+
+        # v1.0: initial submission with data
+        r1 = _submit(client, extra={
+            "data_sources": ["https://example.com/v1-data.csv"],
+        })
+        source_id = r1["source_id"]
+        assert r1["version"] == "1.0"
+
+        # v2.0: update with new data → major bump
+        r2 = _submit(client, extra={
+            "title": "Major update",
+            "update": True,
+            "data_sources": ["https://example.com/v2-data.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r2["version"] == "2.0"
+
+        # v2.1: metadata-only update → minor bump
+        r3 = _submit(client, extra={
+            "title": "Minor metadata tweak",
+            "update": True,
+            "data_sources": [],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r3["version"] == "2.1"
+
+        # v3.0: another data update → major bump
+        r4 = _submit(client, extra={
+            "title": "Another major update",
+            "update": True,
+            "data_sources": ["https://example.com/v3-data.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r4["version"] == "3.0"
+
+    def test_version_chain_metadata_inherits_correct_sources(self, env):
+        """Minor update after major update inherits the major version's data_sources."""
+        client = TestClient(app)
+
+        # v1.0
+        r1 = _submit(client, extra={
+            "data_sources": ["https://example.com/v1.csv"],
+        })
+        source_id = r1["source_id"]
+
+        # v2.0 with new data
+        _submit(client, extra={
+            "title": "Major update",
+            "update": True,
+            "data_sources": ["https://example.com/v2.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+
+        # v2.1 metadata-only — should inherit v2.0's data_sources
+        r3 = _submit(client, extra={
+            "title": "Minor tweak after v2",
+            "update": True,
+            "data_sources": [],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r3["version"] == "2.1"
+
+        sub = _status(client, source_id, version="2.1")
+        mdata = sub.get("dataset_mdata")
+        if isinstance(mdata, str):
+            mdata = json.loads(mdata)
+        assert mdata["data_sources"] == ["https://example.com/v2.csv"]
+
+    def test_previous_and_root_version_across_bumps(self, env):
+        """previous_version and root_version are correct across major/minor bumps."""
+        client = TestClient(app)
+
+        r1 = _submit(client, extra={
+            "data_sources": ["https://example.com/data.csv"],
+        })
+        source_id = r1["source_id"]
+
+        # v2.0
+        _submit(client, extra={
+            "update": True,
+            "data_sources": ["https://example.com/new-data.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+
+        # v2.1
+        _submit(client, extra={
+            "title": "Minor tweak",
+            "update": True,
+            "data_sources": [],
+            "extensions": {"mdf_source_id": source_id},
+        })
+
+        # Check v2.0 metadata
+        v20 = _status(client, source_id, version="2.0")
+        mdata20 = v20.get("dataset_mdata")
+        if isinstance(mdata20, str):
+            mdata20 = json.loads(mdata20)
+        assert mdata20["previous_version"] == f"{source_id}-1.0"
+        assert mdata20["root_version"] == f"{source_id}-1.0"
+
+        # Check v2.1 metadata
+        v21 = _status(client, source_id, version="2.1")
+        mdata21 = v21.get("dataset_mdata")
+        if isinstance(mdata21, str):
+            mdata21 = json.loads(mdata21)
+        assert mdata21["previous_version"] == f"{source_id}-2.0"
+        assert mdata21["root_version"] == f"{source_id}-1.0"

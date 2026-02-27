@@ -171,7 +171,7 @@ async def submit(
     if data_source_errors:
         raise HTTPException(400, f"Invalid data_sources: {'; '.join(data_source_errors)}")
 
-    if not flat.get("data_sources") and not metadata.get("update_metadata_only"):
+    if not flat.get("data_sources") and not metadata.get("update_metadata_only") and not flat.get("update"):
         raise HTTPException(400, "You must provide data_sources before submission")
 
     organization = flat.get("organization") or DEFAULT_ORGANIZATION
@@ -197,7 +197,8 @@ async def submit(
         existing_versions = []
 
     latest_ver = latest_version(existing_versions)
-    version = increment_version(latest_ver) if update else "1.0"
+    has_new_data = bool(flat.get("data_sources"))
+    version = increment_version(latest_ver, major=has_new_data) if update else "1.0"
 
     if update and not latest_ver:
         raise HTTPException(400, "Update requested but no prior submission found")
@@ -208,6 +209,7 @@ async def submit(
     inherited_dataset_doi = None
     previous_version_id = None
     root_version_id = None
+    prior_record = None
     if update and existing_versions:
         for v in existing_versions:
             ddoi = v.get("dataset_doi") or v.get("doi")
@@ -235,6 +237,17 @@ async def submit(
                 existing_versions, key=lambda v: v.get("version", "0")
             )[0]
             root_version_id = "{}-{}".format(source_id, earliest_ver.get("version", "1.0"))
+
+    # Inherit data_sources from prior version for metadata-only updates
+    if update and not has_new_data and prior_record:
+        prior_mdata = prior_record.get("dataset_mdata")
+        if isinstance(prior_mdata, str):
+            try:
+                prior_mdata = json.loads(prior_mdata)
+            except Exception:
+                prior_mdata = {}
+        if isinstance(prior_mdata, dict):
+            flat["data_sources"] = prior_mdata.get("data_sources", [])
 
     # Populate versioning fields in metadata
     flat["version"] = version
@@ -323,6 +336,51 @@ async def submit(
             )
 
     return response
+
+
+@router.get("/versions/{source_id}")
+async def list_versions(
+    source_id: str,
+    store: SubmissionStore = Depends(get_submission_store),
+):
+    versions = store.list_versions(source_id)
+    if not versions:
+        return {"success": False, "error": "No versions found for this source_id"}
+
+    result_versions = []
+    for v in sorted(versions, key=lambda x: x.get("version", "0")):
+        mdata = v.get("dataset_mdata")
+        if isinstance(mdata, str):
+            try:
+                mdata = json.loads(mdata)
+            except Exception:
+                mdata = {}
+        if not isinstance(mdata, dict):
+            mdata = {}
+
+        result_versions.append({
+            "version": v.get("version"),
+            "title": mdata.get("title", ""),
+            "status": v.get("status", ""),
+            "doi": v.get("dataset_doi") or v.get("doi") or mdata.get("doi"),
+            "created_at": v.get("created_at", ""),
+            "updated_at": v.get("updated_at", ""),
+        })
+
+    # Find the dataset-level DOI (from any published version)
+    dataset_doi = None
+    for v in versions:
+        ddoi = v.get("dataset_doi") or v.get("doi")
+        if ddoi and v.get("status") == "published":
+            dataset_doi = ddoi
+            break
+
+    return {
+        "success": True,
+        "source_id": source_id,
+        "versions": result_versions,
+        "dataset_doi": dataset_doi,
+    }
 
 
 @router.get("/status/{source_id}")
