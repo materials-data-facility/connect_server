@@ -127,11 +127,18 @@ class DatasetMetadata(BaseModel):
     data_type: Optional[str] = None
     formats: List[str] = Field(default_factory=list)
     language: str = "en"
+    download_url: Optional[str] = None
 
     # External Import Provenance
     external_doi: Optional[str] = None
     external_url: Optional[str] = None
     external_source: Optional[str] = None
+
+    # Versioning
+    version: Optional[str] = None
+    previous_version: Optional[str] = None
+    root_version: Optional[str] = None
+    latest: bool = True
 
     # MDF Platform
     organization: Optional[str] = None
@@ -450,6 +457,10 @@ def migrate_v1_payload(old: dict) -> dict:
     # MDF block
     if mdf.get("organization"):
         result["organization"] = mdf["organization"]
+    elif mdf.get("organizations"):
+        orgs = mdf["organizations"]
+        if isinstance(orgs, list) and orgs:
+            result["organization"] = orgs[0]
     if mdf.get("instruments"):
         instr = mdf["instruments"]
         result["methods"] = instr if isinstance(instr, list) else [str(instr)]

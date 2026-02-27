@@ -93,6 +93,19 @@ class GlobusSearchClient:
         if version_count is not None:
             mdf_block["version_count"] = version_count
 
+        # Versioning fields
+        mdf_block["latest"] = meta.latest
+        if meta.root_version:
+            mdf_block["root_version"] = meta.root_version
+        if meta.previous_version:
+            mdf_block["previous_version"] = meta.previous_version
+        if meta.version:
+            mdf_block["version"] = meta.version
+
+        # Download URL
+        if meta.download_url:
+            mdf_block["download_url"] = meta.download_url
+
         content = {
             "mdf": mdf_block,
             "dc": {
@@ -234,7 +247,7 @@ def _format_globus_search_results(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             content = entry_content if isinstance(entry_content, dict) else {}
             mdf = content.get("mdf", {})
             dc = content.get("dc", {})
-            results.append({
+            result_entry = {
                 "type": "dataset",
                 "source_id": mdf.get("source_id"),
                 "version": mdf.get("version"),
@@ -242,7 +255,13 @@ def _format_globus_search_results(data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "authors": [c.get("name", "") for c in dc.get("creators", [])],
                 "status": "published",
                 "score": gmeta.get("score", 0),
-            })
+                "latest": mdf.get("latest", True),
+            }
+            if mdf.get("root_version"):
+                result_entry["root_version"] = mdf["root_version"]
+            if mdf.get("download_url"):
+                result_entry["download_url"] = mdf["download_url"]
+            results.append(result_entry)
     return results
 
 
