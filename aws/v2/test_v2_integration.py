@@ -265,3 +265,52 @@ def test_search_limit_is_capped(local_env: Path):
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["results"]) == 50
+
+
+def test_search_fallback_excludes_unpublished_datasets(
+    local_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = TestClient(app)
+    store = SqliteSubmissionStore(path=str(local_env))
+
+    def _search_unavailable():
+        raise RuntimeError("search temporarily unavailable")
+
+    monkeypatch.setattr("v2.search_client.get_search_client", _search_unavailable)
+
+    for source_id, status in (
+        ("search-published", "published"),
+        ("search-pending", "pending_curation"),
+    ):
+        store.put_submission(
+            {
+                "source_id": source_id,
+                "version": "1.0",
+                "versioned_source_id": f"{source_id}-1.0",
+                "user_id": "search-user",
+                "user_email": "search@example.com",
+                "organization": "org",
+                "status": status,
+                "dataset_mdata": json.dumps(
+                    {
+                        "title": "Fallback Visibility Dataset",
+                        "authors": [{"name": "Visibility Tester"}],
+                        "description": "Used to verify fallback search filtering",
+                        "data_sources": ["https://example.com/a.csv"],
+                    }
+                ),
+                "test": 0,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+
+    resp = client.get(
+        "/search",
+        params={"q": "Fallback Visibility Dataset", "type": "datasets"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert [item["source_id"] for item in body["results"]] == ["search-published"]

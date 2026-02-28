@@ -6,7 +6,10 @@ from fastapi import Depends, Header, HTTPException, Request
 from v2.app.models import AuthContext
 
 
-AUTH_MODE = os.environ.get("AUTH_MODE", "dev")
+def get_auth_mode() -> str:
+    mode = os.environ.get("AUTH_MODE", "dev")
+    normalized = (mode or "dev").strip().lower()
+    return normalized or "dev"
 
 
 async def get_auth(
@@ -16,7 +19,7 @@ async def get_auth(
     x_user_name: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> AuthContext:
-    if AUTH_MODE == "dev":
+    if get_auth_mode() == "dev":
         user_id = x_user_id or os.environ.get("LOCAL_USER_ID", "local-user")
         user_email = x_user_email or os.environ.get("LOCAL_USER_EMAIL", "local@example.com")
         name = x_user_name or os.environ.get("LOCAL_USER_NAME", "Local User")
@@ -100,7 +103,7 @@ async def get_optional_auth(
     x_user_name: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
 ) -> Optional[AuthContext]:
-    if not authorization and not x_user_id and AUTH_MODE != "dev":
+    if not authorization and not x_user_id and get_auth_mode() != "dev":
         return None
     try:
         return await get_auth(request, x_user_id, x_user_email, x_user_name, authorization)
@@ -164,7 +167,7 @@ def is_submitter(auth: AuthContext) -> bool:
     In dev-auth mode (or when REQUIRED_GROUP_MEMBERSHIP is empty) everyone
     is allowed. In production the user must belong to the submitter group.
     """
-    if AUTH_MODE == "dev":
+    if get_auth_mode() == "dev":
         return True
 
     required = os.environ.get("REQUIRED_GROUP_MEMBERSHIP", "").strip()

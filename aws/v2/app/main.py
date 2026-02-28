@@ -12,6 +12,13 @@ if __name__ == "__main__":
     import os
     import uvicorn
 
+    # Load .env file if python-dotenv is installed
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     os.environ.setdefault("STORE_BACKEND", "sqlite")
     os.environ.setdefault("SQLITE_PATH", "/tmp/mdf_connect_v2.db")
     os.environ.setdefault("ASYNC_DISPATCH_MODE", "inline")

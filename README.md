@@ -11,12 +11,26 @@ The v2 backend lives in `aws/v2/` and is a complete rewrite: a single FastAPI ap
 ### What it does
 
 - **Dataset submission**: submit → pending_curation → approved (DOI minted) → published (indexed to Globus Search)
+- **Versioning**: update existing datasets with automatic version incrementing, version history via `GET /versions/{source_id}`
 - **Streaming**: create stream → upload files to Globus HTTPS → snapshot to dataset → close with DOI
 - **Curation**: pending list, approve/reject, curator guards
 - **Discovery**: search, dataset cards, citations (BibTeX/APA/RIS), file preview
 - **Auth**: Globus token validation (prod) or `X-User-Id` headers (dev)
 
-### Architecture
+### API endpoints (29 total)
+
+| Group | Endpoints |
+|-------|-----------|
+| **Submissions** | `POST /submit`, `GET /versions/{id}`, `GET /status/{id}`, `POST /status/update`, `GET /submissions` |
+| **Streams** | `POST /stream/create`, `POST ../append`, `GET /stream/{id}`, `POST ../close`, `POST ../snapshot` |
+| **Files** | `POST ../upload`, `POST ../upload-url`, `POST ../upload-confirm`, `POST ../download-url`, `GET ../files` |
+| **Curation** | `GET /curation/pending`, `GET /curation/{id}`, `POST ../approve`, `POST ../reject` |
+| **Search** | `GET /search` |
+| **Cards** | `GET /card/{id}`, `GET /citation/{id}` |
+| **Preview** | `GET /stream/../preview`, `GET /preview/{id}`, `GET ../files`, `GET ../files/{path}`, `GET ../sample` |
+| **Health** | `GET /health` |
+
+### Deployment architecture
 
 ```
 Client (mdf_agent CLI / SDK)              AWS us-east-1
@@ -41,6 +55,121 @@ X-Globus-Token: data token                    │
                                     │  Globus Search ingest              │
                                     │  Dataset profiling                 │
                                     └────────────────────────────────────┘
+```
+
+### Internal service architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  FastAPI Application  (v2/app/__init__.py)                                  │
+│                                                                             │
+│  Middleware: CORS, request logging                                          │
+│                                                                             │
+│  ┌─── Routers (v2/app/routers/) ─────────────────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  submissions.py          streams.py           files.py                │  │
+│  │  ├ POST /submit          ├ POST /stream/create ├ POST ../upload       │  │
+│  │  ├ GET  /versions/{id}   ├ POST ../append      ├ POST ../upload-url   │  │
+│  │  ├ GET  /status/{id}     ├ GET  /stream/{id}   ├ POST ../upload-confirm│ │
+│  │  ├ POST /status/update   ├ POST ../close       ├ POST ../download-url │  │
+│  │  └ GET  /submissions     └ POST ../snapshot    └ GET  ../files        │  │
+│  │                                                                       │  │
+│  │  curation.py             search.py    cards.py       preview.py       │  │
+│  │  ├ GET  /curation/pending├ GET /search├ GET /card/{id}├ GET stream..  │  │
+│  │  ├ GET  /curation/{id}   │            └ GET /cite/{id}├ GET dataset.. │  │
+│  │  ├ POST ../approve       │                            └ GET ../sample │  │
+│  │  └ POST ../reject        │                                            │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│         │                │                │                                  │
+│         ▼                ▼                ▼                                  │
+│  ┌── Auth ──────┐ ┌─ Dependencies ─┐ ┌── Helpers ──────────────────────┐   │
+│  │  (auth.py)   │ │  (deps.py)     │ │  metadata.py   DatasetMetadata  │   │
+│  │              │ │                │ │  citation.py   BibTeX/APA/RIS   │   │
+│  │  dev mode:   │ │  Singletons:   │ │  search.py     full-text search │   │
+│  │   X-User-Id  │ │  submission    │ │  dataset_card.py  card builder  │   │
+│  │              │ │  store         │ │  preview.py    file previews    │   │
+│  │  production: │ │  stream store  │ │  profiler.py   dataset profiles │   │
+│  │   Globus     │ │  storage       │ │  curation.py   DOI + approve    │   │
+│  │   userinfo() │ │  backend       │ │  datacite.py   DOI minting      │   │
+│  └──────────────┘ └──────┬─────────┘ └─────────────────────────────────┘   │
+│                          │                                                  │
+└──────────────────────────┼──────────────────────────────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+┌─── Store Layer ──┐ ┌─ Stream Store ─┐ ┌── Storage Layer ──────────────────┐
+│  (store.py)      │ │(stream_store.py)│ │  (storage/)                      │
+│                  │ │                │ │                                   │
+│  SubmissionStore │ │  StreamStore   │ │  StorageBackend                   │
+│  (abstract)      │ │  (abstract)    │ │  (abstract)                      │
+│    │             │ │    │           │ │    │                              │
+│    ├─ Dynamo     │ │    ├─ Dynamo   │ │    ├─ GlobusHTTPSStorage (prod)  │
+│    │  SubmStore  │ │    │  StrmStore│ │    │  PUT/GET to data.mdf.org    │
+│    │             │ │    │           │ │    │                              │
+│    └─ Sqlite     │ │    └─ Sqlite   │ │    ├─ S3Storage                  │
+│       SubmStore  │ │       StrmStore│ │    │  AWS S3 bucket              │
+│                  │ │                │ │    │                              │
+│  Operations:     │ │  Operations:   │ │    └─ LocalStorage (dev)         │
+│  put, get, list  │ │  create, get   │ │       Local filesystem           │
+│  upsert, update  │ │  append, close │ │                                  │
+│  list_by_user    │ │  update_meta   │ │  Operations:                     │
+│  list_by_org     │ │  list_all      │ │  store_file, get_file            │
+│  list_by_status  │ │                │ │  get_upload_url (presigned)      │
+│  update_profile  │ │                │ │  get_download_url                │
+│  scan_transfers  │ │                │ │  list_files                      │
+└──────────────────┘ └────────────────┘ └──────────────────────────────────┘
+
+          ┌──────────────────────────────────────────────┐
+          │  Async Job Dispatch  (async_jobs.py)          │
+          │                                              │
+          │  Job types:                                  │
+          │  ├ profile_submission  (scan data files)     │
+          │  ├ mint_submission_doi (DataCite API)        │
+          │  ├ mint_stream_doi    (DataCite API)         │
+          │  ├ publish_submission (search index + DOI)   │
+          │  ├ transfer_data      (Globus Transfer)      │
+          │  └ cleanup_transfers  (ACL cleanup)          │
+          │                                              │
+          │  Dispatchers:                                │
+          │  ├ InlineJobDispatcher   (dev: sync)         │
+          │  ├ SQSJobDispatcher      (prod: async)       │
+          │  └ SqliteJobDispatcher   (test: queued)      │
+          └──────────────────────────────────────────────┘
+```
+
+### Data flow: dataset submission to publication
+
+```
+Researcher                    CLI/SDK                    Backend                    External
+──────────                    ───────                    ───────                    ────────
+    │                            │                          │                          │
+    ├─ mdf publish ─────────────>│                          │                          │
+    │                            ├─ upload files (HTTPS PUT)│─────────────────────────>│ Globus
+    │                            │                          │                          │ Storage
+    │                            ├─ POST /submit ──────────>│                          │
+    │                            │                          ├─ validate metadata       │
+    │                            │                          ├─ generate source_id      │
+    │                            │                          ├─ version (1.0 or +0.1)   │
+    │                            │                          ├─ store (pending_curation) │
+    │                            │                          ├─ enqueue profile job ────>│ Async
+    │                            │<── {source_id, version} ─┤                          │ Worker
+    │                            │                          │                          │
+    │                            │                          │       Profile job runs:   │
+    │                            │                          │       scan files, build   │
+    │                            │                          │       schema + stats      │
+    │                            │                          │                          │
+Curator                          │                          │                          │
+──────                           │                          │                          │
+    ├─ mdf approve ─────────────>│                          │                          │
+    │                            ├─ POST /curation/{id}/approve ─>│                    │
+    │                            │                          ├─ update status: approved  │
+    │                            │                          ├─ enqueue publish job ────>│ Async
+    │                            │<── {success, doi} ───────┤                          │ Worker
+    │                            │                          │                          │
+    │                            │                          │       Publish job runs:   │
+    │                            │                          │       mint DOI (DataCite) │
+    │                            │                          │       index (Globus Search)│
+    │                            │                          │       status → published  │
 ```
 
 ## Prerequisites
@@ -177,6 +306,8 @@ curl https://YOUR_API_URL/health
 
 ## Running tests
 
+Backend tests run in CI (GitHub Actions) on every pull request to `master` or `mdf-agent`. No AWS credentials are needed — all tests use SQLite, local storage, and mock services.
+
 ```bash
 cd aws
 
@@ -190,6 +321,49 @@ python -m pytest v2/test_v2_integration.py -v         # Integration tests
 python -m pytest v2/test_v2_versioning.py -v          # Dataset versioning
 python -m pytest v2/test_v2_async_jobs.py -v          # Async job dispatch
 ```
+
+## Environment variables
+
+For local development, set these in your shell or a `.env` file (requires `pip install python-dotenv`). The `.env` file is loaded automatically when running `python -m v2.app.main`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Core** | | |
+| `STORE_BACKEND` | `dynamo` | `sqlite` (dev) or `dynamo` (prod) |
+| `SQLITE_PATH` | `/tmp/mdf_connect_v2.db` | Database path when using SQLite |
+| `AUTH_MODE` | `dev` | `dev` (X-User-Id headers) or `production` (Globus tokens) |
+| `ASYNC_DISPATCH_MODE` | `inline` | `inline` (sync), `sqs` (prod), or `sqlite` (test) |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| **Storage** | | |
+| `STORAGE_BACKEND` | `local` | `local`, `s3`, or `globus` |
+| `FILE_STORE_PATH` | `/tmp/mdf_files` | Filesystem path when `STORAGE_BACKEND=local` |
+| `S3_BUCKET` | — | S3 bucket when `STORAGE_BACKEND=s3` |
+| `GLOBUS_ENDPOINT_ID` | NCSA UUID | Globus endpoint when `STORAGE_BACKEND=globus` |
+| `GLOBUS_HTTPS_SERVER` | `data.materialsdatafacility.org` | HTTPS hostname for Globus storage |
+| **Auth** | | |
+| `LOCAL_USER_ID` | `local-user` | Dev-mode user identity |
+| `LOCAL_USER_EMAIL` | `local@example.com` | Dev-mode user email |
+| `GLOBUS_CLIENT_ID` | — | Globus confidential app client ID (prod) |
+| `GLOBUS_CLIENT_SECRET` | — | Globus confidential app client secret (prod) |
+| `ALLOW_ALL_CURATORS` | `false` | `true` lets all users curate (dev only) |
+| `CURATOR_USER_IDS` | — | Comma-separated Globus user IDs |
+| `CURATOR_GROUP_IDS` | — | Comma-separated Globus group UUIDs |
+| **DataCite** | | |
+| `USE_MOCK_DATACITE` | `false` | `true` for mock DOI minting (dev/test) |
+| `DATACITE_USERNAME` | — | DataCite repository ID |
+| `DATACITE_PASSWORD` | — | DataCite repository password |
+| `DATACITE_PREFIX` | `10.23677` | DOI prefix |
+| `DATACITE_TEST_MODE` | `true` | Use DataCite test API |
+| **Search** | | |
+| `USE_MOCK_SEARCH` | `false` | `true` for mock search (dev/test) |
+| `SEARCH_INDEX_UUID` | — | Production Globus Search index |
+| `TEST_SEARCH_INDEX_UUID` | — | Test Globus Search index |
+| **Limits** | | |
+| `MAX_SUBMIT_METADATA_BYTES` | `262144` | Max metadata payload size |
+| `MAX_SUBMIT_DATA_SOURCES` | `2000` | Max data sources per submission |
+| `MAX_SUBMIT_AUTHORS` | `1000` | Max authors per submission |
+| `MAX_STREAM_APPEND_COUNT` | `10000` | Max records per stream append |
+| `CORS_ALLOWED_ORIGINS` | `*` | CORS allowed origins |
 
 ## Key configuration files
 

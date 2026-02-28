@@ -1,0 +1,10 @@
+# Backend test dependencies (no AWS credentials needed)
+fastapi>=0.100.0
+mangum>=0.17.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0
+httpx
+globus-sdk>=3.0
+click
+requests
+pytest

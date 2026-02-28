@@ -268,10 +268,10 @@ def test_submit_requires_submitter_group(tmp_path: Path, monkeypatch: pytest.Mon
 
     # Switch to production auth mode — without group membership, should be denied.
     # We can't do full Globus auth in tests, so we test the is_submitter function directly.
-    from v2.app.auth import is_submitter, AUTH_MODE
+    from v2.app.auth import is_submitter
     from v2.app.models import AuthContext
 
-    monkeypatch.setattr("v2.app.auth.AUTH_MODE", "production")
+    monkeypatch.setenv("AUTH_MODE", "production")
 
     no_groups = AuthContext(user_id="outsider", group_info={})
     assert is_submitter(no_groups) is False
@@ -285,6 +285,3 @@ def test_submit_requires_submitter_group(tmp_path: Path, monkeypatch: pytest.Mon
     # Empty REQUIRED_GROUP_MEMBERSHIP means everyone is allowed
     monkeypatch.setenv("REQUIRED_GROUP_MEMBERSHIP", "")
     assert is_submitter(no_groups) is True
-
-    # Restore
-    monkeypatch.setattr("v2.app.auth.AUTH_MODE", "dev")

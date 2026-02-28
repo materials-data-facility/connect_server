@@ -33,6 +33,11 @@ SEARCH_MAX_DATASET_SCAN = _env_int("SEARCH_MAX_DATASET_SCAN", 1000)
 SEARCH_MAX_STREAM_SCAN = _env_int("SEARCH_MAX_STREAM_SCAN", 2000)
 
 
+def _is_searchable_dataset(record: Dict[str, Any]) -> bool:
+    """Only published datasets are eligible for public search fallback."""
+    return record.get("status") == "published"
+
+
 def _extract_searchable_text(record: Dict[str, Any]) -> str:
     """Extract all searchable text from a submission record."""
     parts = []
@@ -157,7 +162,9 @@ def search_datasets(query: str, limit: int = 20) -> List[Dict[str, Any]]:
     """Search across all datasets.
 
     Tries Globus Search first. Falls back to local DynamoDB scan if
-    Globus Search is not configured or the query fails.
+    Globus Search is not configured or the query fails. The fallback
+    only returns published datasets so unpublished submissions are not
+    exposed by degraded search behavior.
     """
     # Try Globus Search first
     try:
@@ -175,6 +182,8 @@ def search_datasets(query: str, limit: int = 20) -> List[Dict[str, Any]]:
 
     results = []
     for record in all_submissions:
+        if not _is_searchable_dataset(record):
+            continue
         text = _extract_searchable_text(record)
         score = _simple_match(text, query)
         if score > 0:

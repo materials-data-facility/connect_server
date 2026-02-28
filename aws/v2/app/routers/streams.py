@@ -222,7 +222,7 @@ async def stream_snapshot(
         "user_id": user_id,
         "user_email": None,
         "organization": stream.get("organization"),
-        "status": "submitted",
+        "status": "pending_curation",
         "dataset_mdata": json.dumps(dataset, default=lambda o: int(o) if isinstance(o, Decimal) else str(o)),
         "test": dataset.get("test", False),
         "created_at": now,

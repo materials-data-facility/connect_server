@@ -407,18 +407,25 @@ class TestMockSearchClient:
         assert len(result2["results"]) == 2
 
     def test_search_datasets_uses_mock(self, env):
-        """search_datasets() should use MockGlobusSearchClient when USE_MOCK_SEARCH=true."""
+        """Unpublished submissions should not leak through fallback search."""
         client = TestClient(app)
+        submission = {
+            **VALID_SUBMISSION,
+            "title": "Search Fallback Unpublished Isolation Title",
+        }
 
-        # Submit a dataset so there's something to find
-        client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        # Submit a dataset so fallback has a matching unpublished record available.
+        client.post("/submit", headers=HEADERS, json=submission)
 
         # Search via API
-        search = client.get("/search", params={"q": "Test Dataset"})
+        search = client.get(
+            "/search",
+            params={"q": "Search Fallback Unpublished Isolation Title", "type": "datasets"},
+        )
         assert search.status_code == 200
-        # Should get results (from DynamoDB fallback since mock has no ingest)
         body = search.json()
-        assert "results" in body
+        assert body["total"] == 0
+        assert body["results"] == []
 
 
 # =========================================================================

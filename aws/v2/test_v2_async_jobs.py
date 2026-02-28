@@ -65,6 +65,7 @@ def test_async_profile_job_with_sqlite_worker(async_sqlite_env):
 
     before = client.get(f"/status/{source_id}")
     assert before.status_code == 200
+    assert before.json()["submission"]["status"] == "pending_curation"
     assert before.json()["submission"].get("dataset_profile") in (None, "")
 
     worker_result = run_sqlite_worker_once(limit=10)
