@@ -128,6 +128,7 @@ class DatasetMetadata(BaseModel):
     formats: List[str] = Field(default_factory=list)
     language: str = "en"
     download_url: Optional[str] = None
+    archive_size: Optional[int] = None
 
     # External Import Provenance
     external_doi: Optional[str] = None
