@@ -41,8 +41,6 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
     meta = parse_metadata(record)
 
     description = meta.description or ""
-    if len(description) > 300:
-        description = description[:297] + "..."
 
     card = {
         "source_id": record.get("source_id"),
@@ -50,7 +48,7 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
         "title": meta.title,
         "authors": [a.name for a in meta.authors],
         "description": description,
-        "keywords": meta.keywords[:10],
+        "keywords": meta.keywords,
         "publisher": meta.publisher,
         "publication_year": meta.publication_year,
         "organization": record.get("organization") or meta.organization,
@@ -73,6 +71,13 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
             "citation": f"/citation/{record.get('source_id')}",
         }
     }
+
+    # Download info (for clone/download)
+    if meta.download_url:
+        card["download_url"] = meta.download_url
+    if meta.archive_size:
+        card["archive_size"] = meta.archive_size
+    card["data_sources"] = list(meta.data_sources)
 
     # ML summary when present
     if meta.ml:

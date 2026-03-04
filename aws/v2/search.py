@@ -132,14 +132,23 @@ def _format_dataset_result(record: Dict[str, Any], score: float) -> Dict[str, An
     """Format a dataset record for search results."""
     meta = parse_metadata(record)
 
+    description = meta.description or ""
     return {
         "type": "dataset",
         "source_id": record.get("source_id"),
         "version": record.get("version"),
         "title": meta.title,
         "authors": [a.name for a in meta.authors],
+        "keywords": meta.keywords,
+        "description": description[:300] if len(description) > 300 else description,
+        "publication_year": meta.publication_year,
+        "organization": record.get("organization"),
+        "domains": meta.domains,
+        "doi": record.get("doi"),
+        "license": meta.license.identifier or meta.license.name if meta.license else None,
+        "size_bytes": record.get("total_bytes"),
+        "file_count": record.get("file_count"),
         "status": record.get("status"),
-        "created_at": record.get("created_at"),
         "score": score,
     }
 
@@ -158,27 +167,41 @@ def _format_stream_result(stream: Dict[str, Any], score: float) -> Dict[str, Any
     }
 
 
-def search_datasets(query: str, limit: int = 20) -> List[Dict[str, Any]]:
-    """Search across all datasets.
+def search_datasets(
+    query: str,
+    limit: int = 20,
+    offset: int = 0,
+    filters: Optional[Dict[str, list]] = None,
+) -> Dict[str, Any]:
+    """Search across all datasets, returning results and facets.
 
-    Tries Globus Search first. Falls back to local DynamoDB scan if
-    Globus Search is not configured or the query fails. The fallback
-    only returns published datasets so unpublished submissions are not
-    exposed by degraded search behavior.
+    Tries Globus Search faceted_search first. Falls back to local DynamoDB
+    scan if Globus Search is not configured or the query fails. The fallback
+    only returns published datasets and does not support facets.
     """
-    # Try Globus Search first
+    # Try Globus Search first (faceted)
     try:
         from v2.search_client import get_search_client
         client = get_search_client()
-        result = client.search(query, limit=limit)
-        if result.get("success") and result.get("results"):
-            return result["results"][:limit]
+        result = client.faceted_search(query, limit=limit, offset=offset, filters=filters)
+        if result.get("success"):
+            # For mock clients (no data ingested), fall through to DynamoDB
+            # so dev/test can search SQLite records. For real Globus Search,
+            # trust the result even when empty (e.g. offset past all results).
+            if result.get("results") or not result.get("mock"):
+                return {
+                    "results": result.get("results", []),
+                    "total": result.get("total", 0),
+                    "facets": result.get("facets", {}),
+                }
+        else:
+            logger.warning("Globus Search faceted_search failed: %s", result.get("error"))
     except Exception:
-        logger.debug("Globus Search unavailable, falling back to local scan", exc_info=True)
+        logger.warning("Globus Search unavailable, falling back to local scan", exc_info=True)
 
-    # Fallback: local DynamoDB scan
+    # Fallback: local DynamoDB scan (no faceting)
     store = get_store()
-    all_submissions = store.list_all(limit=max(limit, SEARCH_MAX_DATASET_SCAN))
+    all_submissions = store.list_all(limit=max(limit + offset, SEARCH_MAX_DATASET_SCAN))
 
     results = []
     for record in all_submissions:
@@ -190,8 +213,14 @@ def search_datasets(query: str, limit: int = 20) -> List[Dict[str, Any]]:
             results.append((score, record))
 
     results.sort(key=lambda x: x[0], reverse=True)
+    total = len(results)
+    page = results[offset:offset + limit]
 
-    return [_format_dataset_result(r, s) for s, r in results[:limit]]
+    return {
+        "results": [_format_dataset_result(r, s) for s, r in page],
+        "total": total,
+        "facets": {},
+    }
 
 
 def search_streams(query: str, limit: int = 20) -> List[Dict[str, Any]]:
@@ -216,20 +245,30 @@ def search_all(
     include_datasets: bool = True,
     include_streams: bool = True,
     limit: int = 20,
+    offset: int = 0,
+    filters: Optional[Dict[str, list]] = None,
 ) -> Dict[str, Any]:
-    """Search across datasets and streams."""
+    """Search across datasets and streams, with faceted results."""
     results = []
+    facets: Dict[str, Any] = {}
+    total = 0
 
     if include_datasets:
-        results.extend(search_datasets(query, limit=limit))
+        ds = search_datasets(query, limit=limit, offset=offset, filters=filters)
+        results.extend(ds["results"])
+        facets = ds.get("facets", {})
+        total += ds.get("total", 0)
 
     if include_streams:
-        results.extend(search_streams(query, limit=limit))
+        streams = search_streams(query, limit=limit)
+        results.extend(streams)
 
     results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     return {
         "query": query,
-        "total": len(results),
+        "total": total,
+        "offset": offset,
         "results": results[:limit],
+        "facets": facets,
     }
