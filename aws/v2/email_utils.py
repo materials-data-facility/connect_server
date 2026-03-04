@@ -8,13 +8,13 @@ Sends transactional emails for key curation lifecycle events:
 Configuration (environment variables):
   SES_FROM_EMAIL        Sender address (must be SES-verified)
   CURATOR_EMAILS        Comma-separated curator addresses for new-submission alerts
-  PORTAL_URL            Public dataset portal base URL  (e.g. https://app.materialsdatafacility.org)
-  CURATION_PORTAL_URL   Curation review page base URL   (e.g. https://app.materialsdatafacility.org/curate)
+  PORTAL_URL            Public dataset portal base URL  (e.g. https://www.materialsdatafacility.org)
+  CURATION_PORTAL_URL   Curation review page URL        (e.g. https://www.materialsdatafacility.org/curation)
 """
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from v2.metadata import parse_metadata
 
@@ -160,7 +160,8 @@ def notify_submitter_rejected(record: Dict[str, Any], reason: str, suggestions: 
     meta = parse_metadata(record)
     source_id = record.get("source_id", "")
     version = record.get("version", "")
-    dataset_url = f"{_portal_url()}/detail/{source_id}"
+    # Link to the submitter's dashboard, not /detail/ which requires published status
+    dashboard_url = f"{_portal_url()}/submissions"
 
     reason_block = (
         f'<div style="background:#fef2f2;border-left:4px solid #ef4444;'
@@ -188,7 +189,7 @@ def notify_submitter_rejected(record: Dict[str, Any], reason: str, suggestions: 
             )
             + _dataset_card(meta, record)
             + reason_block
-            + _cta_button(dataset_url, "View Feedback & Resubmit →", "#b45309")
+            + _cta_button(dashboard_url, "View Feedback & Resubmit →", "#b45309")
         ),
         footer_note=f"Dataset ID: {source_id} · v{version}",
     )
@@ -198,7 +199,7 @@ def notify_submitter_rejected(record: Dict[str, Any], reason: str, suggestions: 
         f"Version: {version}\n\n"
         f"Curator feedback:\n{reason}\n"
         + (f"\nSuggestions:\n{suggestions}\n" if suggestions else "")
-        + f"\nView & resubmit: {dataset_url}"
+        + f"\nView & resubmit: {dashboard_url}"
     )
     return _send([submitter_email], subject, html, text)
 
@@ -208,7 +209,8 @@ def notify_submitter_rejected(record: Dict[str, Any], reason: str, suggestions: 
 # ---------------------------------------------------------------------------
 
 def _escape(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Escape for safe use in both HTML content and attribute values."""
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _build_email(
@@ -245,7 +247,7 @@ def _build_email(
         <!-- Footer -->
         <tr><td style="background:#f8fafc;border-radius:0 0 10px 10px;padding:20px 40px;border-top:1px solid #e2e8f0;">
           <p style="margin:0 0 4px;font-size:11px;color:#94a3b8;text-align:center;">
-            <a href="{_portal_url()}" style="color:#94a3b8;text-decoration:none;">Materials Data Facility</a>
+            <a href="{_escape(_portal_url())}" style="color:#94a3b8;text-decoration:none;">Materials Data Facility</a>
             &nbsp;·&nbsp; University of Chicago &nbsp;·&nbsp; Argonne National Laboratory
           </p>
           {f'<p style="margin:4px 0 0;font-size:11px;color:#cbd5e1;text-align:center;">{_escape(footer_note)}</p>' if footer_note else ''}
@@ -327,14 +329,15 @@ def _dataset_card(meta: Any, record: Dict[str, Any], show_doi: bool = False) -> 
 
 
 def _cta_button(url: str, label: str, color: str) -> str:
+    safe_url = _escape(url)
     return (
         f'<div style="text-align:center;margin:32px 0 8px;">'
-        f'<a href="{url}" style="display:inline-block;background:{color};color:#ffffff;'
+        f'<a href="{safe_url}" style="display:inline-block;background:{color};color:#ffffff;'
         f'text-decoration:none;padding:14px 36px;border-radius:7px;font-size:15px;'
         f'font-weight:700;letter-spacing:.01em;line-height:1;">{_escape(label)}</a>'
         f'</div>'
         f'<p style="text-align:center;margin:10px 0 0;font-size:11px;color:#94a3b8;">'
-        f'Or copy this link: <a href="{url}" style="color:#94a3b8;">{url}</a></p>'
+        f'Or copy this link: <a href="{safe_url}" style="color:#94a3b8;">{safe_url}</a></p>'
     )
 
 
