@@ -1,16 +1,20 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+logger = logging.getLogger(__name__)
+
 from v2.async_jobs import enqueue_publish_job
 from v2.app.auth import require_curator
 from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext, CurationApproveRequest, CurationRejectRequest
+from v2.email_utils import notify_submitter_rejected
 from v2.metadata import parse_metadata
 from v2.store import SubmissionStore
-from v2.submission_utils import latest_version
+from v2.submission_utils import deep_merge, latest_version
 
 router = APIRouter()
 
@@ -146,7 +150,7 @@ async def approve(
             except Exception:
                 existing_metadata = {}
         # Deep merge metadata updates into existing flat metadata
-        _deep_merge(existing_metadata, payload.metadata_updates)
+        deep_merge(existing_metadata, payload.metadata_updates)
         submission["dataset_mdata"] = existing_metadata
 
     submission["status"] = "approved"
@@ -156,6 +160,8 @@ async def approve(
     submission["updated_at"] = now
 
     store.upsert_submission(submission)
+
+    logger.info("Submission approved source_id=%s version=%s by=%s", source_id, version, curator_id)
 
     result = {
         "success": True,
@@ -234,6 +240,13 @@ async def reject(
 
     store.upsert_submission(submission)
 
+    logger.info("Submission rejected source_id=%s version=%s by=%s reason=%s", source_id, version, curator_id, reason)
+
+    try:
+        notify_submitter_rejected(submission, reason, payload.suggestions or "")
+    except Exception:
+        logger.warning("Failed to send rejection email for %s", source_id, exc_info=True)
+
     return {
         "success": True,
         "source_id": source_id,
@@ -245,10 +258,3 @@ async def reject(
     }
 
 
-def _deep_merge(base: dict, updates: dict) -> None:
-    """Deep merge updates into base dict."""
-    for key, value in updates.items():
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value

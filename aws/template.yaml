@@ -135,6 +135,27 @@ Parameters:
     Type: String
     Default: "cc192dca-3751-11e8-90c1-0a7c735d220a"
     Description: "Globus group UUID required to submit datasets."
+  SesFromEmail:
+    Type: String
+    Default: ""
+    Description: "SES-verified sender address for email notifications. Leave blank to disable emails."
+  CuratorEmails:
+    Type: String
+    Default: ""
+    Description: "Comma-separated curator email addresses for new-submission alerts."
+  PortalUrl:
+    Type: String
+    Default: "https://www.materialsdatafacility.org"
+    Description: "Public dataset portal base URL."
+  CurationPortalUrl:
+    Type: String
+    Default: "https://www.materialsdatafacility.org/curation"
+    Description: "Curation review page URL (curators are redirected here)."
+  EnableEmails:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "Set to 'true' to enable SES email notifications. Keep 'false' on staging until SES is configured in the production account."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
@@ -143,6 +164,7 @@ Conditions:
   UseAutoMockDatacite: !Equals [!Ref UseMockDatacite, "auto"]
   UseAutoAllowCurators: !Equals [!Ref AllowAllCurators, "auto"]
   CreateStreamFilesBucket: !Not [!Equals [!Ref AuthMode, dev]]
+  EmailsEnabled: !Equals [!Ref EnableEmails, "true"]
 
 Globals:
   Function:
@@ -207,6 +229,11 @@ Resources:
           SEARCH_MAX_RESULTS: "50"
           SEARCH_MAX_DATASET_SCAN: "1000"
           SEARCH_MAX_STREAM_SCAN: "2000"
+          SES_FROM_EMAIL: !If [EmailsEnabled, !Ref SesFromEmail, ""]
+          CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
+          PORTAL_URL: !Ref PortalUrl
+          CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SES_REGION: !Ref AWS::Region
       Events:
         CatchAll:
           Type: HttpApi
@@ -232,6 +259,11 @@ Resources:
             Action:
               - sqs:SendMessage
             Resource: !GetAtt AsyncJobsQueue.Arn
+        - Statement:
+            Effect: Allow
+            Action:
+              - ses:SendEmail
+            Resource: "*"
 
   AsyncWorkerFunction:
     Type: AWS::Serverless::Function
@@ -277,6 +309,11 @@ Resources:
           CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
           REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
           LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          SES_FROM_EMAIL: !If [EmailsEnabled, !Ref SesFromEmail, ""]
+          CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
+          PORTAL_URL: !Ref PortalUrl
+          CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SES_REGION: !Ref AWS::Region
       Events:
         AsyncQueueEvent:
           Type: SQS
@@ -299,6 +336,11 @@ Resources:
             BucketName: !Sub "mdf-stream-files-${Environment}"
         - SQSPollerPolicy:
             QueueName: !GetAtt AsyncJobsQueue.QueueName
+        - Statement:
+            Effect: Allow
+            Action:
+              - ses:SendEmail
+            Resource: "*"
 
   # ===========================================================================
   # HTTP API (v2 - cheaper than REST API v1)
@@ -313,8 +355,11 @@ Resources:
         ThrottlingRateLimit: !Ref HttpApiThrottleRate
         ThrottlingBurstLimit: !Ref HttpApiThrottleBurst
       CorsConfiguration:
-        AllowOrigins:
-          - "*"
+        AllowOrigins: !If
+          - IsProd
+          - - "https://materialsdatafacility.org"
+            - "https://app.materialsdatafacility.org"
+          - - "*"
         AllowMethods:
           - GET
           - POST
@@ -326,6 +371,7 @@ Resources:
           - X-User-Email
           - X-User-Name
           - X-Globus-Token
+        AllowCredentials: !If [IsProd, true, false]
 
   # ===========================================================================
   # S3 Bucket for Stream File Storage
@@ -346,12 +392,21 @@ Resources:
   # DynamoDB Tables
   # ===========================================================================
 
+  AsyncJobsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "mdf-async-jobs-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+
   AsyncJobsQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub "mdf-async-jobs-${Environment}"
       VisibilityTimeout: 180
       MessageRetentionPeriod: !Ref AsyncQueueMessageRetentionSeconds
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AsyncJobsDLQ.Arn
+        maxReceiveCount: 3
 
   ApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -383,6 +438,8 @@ Resources:
           AttributeType: S
         - AttributeName: updated_at
           AttributeType: S
+        - AttributeName: status
+          AttributeType: S
       KeySchema:
         - AttributeName: source_id
           KeyType: HASH
@@ -402,6 +459,14 @@ Resources:
             - AttributeName: organization
               KeyType: HASH
             - AttributeName: source_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-submissions
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: updated_at
               KeyType: RANGE
           Projection:
             ProjectionType: ALL

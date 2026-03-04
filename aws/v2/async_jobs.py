@@ -506,6 +506,13 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     submission["updated_at"] = now
     store.upsert_submission(submission)
 
+    # Notify submitter their dataset is live
+    try:
+        from v2.email_utils import notify_submitter_approved
+        notify_submitter_approved(submission)
+    except Exception:
+        logger.warning("Failed to send approval email for %s", source_id, exc_info=True)
+
     result["success"] = True
     result["status"] = "published"
     result["published_at"] = now

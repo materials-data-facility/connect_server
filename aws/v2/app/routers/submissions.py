@@ -29,6 +29,7 @@ from v2.app.models import (
     WithdrawRequest,
 )
 from v2.config import DEFAULT_ORGANIZATION
+from v2.email_utils import notify_curators_new_submission
 from v2.metadata import DatasetMetadata, migrate_v1_payload
 from v2.store import SubmissionStore, parse_pagination_key, serialize_pagination_key
 from v2.submission_utils import deep_merge, generate_source_id, increment_version, latest_version
@@ -654,6 +655,11 @@ async def submit(
     except Exception as exc:
         logger.exception("Failed to store submission")
         raise HTTPException(500, "Internal error while storing submission")
+
+    try:
+        notify_curators_new_submission(record)
+    except Exception:
+        logger.warning("Failed to send new-submission email for %s", source_id, exc_info=True)
 
     response = {
         "success": True,
