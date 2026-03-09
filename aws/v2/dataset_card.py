@@ -111,6 +111,17 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
         card["doi"] = doi
         card["links"]["doi"] = f"https://doi.org/{doi}"
 
+    # External provenance (cross-published datasets)
+    if meta.external:
+        provenance = {"source": meta.external.source}
+        if meta.external.doi:
+            provenance["doi"] = meta.external.doi
+            provenance["doi_url"] = f"https://doi.org/{meta.external.doi}"
+        if meta.external.url:
+            provenance["url"] = meta.external.url
+        provenance["notice"] = f"Originally published at {meta.external.source}"
+        card["external_provenance"] = provenance
+
     # Profile summary when available
     profile = record.get("dataset_profile")
     if profile:

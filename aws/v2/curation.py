@@ -94,6 +94,8 @@ def _extract_doi_metadata(submission: Dict[str, Any]) -> Dict[str, Any]:
         doi_metadata["rightsList"] = attrs["rightsList"]
     if attrs.get("fundingReferences"):
         doi_metadata["fundingReferences"] = attrs["fundingReferences"]
+    if attrs.get("relatedIdentifiers"):
+        doi_metadata["relatedIdentifiers"] = attrs["relatedIdentifiers"]
 
     return doi_metadata
 
@@ -145,6 +147,7 @@ def _mint_doi_for_submission(
                 source_id=source_id,
                 metadata=doi_metadata,
                 publish=True,
+                related_identifiers=doi_metadata.get("relatedIdentifiers"),
             )
             if result.get("success"):
                 result["dataset_doi"] = result["doi"]
@@ -162,6 +165,9 @@ def _mint_doi_for_submission(
                     "relationType": "IsVersionOf",
                 }
             ]
+            # Merge external relations (e.g. cross-publish provenance)
+            for ri in doi_metadata.get("relatedIdentifiers", []):
+                related.append(ri)
             result = client.mint_doi(
                 source_id=source_id,
                 metadata=doi_metadata,

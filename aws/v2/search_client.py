@@ -89,12 +89,12 @@ class GlobusSearchClient:
 
         mdf_block["domains"] = meta.domains
 
-        if meta.external_doi:
-            mdf_block["external_doi"] = meta.external_doi
-        if meta.external_url:
-            mdf_block["external_url"] = meta.external_url
-        if meta.external_source:
-            mdf_block["external_source"] = meta.external_source
+        if meta.external:
+            mdf_block["external_source"] = meta.external.source
+            if meta.external.doi:
+                mdf_block["external_doi"] = meta.external.doi
+            if meta.external.url:
+                mdf_block["external_url"] = meta.external.url
 
         dataset_doi = submission.get("dataset_doi")
         if dataset_doi:

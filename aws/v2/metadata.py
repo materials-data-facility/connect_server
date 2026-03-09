@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +56,15 @@ class License(BaseModel):
     name: str
     url: Optional[str] = None
     identifier: Optional[str] = None
+
+
+class ExternalSource(BaseModel):
+    """Provenance for datasets cross-published from another repository."""
+    source: str                          # e.g. "Zenodo", "Figshare", "NOMAD"
+    doi: Optional[str] = None            # original DOI
+    url: Optional[str] = None            # landing page URL
+    identifier: Optional[str] = None     # repo-specific ID (e.g. zenodo record id)
+    doi_relation: str = "IsVariantFormOf" # DataCite relation type for the link
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +140,7 @@ class DatasetMetadata(BaseModel):
     archive_size: Optional[int] = None
 
     # External Import Provenance
-    external_doi: Optional[str] = None
-    external_url: Optional[str] = None
-    external_source: Optional[str] = None
+    external: Optional[ExternalSource] = None
 
     # Versioning
     version: Optional[str] = None
@@ -150,6 +157,32 @@ class DatasetMetadata(BaseModel):
     # Submission flags (not stored in metadata proper)
     test: bool = False
     update: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_external_fields(cls, values):
+        if isinstance(values, dict) and not values.get("external"):
+            ext_doi = values.pop("external_doi", None)
+            ext_url = values.pop("external_url", None)
+            ext_src = values.pop("external_source", None)
+            if ext_doi or ext_url or ext_src:
+                values["external"] = {
+                    "doi": ext_doi, "url": ext_url,
+                    "source": ext_src or "Unknown",
+                }
+        return values
+
+    @property
+    def external_doi(self) -> Optional[str]:
+        return self.external.doi if self.external else None
+
+    @property
+    def external_url(self) -> Optional[str]:
+        return self.external.url if self.external else None
+
+    @property
+    def external_source(self) -> Optional[str]:
+        return self.external.source if self.external else None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +320,20 @@ def to_datacite(
                 "relationType": rw.relation_type,
             })
         attributes["relatedIdentifiers"] = related
+
+    # External DOI relation (cross-publish provenance)
+    if meta.external and meta.external.doi:
+        has_ext = any(
+            rw.identifier == meta.external.doi for rw in meta.related_works
+        )
+        if not has_ext:
+            if "relatedIdentifiers" not in attributes:
+                attributes["relatedIdentifiers"] = []
+            attributes["relatedIdentifiers"].append({
+                "relatedIdentifier": meta.external.doi,
+                "relatedIdentifierType": "DOI",
+                "relationType": meta.external.doi_relation,
+            })
 
     # GeoLocations
     if meta.geo_locations:
