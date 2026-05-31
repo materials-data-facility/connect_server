@@ -34,6 +34,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "true")
     monkeypatch.setenv("USE_MOCK_DATACITE", "true")
     monkeypatch.setenv("USE_MOCK_SEARCH", "true")

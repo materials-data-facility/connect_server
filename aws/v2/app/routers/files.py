@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 logger = logging.getLogger(__name__)
 
 from v2.app.auth import ensure_stream_owner_or_curator, get_auth
-from v2.app.deps import get_storage, get_stream_store_dep
+from v2.app.deps import get_storage, get_stream_store_dep, get_submission_store
 from v2.app.models import (
     AuthContext,
     ConfirmUploadRequest,
@@ -18,6 +18,7 @@ from v2.app.models import (
     UploadUrlRequest,
 )
 from v2.storage import StorageBackend
+from v2.store import SubmissionStore
 from v2.stream_store import StreamStore
 
 router = APIRouter()
@@ -31,9 +32,11 @@ def _path_belongs_to_stream(storage: StorageBackend, stream_id: str, path: str) 
         return False
     if storage.backend_name == "local":
         return normalized.startswith(f"streams/{stream_id}/")
+    if storage.backend_name == "s3":
+        return normalized.startswith(f"streams/{stream_id}/") or normalized.startswith(f"{stream_id}/")
     if storage.backend_name == "globus":
         return normalized.startswith(f"{stream_id}_")
-    return True
+    return False
 
 
 @router.post("/stream/{stream_id}/upload")
@@ -238,6 +241,7 @@ async def get_download_url(
     auth: AuthContext = Depends(get_auth),
     stream_store: StreamStore = Depends(get_stream_store_dep),
     storage: StorageBackend = Depends(get_storage),
+    submission_store: SubmissionStore = Depends(get_submission_store),
 ):
     path = payload.path if payload else None
 
@@ -253,6 +257,15 @@ async def get_download_url(
     download_url = storage.get_download_url(path)
     if not download_url:
         raise HTTPException(400, "File not found or download not available")
+
+    # Fire-and-forget download count increment on parent submission
+    parent_source_id = stream.get("source_id")
+    parent_version = stream.get("version")
+    if parent_source_id and parent_version:
+        try:
+            submission_store.increment_counter(parent_source_id, parent_version, "download_count")
+        except Exception:
+            logger.debug("Failed to increment download_count for %s", parent_source_id, exc_info=True)
 
     return {
         "success": True,

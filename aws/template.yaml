@@ -10,7 +10,7 @@ Parameters:
     Description: Deployment environment
   AuthMode:
     Type: String
-    Default: dev
+    Default: production
     AllowedValues: [dev, production]
     Description: "dev = X-User-Id headers (no Globus). production = Globus token introspection."
   GlobusClientId:
@@ -156,6 +156,23 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: "Set to 'true' to enable SES email notifications. Keep 'false' on staging until SES is configured in the production account."
+  OpenAIApiKey:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "OpenAI API key. Used for dataset text embeddings (semantic search)."
+  EmbeddingModel:
+    Type: String
+    Default: "text-embedding-3-small"
+    Description: "OpenAI embedding model name."
+  EmbeddingDims:
+    Type: String
+    Default: "1536"
+    Description: "Embedding dimensions. text-embedding-3-small supports 512 / 1024 / 1536."
+  EmbeddingSnapshotPublicUrl:
+    Type: String
+    Default: ""
+    Description: "Optional public HTTPS base URL (CloudFront) for the embeddings snapshot bucket. Leave blank to skip public URLs."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
@@ -234,6 +251,12 @@ Resources:
           PORTAL_URL: !Ref PortalUrl
           CURATION_PORTAL_URL: !Ref CurationPortalUrl
           SES_REGION: !Ref AWS::Region
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          EMBEDDING_DIMS: !Ref EmbeddingDims
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
+          EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
       Events:
         CatchAll:
           Type: HttpApi
@@ -254,6 +277,8 @@ Resources:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
             BucketName: !Sub "mdf-stream-files-${Environment}"
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-embeddings-${Environment}"
         - Statement:
             Effect: Allow
             Action:
@@ -314,6 +339,12 @@ Resources:
           PORTAL_URL: !Ref PortalUrl
           CURATION_PORTAL_URL: !Ref CurationPortalUrl
           SES_REGION: !Ref AWS::Region
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          EMBEDDING_DIMS: !Ref EmbeddingDims
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
+          EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
       Events:
         AsyncQueueEvent:
           Type: SQS
@@ -334,6 +365,8 @@ Resources:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
             BucketName: !Sub "mdf-stream-files-${Environment}"
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-embeddings-${Environment}"
         - SQSPollerPolicy:
             QueueName: !GetAtt AsyncJobsQueue.QueueName
         - Statement:
@@ -371,6 +404,8 @@ Resources:
           - X-User-Email
           - X-User-Name
           - X-Globus-Token
+          - X-MDF-Token
+          - X-Groups-Token
         AllowCredentials: !If [IsProd, true, false]
 
   # ===========================================================================
@@ -387,6 +422,26 @@ Resources:
         IgnorePublicAcls: true
         BlockPublicPolicy: true
         RestrictPublicBuckets: true
+
+  # Snapshot of dataset embeddings (Float32 blob + sidecar JSON).
+  # Consumed by the semantic-search endpoint and, optionally, the frontend
+  # for client-side cosine scan. Front the bucket with CloudFront when you
+  # want browsers to read it — content-hashed keys make long cache TTLs safe.
+  EmbeddingsSnapshotBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "mdf-embeddings-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            MaxAge: 3600
 
   # ===========================================================================
   # DynamoDB Tables

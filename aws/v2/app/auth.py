@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any, Dict, Optional
 
@@ -5,11 +6,24 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from v2.app.models import AuthContext
 
+logger = logging.getLogger(__name__)
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allow_local_dev_auth() -> bool:
+    return _env_truthy("LOCAL_DEV_AUTH") or _env_truthy("AWS_SAM_LOCAL")
+
 
 def get_auth_mode() -> str:
-    mode = os.environ.get("AUTH_MODE", "dev")
-    normalized = (mode or "dev").strip().lower()
-    return normalized or "dev"
+    mode = os.environ.get("AUTH_MODE", "production")
+    normalized = (mode or "production").strip().lower() or "production"
+    if normalized == "dev" and not _allow_local_dev_auth():
+        logger.error("AUTH_MODE=dev requested without local runtime guard; forcing production auth")
+        return "production"
+    return normalized
 
 
 async def get_auth(
@@ -18,6 +32,8 @@ async def get_auth(
     x_user_email: Optional[str] = Header(None),
     x_user_name: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_mdf_token: Optional[str] = Header(None),
+    x_groups_token: Optional[str] = Header(None),
 ) -> AuthContext:
     if get_auth_mode() == "dev":
         user_id = x_user_id or os.environ.get("LOCAL_USER_ID", "local-user")
@@ -60,27 +76,39 @@ async def get_auth(
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-        # Optionally fetch group info via confidential app dependent tokens
+        # Fetch group memberships.
+        # Strategy 1: Use the direct groups token from X-Groups-Token header
+        #             (CLI requests Groups scope during login and sends it here).
+        # Strategy 2: Dependent token exchange via X-MDF-Token / Bearer token
+        #             (works if the Globus app has Groups as a dependent scope).
         client_id = os.environ.get("GLOBUS_CLIENT_ID")
         client_secret = os.environ.get("GLOBUS_CLIENT_SECRET")
         group_info = {}
         dependent_token = {}
-        if client_id and client_secret:
+        groups_token = x_groups_token  # Direct token from CLI
+
+        # Fallback: dependent token exchange
+        if not groups_token and client_id and client_secret:
+            exchange_token = x_mdf_token or token
             try:
                 conf_client = globus_sdk.ConfidentialAppAuthClient(client_id, client_secret)
-                dependent_token = conf_client.oauth2_get_dependent_tokens(token).by_resource_server
+                dependent_token = conf_client.oauth2_get_dependent_tokens(exchange_token).by_resource_server
                 groups_token = dependent_token.get("groups.api.globus.org", {}).get("access_token")
-                if groups_token:
-                    groups_client = globus_sdk.GroupsClient(
-                        authorizer=globus_sdk.AccessTokenAuthorizer(groups_token)
-                    )
-                    groups = groups_client.get_my_groups()
-                    group_info = {
-                        group["id"]: {"name": group["name"], "description": group["description"]}
-                        for group in groups
-                    }
             except Exception:
-                pass
+                logger.warning("Failed dependent token exchange for groups", exc_info=True)
+
+        if groups_token:
+            try:
+                groups_client = globus_sdk.GroupsClient(
+                    authorizer=globus_sdk.AccessTokenAuthorizer(groups_token)
+                )
+                groups = groups_client.get_my_groups()
+                group_info = {
+                    group["id"]: {"name": group["name"], "description": group["description"]}
+                    for group in groups
+                }
+            except Exception:
+                logger.warning("Failed to fetch group memberships", exc_info=True)
 
         return AuthContext(
             user_id=user_id,
@@ -102,11 +130,13 @@ async def get_optional_auth(
     x_user_email: Optional[str] = Header(None),
     x_user_name: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_mdf_token: Optional[str] = Header(None),
+    x_groups_token: Optional[str] = Header(None),
 ) -> Optional[AuthContext]:
     if not authorization and not x_user_id and get_auth_mode() != "dev":
         return None
     try:
-        return await get_auth(request, x_user_id, x_user_email, x_user_name, authorization)
+        return await get_auth(request, x_user_id, x_user_email, x_user_name, authorization, x_mdf_token, x_groups_token)
     except HTTPException:
         return None
 

@@ -7,3 +7,4 @@ globus-sdk>=3.0
 click
 requests
 mdf-toolbox==0.6.0
+numpy>=1.24

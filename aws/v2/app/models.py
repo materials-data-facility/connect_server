@@ -93,6 +93,35 @@ class StreamSnapshotRequest(BaseModel):
     test: Optional[bool] = False
 
 
+class MetadataEditRequest(BaseModel):
+    title: Optional[str] = None
+    authors: Optional[List[dict]] = None
+    description: Optional[str] = None
+    keywords: Optional[List[str]] = None
+    license: Optional[dict] = None
+    funding: Optional[List[dict]] = None
+    related_works: Optional[List[dict]] = None
+    methods: Optional[List[str]] = None
+    facility: Optional[str] = None
+    fields_of_science: Optional[List[str]] = None
+    domains: Optional[List[str]] = None
+    ml: Optional[dict] = None
+    geo_locations: Optional[List[dict]] = None
+    tags: Optional[List[str]] = None
+    extensions: Optional[Dict[str, Any]] = None
+    version: Optional[str] = None
+
+
+class WithdrawRequest(BaseModel):
+    reason: Optional[str] = ""
+    version: Optional[str] = None
+
+
+class ResubmitRequest(BaseModel):
+    notes: Optional[str] = ""
+    version: Optional[str] = None
+
+
 class CurationApproveRequest(BaseModel):
     notes: Optional[str] = ""
     mint_doi: Optional[bool] = True
@@ -103,4 +132,9 @@ class CurationApproveRequest(BaseModel):
 class CurationRejectRequest(BaseModel):
     reason: str
     suggestions: Optional[str] = ""
+    version: Optional[str] = None
+
+
+class DeleteSubmissionRequest(BaseModel):
+    reason: str
     version: Optional[str] = None

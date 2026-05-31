@@ -34,5 +34,14 @@ def increment_version(current: Optional[str], major: bool = False) -> str:
         return "1.0"
 
 
+def deep_merge(base: dict, updates: dict) -> None:
+    """Deep merge updates into base dict (mutates base)."""
+    for key, value in updates.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
 def generate_source_id(prefix: str = "mdf") -> str:
     return "{}-{}".format(prefix, uuid.uuid4().hex)

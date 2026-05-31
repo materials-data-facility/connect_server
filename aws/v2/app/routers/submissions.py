@@ -181,6 +181,18 @@ def _parse_mdata(record: Dict[str, Any]) -> dict:
     return copy.deepcopy(mdata)
 
 
+def _can_access_submission(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
+    if not record:
+        return False
+    if auth:
+        owner_id = record.get("user_id")
+        if owner_id and owner_id == auth.user_id:
+            return True
+        if is_curator(auth):
+            return True
+    return record.get("status") == "published"
+
+
 @router.post("/submissions/{source_id}/metadata")
 async def edit_metadata(
     source_id: str,
@@ -245,6 +257,7 @@ async def edit_metadata(
             "test": submission.get("test", False),
             "created_at": now,
             "updated_at": now,
+            "metadata_updated_at": now,
             "published_at": now,
         }
 
@@ -275,6 +288,7 @@ async def edit_metadata(
     # pending_curation or rejected: update in-place
     submission["dataset_mdata"] = json.dumps(existing_mdata)
     submission["updated_at"] = now
+    submission["metadata_updated_at"] = now
     store.upsert_submission(submission)
 
     return {
@@ -444,6 +458,7 @@ async def version_diff(
     source_id: str,
     from_version: str = Query(..., alias="from"),
     to_version: str = Query(..., alias="to"),
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     from_record = store.get_submission(source_id, from_version)
@@ -452,6 +467,8 @@ async def version_diff(
     to_record = store.get_submission(source_id, to_version)
     if not to_record:
         raise HTTPException(404, f"Version {to_version} not found")
+    if not _can_access_submission(auth, from_record) or not _can_access_submission(auth, to_record):
+        raise HTTPException(404, "Submission not found")
 
     from_mdata = _parse_mdata(from_record)
     to_mdata = _parse_mdata(to_record)
@@ -529,6 +546,21 @@ async def submit(
         raise HTTPException(400, f"Invalid metadata: {exc}")
 
     flat = validated.model_dump()
+
+    # Required field checks (Pydantic allows empty strings/lists)
+    if not (flat.get("title") or "").strip():
+        raise HTTPException(400, "title is required and cannot be empty")
+    if not flat.get("authors"):
+        raise HTTPException(400, "At least one author is required")
+    for i, a in enumerate(flat["authors"]):
+        if not (a.get("name") or "").strip():
+            raise HTTPException(400, f"Author at position {i + 1} has an empty name")
+
+    # Default publication_year to current year if not provided
+    if not flat.get("publication_year"):
+        from datetime import datetime, timezone
+        flat["publication_year"] = datetime.now(timezone.utc).year
+
     if len(flat.get("data_sources", [])) > MAX_SUBMIT_DATA_SOURCES:
         raise HTTPException(413, f"Too many data_sources (max {MAX_SUBMIT_DATA_SOURCES})")
     if len(flat.get("authors", [])) > MAX_SUBMIT_AUTHORS:
@@ -639,6 +671,7 @@ async def submit(
         "test": is_test,
         "created_at": now,
         "updated_at": now,
+        "metadata_updated_at": now,
     }
     if inherited_dataset_doi:
         record["dataset_doi"] = inherited_dataset_doi
@@ -723,10 +756,11 @@ async def list_versions(
         return {"success": False, "error": "No versions found for this source_id"}
 
     # If unauthenticated (or not owner/curator), only show published versions
-    is_privileged = False
-    if auth:
-        owner_id = versions[0].get("user_id") if versions else None
-        is_privileged = (owner_id and owner_id == auth.user_id) or is_curator(auth)
+    is_privileged = bool(
+        auth and (
+            is_curator(auth) or any(v.get("user_id") == auth.user_id for v in versions)
+        )
+    )
     if not is_privileged:
         versions = [v for v in versions if v.get("status") == "published"]
         if not versions:
@@ -829,11 +863,7 @@ async def get_status(
         record = next((item for item in versions if item.get("version") == latest_ver), versions[-1])
 
     # If unauthenticated (or not owner/curator), only allow published
-    is_privileged = False
-    if auth:
-        owner_id = record.get("user_id")
-        is_privileged = (owner_id and owner_id == auth.user_id) or is_curator(auth)
-    if not is_privileged and record.get("status") != "published":
+    if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
     # Inline transfer status check — single Globus API call (~200ms)
@@ -925,11 +955,7 @@ async def get_status_all(
         record = next((item for item in versions if item.get("version") == latest_ver), versions[-1])
 
     # Apply same access control as GET /status/{source_id}
-    is_privileged = False
-    if auth:
-        owner_id = record.get("user_id")
-        is_privileged = (owner_id and owner_id == auth.user_id) or is_curator(auth)
-    if not is_privileged and record.get("status") != "published":
+    if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
     return {"success": True, "submission": _normalize_record(record)}

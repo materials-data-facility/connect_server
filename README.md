@@ -1,3 +1,6 @@
+Who is working on topics 11/12G
+
+
 # MDF Connect
 
 The Materials Data Facility Connect service is the backend for submitting, curating, and publishing datasets to MDF Search. For the Python client, see [connect_client](https://github.com/materials-data-facility/connect_client).

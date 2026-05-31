@@ -132,10 +132,14 @@ def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
 
     organization = metadata.get("organization") or ""
 
+    # Store legacy_source_id in extensions for traceability
+    if converted.get("legacy_source_id"):
+        metadata.setdefault("extensions", {})["legacy_source_id"] = converted["legacy_source_id"]
+
     record = {
         "source_id": converted["source_id"],
         "version": version_str,
-        "versioned_source_id": converted["source_id"],
+        "versioned_source_id": f"{converted['source_id']}-{version_str}",
         "user_id": "v1-migration",
         "status": "published",
         "dataset_mdata": json.dumps(metadata),

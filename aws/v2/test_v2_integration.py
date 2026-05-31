@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from v2.app import app
 from v2.app.middleware import reset_middleware_state
 from v2.storage import reset_storage_backend
+from v2.stream_store import SqliteStreamStore
 from v2.store import SqliteSubmissionStore
 
 
@@ -27,6 +28,7 @@ def local_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "true")
     monkeypatch.setenv("USE_MOCK_DATACITE", "true")
     monkeypatch.setenv("MAX_REQUEST_BYTES", str(1024 * 1024))
@@ -314,3 +316,32 @@ def test_search_fallback_excludes_unpublished_datasets(
     body = resp.json()
     assert body["total"] == 1
     assert [item["source_id"] for item in body["results"]] == ["search-published"]
+
+
+def test_search_does_not_expose_private_streams_without_auth(
+    local_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AUTH_MODE", "production")
+    client = TestClient(app)
+    stream_store = SqliteStreamStore(path=str(local_env))
+    stream_store.create_stream(
+        {
+            "stream_id": "stream-private-1",
+            "title": "Secret Beamline Stream",
+            "status": "open",
+            "file_count": 3,
+            "total_bytes": 1024,
+            "last_append_at": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "user_id": "owner-user",
+            "organization": "org",
+            "metadata": {"operator": "Beamline A"},
+        }
+    )
+
+    resp = client.get("/search", params={"q": "Secret Beamline", "type": "streams"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == []

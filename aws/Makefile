@@ -33,7 +33,7 @@ help:
 
 local:
 	@echo "Starting local server on http://127.0.0.1:8080"
-	@STORE_BACKEND=sqlite AUTH_MODE=dev python -m v2.app.main
+	@STORE_BACKEND=sqlite AUTH_MODE=dev LOCAL_DEV_AUTH=true python -m v2.app.main
 
 demo:
 	@python v2/demo_full_workflow.py

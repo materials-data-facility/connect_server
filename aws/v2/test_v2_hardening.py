@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -12,10 +13,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v2.app import app
+from v2.app.middleware import reset_middleware_state
+from v2.async_jobs import SqliteJobDispatcher, enqueue_transfer_job
 from v2.clone import StreamCloner
 from v2.storage import reset_storage_backend
 from v2.storage.globus_https import GlobusHTTPSStorage
 from v2.storage.local import LocalStorage
+from v2.stream_store import SqliteStreamStore
 from v2.store import SqliteSubmissionStore, SubmissionStore
 
 
@@ -107,7 +111,7 @@ def test_globus_upload_url_does_not_expose_server_auth_header():
         storage.close()
 
 
-def test_stream_append_requires_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_stream_file_access_requires_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db_path = tmp_path / "store.db"
     file_store = tmp_path / "files"
     monkeypatch.setenv("STORE_BACKEND", "sqlite")
@@ -115,23 +119,30 @@ def test_stream_append_requires_owner(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     reset_storage_backend()
 
     client = TestClient(app)
-    create = client.post(
-        "/stream/create",
-        headers={"X-User-Id": "owner-user"},
-        json={"title": "Owner stream"},
+    stream_id = "stream-secure-owner"
+    stream_store = SqliteStreamStore(path=str(db_path))
+    stream_store.create_stream(
+        {
+            "stream_id": stream_id,
+            "title": "Owner stream",
+            "status": "open",
+            "file_count": 0,
+            "total_bytes": 0,
+            "last_append_at": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "user_id": "owner-user",
+            "organization": None,
+            "metadata": None,
+        }
     )
-    assert create.status_code == 200
-    stream_id = create.json()["stream_id"]
 
-    denied = client.post(
-        f"/stream/{stream_id}/append",
-        headers={"X-User-Id": "other-user"},
-        json={"file_count": 1, "total_bytes": 10},
-    )
+    denied = client.get(f"/stream/{stream_id}/files", headers={"X-User-Id": "other-user"})
     assert denied.status_code == 403
 
 
@@ -143,6 +154,7 @@ def test_status_update_requires_curator(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     reset_storage_backend()
 
@@ -190,17 +202,28 @@ def test_upload_confirm_requires_existing_file(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     reset_storage_backend()
 
     client = TestClient(app)
-    create = client.post(
-        "/stream/create",
-        headers={"X-User-Id": "owner-user"},
-        json={"title": "Owner stream"},
+    stream_id = "stream-upload-confirm"
+    stream_store = SqliteStreamStore(path=str(db_path))
+    stream_store.create_stream(
+        {
+            "stream_id": stream_id,
+            "title": "Owner stream",
+            "status": "open",
+            "file_count": 0,
+            "total_bytes": 0,
+            "last_append_at": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "user_id": "owner-user",
+            "organization": None,
+            "metadata": None,
+        }
     )
-    assert create.status_code == 200
-    stream_id = create.json()["stream_id"]
 
     missing = client.post(
         f"/stream/{stream_id}/upload-confirm",
@@ -218,6 +241,7 @@ def test_curation_without_version_uses_latest(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "true")
     reset_storage_backend()
 
@@ -255,6 +279,7 @@ def test_submit_requires_submitter_group(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("STORAGE_BACKEND", "local")
     monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
     monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     monkeypatch.setenv("REQUIRED_GROUP_MEMBERSHIP", "cc192dca-3751-11e8-90c1-0a7c735d220a")
     reset_storage_backend()
@@ -285,3 +310,58 @@ def test_submit_requires_submitter_group(tmp_path: Path, monkeypatch: pytest.Mon
     # Empty REQUIRED_GROUP_MEMBERSHIP means everyone is allowed
     monkeypatch.setenv("REQUIRED_GROUP_MEMBERSHIP", "")
     assert is_submitter(no_groups) is True
+
+
+def test_dev_auth_requires_explicit_local_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    db_path = tmp_path / "store.db"
+    file_store = tmp_path / "files"
+    monkeypatch.setenv("STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SQLITE_PATH", str(db_path))
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("FILE_STORE_PATH", str(file_store))
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.delenv("LOCAL_DEV_AUTH", raising=False)
+    monkeypatch.delenv("AWS_SAM_LOCAL", raising=False)
+    monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
+    reset_storage_backend()
+    reset_middleware_state()
+
+    client = TestClient(app)
+    resp = client.get("/auth/check", headers={"X-User-Id": "spoofed-user"})
+    assert resp.status_code == 401
+
+
+def test_transfer_job_never_persists_user_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    db_path = tmp_path / "jobs.db"
+    monkeypatch.setenv("ASYNC_DISPATCH_MODE", "sqlite")
+    monkeypatch.setenv("ASYNC_SQLITE_PATH", str(db_path))
+
+    captured = {}
+
+    def _fake_process_job(job_type, payload):
+        captured["job_type"] = job_type
+        captured["payload"] = dict(payload)
+        return {"success": True}
+
+    monkeypatch.setattr("v2.async_jobs.process_job", _fake_process_job)
+
+    result = enqueue_transfer_job(
+        source_id="src-1",
+        version="1.0",
+        data_sources=["globus://12345678-1234-1234-1234-123456789abc/path/data.csv"],
+        user_transfer_token="super-secret-transfer-token",
+        user_identity_id="user-1",
+    )
+
+    assert result["queued"] is False
+    assert result["mode"] == "inline"
+    assert captured["job_type"] == "transfer_data"
+    assert captured["payload"]["user_transfer_token"] == "super-secret-transfer-token"
+
+    dispatcher = SqliteJobDispatcher(db_path=str(db_path))
+    conn = sqlite3.connect(dispatcher.path)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM async_jobs").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0

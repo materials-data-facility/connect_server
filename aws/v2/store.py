@@ -65,6 +65,24 @@ class SubmissionStore:
         """List all submissions (for search)."""
         raise NotImplementedError
 
+    def update_embedding(
+        self,
+        source_id: str,
+        version: str,
+        embedding: List[float],
+        model: str,
+    ) -> None:
+        """Persist a dataset embedding with the model that produced it."""
+        raise NotImplementedError
+
+    _ALLOWED_COUNTERS = {"view_count", "download_count"}
+
+    def increment_counter(self, source_id: str, version: str, counter: str) -> None:
+        """Atomically increment a counter (view_count, download_count)."""
+        if counter not in self._ALLOWED_COUNTERS:
+            raise ValueError(f"Invalid counter name: {counter}")
+        raise NotImplementedError
+
 
 class DynamoSubmissionStore(SubmissionStore):
     def __init__(self):
@@ -129,10 +147,40 @@ class DynamoSubmissionStore(SubmissionStore):
         return resp.get("Items", []), resp.get("LastEvaluatedKey")
 
     def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
-        # Scan with pagination because FilterExpression is applied post-scan.
-        from boto3.dynamodb.conditions import Attr
         if not statuses:
             return []
+        # Query the status-submissions GSI for each requested status,
+        # then merge results.  Falls back to scan if the GSI doesn't exist
+        # (e.g. table created before the GSI was added).
+        index_name = os.environ.get("GSI_STATUS_INDEX", "status-submissions")
+        items: List[Dict[str, Any]] = []
+        try:
+            for status_val in statuses:
+                if len(items) >= limit:
+                    break
+                last_key = None
+                while len(items) < limit:
+                    kwargs: Dict[str, Any] = {
+                        "IndexName": index_name,
+                        "KeyConditionExpression": self._key("status").eq(status_val),
+                        "ScanIndexForward": False,
+                        "Limit": limit - len(items),
+                    }
+                    if last_key:
+                        kwargs["ExclusiveStartKey"] = last_key
+                    resp = self.table.query(**kwargs)
+                    items.extend(resp.get("Items", []))
+                    last_key = resp.get("LastEvaluatedKey")
+                    if not last_key:
+                        break
+        except Exception:
+            # GSI may not exist yet — fall back to scan
+            items = self._list_by_status_scan(statuses, limit)
+        return items[:limit]
+
+    def _list_by_status_scan(self, statuses: List[str], limit: int) -> List[Dict[str, Any]]:
+        """Fallback: full table scan filtered by status (used before GSI exists)."""
+        from boto3.dynamodb.conditions import Attr
         filter_expr = Attr("status").eq(statuses[0])
         for s in statuses[1:]:
             filter_expr = filter_expr | Attr("status").eq(s)
@@ -178,6 +226,32 @@ class DynamoSubmissionStore(SubmissionStore):
             ExpressionAttributeValues={":profile": profile_json, ":updated_at": now},
         )
 
+    def update_embedding(
+        self,
+        source_id: str,
+        version: str,
+        embedding: List[float],
+        model: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Dynamo stores floats as Decimal; serialize to JSON so snapshot builder
+        # doesn't have to deal with Decimal and float size stays predictable.
+        self.table.update_item(
+            Key={"source_id": source_id, "version": version},
+            UpdateExpression=(
+                "SET title_description_embedding = :emb, "
+                "embedding_model = :model, "
+                "embedding_generated_at = :gen_at, "
+                "updated_at = :updated_at"
+            ),
+            ExpressionAttributeValues={
+                ":emb": json.dumps(embedding),
+                ":model": model,
+                ":gen_at": now,
+                ":updated_at": now,
+            },
+        )
+
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         # Scan is expensive but acceptable for search
         items: List[Dict[str, Any]] = []
@@ -193,6 +267,14 @@ class DynamoSubmissionStore(SubmissionStore):
             if not last_key:
                 break
         return items[:limit]
+
+    def increment_counter(self, source_id: str, version: str, counter: str) -> None:
+        self.table.update_item(
+            Key={"source_id": source_id, "version": version},
+            UpdateExpression="ADD #counter :one",
+            ExpressionAttributeNames={"#counter": counter},
+            ExpressionAttributeValues={":one": 1},
+        )
 
 
 class SqliteSubmissionStore(SubmissionStore):
@@ -221,6 +303,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     action_id TEXT,
                     doi TEXT,
                     dataset_doi TEXT,
+                    metadata_updated_at TEXT,
                     published_at TEXT,
                     approved_at TEXT,
                     approved_by TEXT,
@@ -249,6 +332,24 @@ class SqliteSubmissionStore(SubmissionStore):
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_profile TEXT")
             if "dataset_doi" not in col_names:
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_doi TEXT")
+            if "view_count" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN view_count INTEGER DEFAULT 0")
+            if "download_count" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN download_count INTEGER DEFAULT 0")
+            if "title_description_embedding" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN title_description_embedding TEXT"
+                )
+            if "embedding_model" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN embedding_model TEXT")
+            if "embedding_generated_at" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN embedding_generated_at TEXT"
+                )
+            if "metadata_updated_at" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN metadata_updated_at TEXT"
+                )
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -266,6 +367,13 @@ class SqliteSubmissionStore(SubmissionStore):
         if data.get("dataset_profile"):
             try:
                 data["dataset_profile"] = json.loads(data["dataset_profile"])
+            except Exception:
+                pass
+        if data.get("title_description_embedding"):
+            try:
+                data["title_description_embedding"] = json.loads(
+                    data["title_description_embedding"]
+                )
             except Exception:
                 pass
         return data
@@ -298,6 +406,10 @@ class SqliteSubmissionStore(SubmissionStore):
         if isinstance(dataset_profile, dict):
             dataset_profile = json.dumps(dataset_profile)
 
+        embedding = record.get("title_description_embedding")
+        if isinstance(embedding, list):
+            embedding = json.dumps(embedding)
+
         with self.conn:
             self.conn.execute(
                 """
@@ -305,8 +417,9 @@ class SqliteSubmissionStore(SubmissionStore):
                     source_id, version, versioned_source_id, user_id, user_email,
                     organization, status, dataset_mdata, test, created_at, updated_at, action_id,
                     doi, dataset_doi, published_at, approved_at, approved_by, rejected_at, rejected_by,
-                    rejection_reason, curation_history, dataset_profile
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rejection_reason, curation_history, dataset_profile, metadata_updated_at,
+                    title_description_embedding, embedding_model, embedding_generated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -331,6 +444,10 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("rejection_reason"),
                     curation_history,
                     dataset_profile,
+                    record.get("metadata_updated_at"),
+                    embedding,
+                    record.get("embedding_model"),
+                    record.get("embedding_generated_at"),
                 ),
             )
 
@@ -402,12 +519,36 @@ class SqliteSubmissionStore(SubmissionStore):
                 (profile_json, now, source_id, version),
             )
 
+    def update_embedding(
+        self,
+        source_id: str,
+        version: str,
+        embedding: List[float],
+        model: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self.conn:
+            self.conn.execute(
+                "UPDATE submissions SET title_description_embedding = ?, "
+                "embedding_model = ?, embedding_generated_at = ?, updated_at = ? "
+                "WHERE source_id = ? AND version = ?",
+                (json.dumps(embedding), model, now, now, source_id, version),
+            )
+
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         cur = self.conn.execute(
             "SELECT * FROM submissions ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         )
         return [self._row_to_dict(row) for row in cur.fetchall()]
+
+    def increment_counter(self, source_id: str, version: str, counter: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE submissions SET {counter} = COALESCE({counter}, 0) + 1 "
+                "WHERE source_id = ? AND version = ?",
+                (source_id, version),
+            )
 
 
 def get_store() -> SubmissionStore:

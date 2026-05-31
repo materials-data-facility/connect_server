@@ -45,13 +45,14 @@ def parse_version_number(version_raw) -> tuple:
 def make_version_key(record: dict) -> str:
     """Build a unique version key for a record.
 
-    Uses source_id + version to uniquely identify a specific version,
-    since some datasets share the same source_id across versions.
+    Uses source_id + version in the v2 versioned_source_id format
+    ({source_id}-{major}.{minor}).
     """
     sid = record["source_id"] or ""
     v = record["version"]
     if v is not None:
-        return f"{sid}_v{v}"
+        major, minor = parse_version_number(v)
+        return f"{sid}-{major}.{minor}"
     return sid
 
 
@@ -178,8 +179,11 @@ def convert_entry(gmeta_entry: dict) -> dict:
         v2_metadata["download_url"] = download_url
 
     # Build the output record
+    # Promote source_name to source_id (version-independent identity).
+    # Preserve the original source_id as legacy_source_id for traceability.
     record = {
-        "source_id": mdf.get("source_id"),
+        "source_id": mdf.get("source_name"),
+        "legacy_source_id": mdf.get("source_id"),
         "source_name": mdf.get("source_name"),
         "version": mdf.get("version"),
         "ingest_date": mdf.get("ingest_date"),
@@ -204,6 +208,11 @@ def main():
         "-o", "--output",
         default="converted_datasets.json",
         help="Output JSON file (default: converted_datasets.json)",
+    )
+    parser.add_argument(
+        "--redirect-map",
+        default=None,
+        help="Output redirect map JSON (old source_id -> new source_id)",
     )
     args = parser.parse_args()
 
@@ -252,6 +261,7 @@ def main():
 
     # Summary stats
     with_doi = sum(1 for r in converted if r["doi"])
+    with_legacy_sid = sum(1 for r in converted if r.get("legacy_source_id"))
     with_ml = sum(1 for r in converted if r["metadata"].get("ml"))
     with_org = sum(1 for r in converted if r["metadata"].get("organization"))
     with_keywords = sum(1 for r in converted if r["metadata"].get("keywords"))
@@ -266,6 +276,7 @@ def main():
 
     print(f"\n--- Field coverage ---")
     print(f"  DOI:              {with_doi}/{len(converted)}")
+    print(f"  Legacy source_id: {with_legacy_sid}/{len(converted)}")
     print(f"  ML metadata:      {with_ml}/{len(converted)}")
     print(f"  Organization:     {with_org}/{len(converted)}")
     print(f"  Keywords:         {with_keywords}/{len(converted)}")
@@ -289,6 +300,18 @@ def main():
         json.dump(output, f, indent=2, default=str)
 
     print(f"\nSaved to {args.output}")
+
+    # Build redirect map: old source_id -> new source_id
+    if args.redirect_map:
+        redirect_map = {}
+        for r in converted:
+            old_sid = r.get("legacy_source_id")
+            new_sid = r["source_id"]
+            if old_sid and old_sid != new_sid:
+                redirect_map[old_sid] = new_sid
+        with open(args.redirect_map, "w") as f:
+            json.dump(redirect_map, f, indent=2)
+        print(f"Redirect map: {len(redirect_map)} entries saved to {args.redirect_map}")
 
 
 if __name__ == "__main__":

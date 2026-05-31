@@ -177,23 +177,24 @@ deploy_prod() {
     log "Globus credentials resolved from SSM"
 
     # Resolve DataCite credentials from SSM (optional — falls back to env/defaults)
-    log "Resolving DataCite credentials from SSM..."
+    # Parameters are namespaced by environment: /mdf/{env}/datacite-*
+    log "Resolving DataCite credentials from SSM (/mdf/$env/datacite-*)..."
     local datacite_user datacite_pass datacite_url datacite_prefix
     datacite_user=$(aws ssm get-parameter \
-        --name "/mdf/datacite-username" \
+        --name "/mdf/$env/datacite-username" \
         --region "$REGION" \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     datacite_pass=$(aws ssm get-parameter \
-        --name "/mdf/datacite-password" \
+        --name "/mdf/$env/datacite-password" \
         --region "$REGION" \
         --with-decryption \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     datacite_url=$(aws ssm get-parameter \
-        --name "/mdf/datacite-api-url" \
+        --name "/mdf/$env/datacite-api-url" \
         --region "$REGION" \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     datacite_prefix=$(aws ssm get-parameter \
-        --name "/mdf/datacite-prefix" \
+        --name "/mdf/$env/datacite-prefix" \
         --region "$REGION" \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     if [[ -n "$datacite_user" ]]; then
@@ -334,6 +335,7 @@ local_server() {
     export STORAGE_BACKEND=local
     export USE_MOCK_DATACITE=true
     export AUTH_MODE=dev
+    export LOCAL_DEV_AUTH=true
     export ALLOW_ALL_CURATORS=true
     export CURATOR_GROUP_IDS=
     export REQUIRED_GROUP_MEMBERSHIP=

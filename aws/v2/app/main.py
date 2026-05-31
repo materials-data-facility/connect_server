@@ -23,6 +23,7 @@ if __name__ == "__main__":
     os.environ.setdefault("SQLITE_PATH", "/tmp/mdf_connect_v2.db")
     os.environ.setdefault("ASYNC_DISPATCH_MODE", "inline")
     os.environ.setdefault("AUTH_MODE", "dev")
+    os.environ.setdefault("LOCAL_DEV_AUTH", "true")
     os.environ.setdefault("ALLOW_ALL_CURATORS", "true")
     os.environ.setdefault("CURATOR_GROUP_IDS", "")
     os.environ.setdefault("REQUIRED_GROUP_MEMBERSHIP", "")

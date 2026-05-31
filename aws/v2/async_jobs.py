@@ -15,6 +15,9 @@ JOB_MINT_SUBMISSION_DOI = "mint_submission_doi"
 JOB_PUBLISH_SUBMISSION = "publish_submission"
 JOB_TRANSFER_DATA = "transfer_data"
 JOB_CLEANUP_TRANSFERS = "cleanup_transfers"
+JOB_GENERATE_EMBEDDING = "generate_embedding"
+JOB_BUILD_EMBEDDING_SNAPSHOT = "build_embedding_snapshot"
+JOB_DISPATCH_EMBEDDING_REBUILD = "dispatch_embedding_rebuild"
 
 
 def _utc_now() -> str:
@@ -234,11 +237,36 @@ def enqueue_transfer_job(
         "user_transfer_token": user_transfer_token,
         "user_identity_id": user_identity_id,
     }
-    return get_job_dispatcher().dispatch(JOB_TRANSFER_DATA, payload)
+    # User bearer tokens must not be persisted into SQS or SQLite job payloads.
+    # Transfer initiation runs inline so the token only lives in request memory.
+    return InlineJobDispatcher().dispatch(JOB_TRANSFER_DATA, payload)
 
 
 def enqueue_cleanup_transfers_job() -> Dict[str, Any]:
     return get_job_dispatcher().dispatch(JOB_CLEANUP_TRANSFERS, {})
+
+
+def enqueue_embedding_job(source_id: str, version: str) -> Dict[str, Any]:
+    payload = {"source_id": source_id, "version": version}
+    return get_job_dispatcher().dispatch(JOB_GENERATE_EMBEDDING, payload)
+
+
+def enqueue_snapshot_build_job() -> Dict[str, Any]:
+    return get_job_dispatcher().dispatch(JOB_BUILD_EMBEDDING_SNAPSHOT, {})
+
+
+def enqueue_rebuild_dispatch_job(
+    force: bool = False, limit: Optional[int] = None, build_snapshot: bool = True,
+) -> Dict[str, Any]:
+    """Enqueue a single meta-job that will scan submissions and fan out embedding jobs.
+
+    Keeps the admin rebuild endpoint inside the 30s API Gateway window — the
+    scan + SQS fan-out happens inside the async worker instead.
+    """
+    payload: Dict[str, Any] = {"force": force, "build_snapshot": build_snapshot}
+    if limit is not None:
+        payload["limit"] = limit
+    return get_job_dispatcher().dispatch(JOB_DISPATCH_EMBEDDING_REBUILD, payload)
 
 
 def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -254,6 +282,12 @@ def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return _process_transfer_data(payload)
     if job_type == JOB_CLEANUP_TRANSFERS:
         return _process_cleanup_transfers(payload)
+    if job_type == JOB_GENERATE_EMBEDDING:
+        return _process_generate_embedding(payload)
+    if job_type == JOB_BUILD_EMBEDDING_SNAPSHOT:
+        return _process_build_embedding_snapshot(payload)
+    if job_type == JOB_DISPATCH_EMBEDDING_REBUILD:
+        return _process_dispatch_embedding_rebuild(payload)
     raise ValueError(f"Unknown job type: {job_type}")
 
 
@@ -513,10 +547,153 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         logger.warning("Failed to send approval email for %s", source_id, exc_info=True)
 
+    # Step 4: kick off embedding generation (non-blocking for publish)
+    try:
+        emb_result = enqueue_embedding_job(source_id, version)
+        result["embedding_enqueue"] = emb_result
+    except Exception:
+        logger.warning("Failed to enqueue embedding job for %s", source_id, exc_info=True)
+
     result["success"] = True
     result["status"] = "published"
     result["published_at"] = now
     return result
+
+
+def _process_generate_embedding(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Embed a dataset's title+description and store the vector on the record."""
+    from v2.embeddings import (
+        EMBEDDING_MODEL,
+        EmbeddingError,
+        build_embedding_text,
+        embed_text,
+    )
+    from v2.metadata import parse_metadata
+    from v2.store import get_store
+
+    source_id = payload["source_id"]
+    version = payload["version"]
+
+    store = get_store()
+    submission = store.get_submission(source_id, version)
+    if not submission:
+        return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
+
+    meta = parse_metadata(submission)
+    text = build_embedding_text(meta)
+    if not text.strip():
+        return {
+            "success": False,
+            "source_id": source_id,
+            "version": version,
+            "error": "No title/description text to embed",
+        }
+
+    try:
+        vector = embed_text(text)
+    except EmbeddingError as exc:
+        logger.warning("Embedding failed for %s v%s: %s", source_id, version, exc)
+        return {"success": False, "source_id": source_id, "version": version, "error": str(exc)}
+
+    store.update_embedding(source_id, version, vector, EMBEDDING_MODEL)
+    return {
+        "success": True,
+        "source_id": source_id,
+        "version": version,
+        "model": EMBEDDING_MODEL,
+        "dims": len(vector),
+    }
+
+
+def _process_build_embedding_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Rebuild the S3 snapshot from whatever embeddings exist in the store.
+
+    Runs async so the admin endpoint can return inside the 30s API Gateway
+    window. Scanning all submissions + packing vectors can take a while for
+    large corpora.
+    """
+    from v2.embedding_snapshot import build_snapshot
+    from v2.search import invalidate_author_index
+
+    result = build_snapshot()
+    invalidate_author_index()
+    return result
+
+
+def _is_embedding_stale_record(record: Dict[str, Any]) -> bool:
+    gen_at = record.get("embedding_generated_at") or ""
+    mdata_at = record.get("metadata_updated_at") or ""
+    if not mdata_at:
+        return False
+    return gen_at < mdata_at
+
+
+def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Scan all published submissions and fan out one embedding job per pending record.
+
+    Runs inside the async worker (120s budget) so the scan + SQS sends don't
+    block the API Gateway request. Queues a final snapshot-build job when
+    `build_snapshot` is true.
+    """
+    from v2.embeddings import EMBEDDING_MODEL
+    from v2.store import get_store
+
+    force = bool(payload.get("force"))
+    build_snapshot_flag = payload.get("build_snapshot", True)
+    limit = payload.get("limit")
+
+    store = get_store()
+    all_subs = store.list_all(limit=100000)
+
+    enqueued = 0
+    skipped_current = 0
+    failed_enqueue: List[Dict[str, Any]] = []
+
+    for sub in all_subs:
+        if sub.get("status") != "published":
+            continue
+        mdata = sub.get("dataset_mdata") or {}
+        if isinstance(mdata, dict) and mdata.get("latest") is False:
+            continue
+        if not force:
+            has_vec = bool(sub.get("title_description_embedding"))
+            same_model = sub.get("embedding_model") == EMBEDDING_MODEL
+            if has_vec and same_model and not _is_embedding_stale_record(sub):
+                skipped_current += 1
+                continue
+
+        source_id = sub.get("source_id")
+        version = sub.get("version")
+        if not source_id or not version:
+            continue
+        try:
+            enqueue_embedding_job(source_id, version)
+            enqueued += 1
+        except Exception as exc:
+            failed_enqueue.append({"source_id": source_id, "error": str(exc)})
+            logger.exception(
+                "Dispatch: failed to enqueue embedding job for %s v%s", source_id, version
+            )
+        if limit and enqueued >= int(limit):
+            break
+
+    snapshot_job: Dict[str, Any] = {"enqueued": False, "skipped": True}
+    if build_snapshot_flag:
+        try:
+            snapshot_job = enqueue_snapshot_build_job()
+            snapshot_job["enqueued"] = True
+        except Exception as exc:
+            snapshot_job = {"enqueued": False, "error": str(exc)}
+            logger.exception("Dispatch: failed to enqueue snapshot build job")
+
+    return {
+        "success": True,
+        "model": EMBEDDING_MODEL,
+        "enqueued": enqueued,
+        "skipped_current": skipped_current,
+        "enqueue_failures": failed_enqueue,
+        "snapshot_job": snapshot_job,
+    }
 
 
 def run_sqlite_worker_once(limit: int = 20) -> Dict[str, Any]:

@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,6 +11,8 @@ from v2.preview import generate_preview
 from v2.storage import StorageBackend
 from v2.store import SubmissionStore
 from v2.stream_store import StreamStore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -100,20 +103,39 @@ async def preview_file(
 
 # ── Dataset-level preview (new) ────────────────────────────────────
 
-def _get_profile(source_id: str, store: SubmissionStore) -> Optional[dict]:
-    """Load the stored DatasetProfile for a source_id."""
+def _get_profile_and_record(source_id: str, store: SubmissionStore):
+    """Load the stored DatasetProfile + record for a source_id (published only).
+
+    Returns (profile_dict, record_dict) or (None, None).
+    """
     record = store.get(source_id)
-    if not record:
-        return None
+    if not record or record.get("status") != "published":
+        return None, None
     profile = record.get("dataset_profile")
     if profile is None:
-        return None
+        return None, record
     if isinstance(profile, str):
         try:
             profile = json.loads(profile)
         except Exception:
-            return None
+            return None, record
+    return profile, record
+
+
+def _get_profile(source_id: str, store: SubmissionStore) -> Optional[dict]:
+    """Load the stored DatasetProfile for a source_id (published only)."""
+    profile, _ = _get_profile_and_record(source_id, store)
     return profile
+
+
+def _increment_view(source_id: str, record: Optional[dict], store: SubmissionStore) -> None:
+    """Fire-and-forget view count increment."""
+    if not record:
+        return
+    try:
+        store.increment_counter(source_id, record["version"], "view_count")
+    except Exception:
+        logger.debug("Failed to increment view_count for %s", source_id, exc_info=True)
 
 
 @router.get("/preview/{source_id}")
@@ -122,9 +144,11 @@ async def dataset_preview(
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Return the stored DatasetProfile for a dataset."""
-    profile = _get_profile(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
+
+    _increment_view(source_id, record, store)
     return {"success": True, "profile": profile}
 
 
@@ -134,9 +158,11 @@ async def dataset_files(
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """List all files in the dataset with metadata."""
-    profile = _get_profile(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
+
+    _increment_view(source_id, record, store)
 
     files = []
     for fp in profile.get("files", []):
@@ -158,9 +184,11 @@ async def dataset_file_detail(
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Get detailed profile of a specific file in the dataset."""
-    profile = _get_profile(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
+
+    _increment_view(source_id, record, store)
 
     for fp in profile.get("files", []):
         if fp.get("path") == path or fp.get("filename") == path:
@@ -175,9 +203,11 @@ async def dataset_sample(
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Quick sample data from the first tabular file in the dataset."""
-    profile = _get_profile(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
+
+    _increment_view(source_id, record, store)
 
     # Find the first file with sample_rows
     for fp in profile.get("files", []):

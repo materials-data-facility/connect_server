@@ -59,15 +59,22 @@ async def list_pending(
             continue
         try:
             meta = parse_metadata(sub)
-            title = meta.title
         except Exception:
-            title = "Untitled"
+            meta = None
+        title = meta.title if meta else "Untitled"
+        authors = [a.model_dump() for a in meta.authors] if meta else []
+        description = meta.description if meta else None
+        data_sources = meta.data_sources if meta else []
         pending.append({
             "source_id": sub.get("source_id"),
             "version": sub.get("version"),
             "title": title,
+            "authors": authors,
+            "description": description,
+            "data_sources": data_sources,
             "organization": sub.get("organization"),
             "submitter": sub.get("user_id"),
+            "submitter_email": sub.get("user_email"),
             "submitted_at": sub.get("created_at"),
             "file_count": sub.get("file_count", 0),
             "total_bytes": sub.get("total_bytes", 0),
@@ -152,6 +159,7 @@ async def approve(
         # Deep merge metadata updates into existing flat metadata
         deep_merge(existing_metadata, payload.metadata_updates)
         submission["dataset_mdata"] = existing_metadata
+        submission["metadata_updated_at"] = now
 
     submission["status"] = "approved"
     submission["curation_history"] = curation_history
