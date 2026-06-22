@@ -5,8 +5,8 @@ Description: MDF Connect v2 Backend - Single FastAPI Lambda via Mangum
 Parameters:
   Environment:
     Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
+    Default: staging
+    AllowedValues: [staging, prod]
     Description: Deployment environment
   AuthMode:
     Type: String
@@ -200,6 +200,9 @@ Resources:
       Handler: v2.app.main.handler
       CodeUri: .
       Description: MDF Connect v2 API (FastAPI)
+      # Cap the auto-generated execution role to runtime-only permissions, so a
+      # deployer that can create roles can never mint an over-privileged one.
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/mdf-connect-v2-boundary"
       Timeout: !Ref ApiTimeoutSeconds
       MemorySize: !Ref ApiMemorySizeMb
       ReservedConcurrentExecutions: !Ref ApiReservedConcurrency
@@ -217,7 +220,7 @@ Resources:
             - !If [IsDevAuth, "local", "globus"]
             - !Ref StorageBackend
           GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
-          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
           S3_PREFIX: "streams/"
           GLOBUS_CLIENT_ID: !Ref GlobusClientId
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
@@ -254,7 +257,7 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
           EMBEDDING_DIMS: !Ref EmbeddingDims
-          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
           EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
           EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
       Events:
@@ -276,9 +279,9 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-stream-files-${Environment}"
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-embeddings-${Environment}"
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
         - Statement:
             Effect: Allow
             Action:
@@ -296,6 +299,7 @@ Resources:
       Handler: v2.async_worker.lambda_handler
       CodeUri: .
       Description: MDF Connect v2 async job worker
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/mdf-connect-v2-boundary"
       Timeout: !Ref AsyncWorkerTimeoutSeconds
       MemorySize: !Ref AsyncWorkerMemorySizeMb
       ReservedConcurrentExecutions: !Ref AsyncWorkerReservedConcurrency
@@ -312,7 +316,7 @@ Resources:
             - !If [IsDevAuth, "local", "globus"]
             - !Ref StorageBackend
           GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
-          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
           S3_PREFIX: "streams/"
           GLOBUS_CLIENT_ID: !Ref GlobusClientId
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
@@ -342,7 +346,7 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
           EMBEDDING_DIMS: !Ref EmbeddingDims
-          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
           EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
           EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
       Events:
@@ -364,9 +368,9 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-stream-files-${Environment}"
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-embeddings-${Environment}"
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
         - SQSPollerPolicy:
             QueueName: !GetAtt AsyncJobsQueue.QueueName
         - Statement:
@@ -415,8 +419,14 @@ Resources:
   StreamFilesBucket:
     Type: AWS::S3::Bucket
     Condition: CreateStreamFilesBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "mdf-stream-files-${Environment}"
+      BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -429,8 +439,14 @@ Resources:
   # want browsers to read it — content-hashed keys make long cache TTLs safe.
   EmbeddingsSnapshotBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "mdf-embeddings-${Environment}"
+      BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -452,6 +468,7 @@ Resources:
     Properties:
       QueueName: !Sub "mdf-async-jobs-dlq-${Environment}"
       MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
 
   AsyncJobsQueue:
     Type: AWS::SQS::Queue
@@ -462,6 +479,7 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt AsyncJobsDLQ.Arn
         maxReceiveCount: 3
+      SqsManagedSseEnabled: true
 
   ApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -482,6 +500,10 @@ Resources:
     Properties:
       TableName: !Sub "mdf-submissions-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
         - AttributeName: source_id
           AttributeType: S
@@ -533,6 +555,10 @@ Resources:
     Properties:
       TableName: !Sub "mdf-streams-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
         - AttributeName: stream_id
           AttributeType: S

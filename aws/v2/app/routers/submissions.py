@@ -32,7 +32,7 @@ from v2.config import DEFAULT_ORGANIZATION
 from v2.email_utils import notify_curators_new_submission
 from v2.metadata import DatasetMetadata, migrate_v1_payload
 from v2.store import SubmissionStore, parse_pagination_key, serialize_pagination_key
-from v2.submission_utils import deep_merge, generate_source_id, increment_version, latest_version
+from v2.submission_utils import deep_merge, generate_source_id, increment_version, latest_version, version_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +193,45 @@ def _can_access_submission(auth: Optional[AuthContext], record: Dict[str, Any]) 
     return record.get("status") == "published"
 
 
+def _is_privileged(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
+    """True when the caller is the submission owner or a curator."""
+    if not auth:
+        return False
+    owner_id = record.get("user_id")
+    if owner_id and owner_id == auth.user_id:
+        return True
+    return is_curator(auth)
+
+
+# Internal / PII fields that must never be exposed to a non-owner, non-curator
+# caller who can only see a record because it is published.
+_SENSITIVE_RECORD_FIELDS = frozenset({
+    "user_id", "user_email", "curation_history",
+    "approved_by", "approved_at", "rejected_by", "rejected_at", "rejection_reason",
+    "deleted_by", "deleted_at", "reviewer", "reviewed_by",
+    "transfer_task_ids", "transfer_acl_rule_ids", "transfer_destination",
+    "transfer_bytes_transferred", "transfer_files_transferred", "transfer_status",
+    "metadata_updated_at",
+})
+
+
+def _public_submission_view(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitized view of a published submission for anonymous / non-owner callers.
+
+    Strips submitter PII, curation history (curator ids + reasons), and internal
+    transfer plumbing. Also removes the acl list inside dataset_mdata, which would
+    otherwise leak the Globus identities a restricted dataset is shared with.
+    """
+    rec = _normalize_record(dict(record))
+    public = {k: v for k, v in rec.items() if k not in _SENSITIVE_RECORD_FIELDS}
+    mdata = public.get("dataset_mdata")
+    if isinstance(mdata, dict):
+        mdata = dict(mdata)
+        mdata.pop("acl", None)
+        public["dataset_mdata"] = mdata
+    return public
+
+
 @router.post("/submissions/{source_id}/metadata")
 async def edit_metadata(
     source_id: str,
@@ -248,8 +287,11 @@ async def edit_metadata(
             "source_id": source_id,
             "version": new_version,
             "versioned_source_id": new_versioned_id,
-            "user_id": auth.user_id,
-            "user_email": auth.user_email,
+            # Preserve original ownership. A curator editing another user's
+            # published dataset must NOT silently take ownership of the new
+            # latest version.
+            "user_id": submission.get("user_id"),
+            "user_email": submission.get("user_email"),
             "organization": submission.get("organization"),
             "status": "published",
             "dataset_mdata": json.dumps(existing_mdata),
@@ -442,6 +484,27 @@ async def delete_submission(
     submission["updated_at"] = now
     store.upsert_submission(submission)
 
+    # Reconcile the Globus Search index so a deleted dataset doesn't linger
+    # (dead /detail links, and a dirty re-sync that would re-expose it). If other
+    # published versions remain, re-point the index entry at the new latest;
+    # otherwise remove the entry entirely.
+    try:
+        from v2.search_client import get_search_client
+        sc = get_search_client(test_mode=bool(submission.get("test", False)))
+        remaining = [
+            v for v in store.list_versions(source_id)
+            if v.get("status") == "published"
+        ]
+        if remaining:
+            latest_pub = max(
+                remaining, key=lambda v: version_sort_key(v.get("version", "0"))
+            )
+            sc.ingest(latest_pub, version_count=len(remaining))
+        else:
+            sc.delete_entry(source_id)
+    except Exception:
+        logger.warning("Failed to reconcile search index after delete of %s", source_id, exc_info=True)
+
     logger.info("Submission deleted source_id=%s version=%s by=%s reason=%s",
                 source_id, version, auth.user_id, payload.reason)
 
@@ -602,6 +665,17 @@ async def submit(
     if update and not latest_ver:
         raise HTTPException(400, "Update requested but no prior submission found")
 
+    # Ownership guard (IDOR fix): updating an existing dataset requires that the
+    # caller owns the prior version (or is a curator). Without this, any
+    # submitter could point extensions.mdf_source_id at another user's source_id
+    # with update=true and hijack that dataset's version chain, DOI, and ownership.
+    if update and existing_versions:
+        latest_prior = next(
+            (v for v in existing_versions if v.get("version") == latest_ver),
+            existing_versions[-1],
+        )
+        ensure_submission_owner_or_curator(auth, latest_prior)
+
     versioned_source_id = "{}-{}".format(source_id, version)
 
     # Propagate dataset_doi from prior published versions
@@ -631,9 +705,9 @@ async def submit(
             if isinstance(prior_mdata, dict):
                 root_version_id = prior_mdata.get("root_version")
         if not root_version_id:
-            # Earliest version is the root
+            # Earliest version is the root (numeric-aware so 2.0 < 10.0)
             earliest_ver = sorted(
-                existing_versions, key=lambda v: v.get("version", "0")
+                existing_versions, key=lambda v: version_sort_key(v.get("version", "0"))
             )[0]
             root_version_id = "{}-{}".format(source_id, earliest_ver.get("version", "1.0"))
 
@@ -766,7 +840,7 @@ async def list_versions(
         if not versions:
             return {"success": False, "error": "No versions found for this source_id"}
 
-    sorted_versions = sorted(versions, key=lambda x: x.get("version", "0"))
+    sorted_versions = sorted(versions, key=lambda x: version_sort_key(x.get("version", "0")))
     total_count = len(sorted_versions)
     paginated = sorted_versions[offset:offset + limit]
 
@@ -866,6 +940,15 @@ async def get_status(
     if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
+    privileged = _is_privileged(auth, record)
+
+    # Non-owner viewing a published dataset: return a sanitized public view only
+    # (no submitter PII, curation history, or transfer internals). Also skip the
+    # inline transfer check so anonymous callers can't trigger unbounded Globus
+    # polling + writes.
+    if not privileged:
+        return {"success": True, "submission": _public_submission_view(record)}
+
     # Inline transfer status check — single Globus API call (~200ms)
     if record.get("transfer_status") == "active":
         _inline_transfer_check(record, store)
@@ -958,7 +1041,9 @@ async def get_status_all(
     if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
-    return {"success": True, "submission": _normalize_record(record)}
+    if _is_privileged(auth, record):
+        return {"success": True, "submission": _normalize_record(record)}
+    return {"success": True, "submission": _public_submission_view(record)}
 
 
 @router.post("/status/update")
@@ -978,6 +1063,17 @@ async def update_status(
         raise HTTPException(
             400,
             "status must be one of: {}".format(", ".join(sorted(ALLOWED_STATUSES))),
+        )
+
+    # Publishing must go through the curation approve pipeline so the dataset is
+    # DOI-minted AND indexed in Globus Search. A bare status flip here would
+    # produce a "published" record that is absent from search (Dynamo/search
+    # drift, dirty re-sync vs the previous stack).
+    if payload.status == "published":
+        raise HTTPException(
+            400,
+            "Direct status=published is not allowed. Use POST /curation/{source_id}/approve "
+            "to publish (mints DOI and indexes the dataset).",
         )
 
     record = store.get_submission(payload.source_id, payload.version)

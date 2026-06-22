@@ -1,0 +1,675 @@
+[
+  {
+    "feature_id": "FILE-01",
+    "area": "files",
+    "name": "POST /stream/{stream_id}/upload — inline (base64) file upload",
+    "files": ["aws/v2/app/routers/files.py:42-150", "aws/v2/app/models.py:42-55", "aws/v2/storage/base.py:50-72", "aws/v2/storage/base.py:197-223"],
+    "user_story": "As a dataset submitter, I want to upload one or more files to my open stream by POSTing base64-encoded content so that I can attach data without managing direct storage credentials.",
+    "expected_behavior": "Loads the stream; requires owner-or-curator; requires stream.status=='open'; accepts payload.files[] (<=100) or single filename/content_base64; base64-decodes each; calls storage.store_file(stream_id, filename, content, content_type, metadata[, user_token]); aggregates uploaded/total_bytes/errors; on Globus backend resolves user_token from X-Globus-Token or auth.dependent_token; updates stream accounting via append_stream. Filenames/stream_id are sanitized inside storage._build_path (base.py:204-223 — allowlist regex, rejects '..').",
+    "inputs": "Path stream_id; JSON FileUploadRequest (filename/content_base64/content_type/metadata OR files[]); optional X-Globus-Token header; Authorization (production).",
+    "outputs": "{success, stream_id, storage_backend, uploaded, total_bytes, files[FileMetadata.to_dict], errors}.",
+    "side_effects": "Writes objects to storage backend (local FS / S3 mdf-stream-files-${env} / Globus HTTPS); mutates stream file_count/total_bytes/last_file/last_append_at in Streams table.",
+    "error_paths": "400 stream not found; 403 not owner/curator; 400 stream not open; 400 neither filename nor files; 400 all uploads failed (errors list echoed in message); per-file errors collected (missing filename, missing content_base64, invalid base64, storage exception).",
+    "security": {
+      "authN": "get_auth (production = Globus userinfo token validation; dev = X-User-Id headers).",
+      "authZ": "ensure_stream_owner_or_curator (files.py:55).",
+      "IAM": "Lambda S3CrudPolicy on mdf-stream-files-${env}; DynamoDBCrudPolicy on StreamsTable (template.yaml:278-281,276).",
+      "secrets": "Globus user_token forwarded to Globus HTTPS PUT; server GLOBUS_CLIENT_ID/SECRET fallback.",
+      "data_exposure": "store_file metadata values are coerced to S3 user-metadata strings (s3.py:55-58) — caller-supplied metadata persisted; no encryption-at-rest config on bucket (relies on S3 default SSE).",
+      "encryption": "S3 bucket has PublicAccessBlock all-true (template.yaml:420-424); no explicit SSE/KMS configured.",
+      "network_boundaries": "API Gateway HttpApi -> Lambda -> storage backend."
+    },
+    "deployability": {
+      "env_vars": "STORAGE_BACKEND (auto->local dev/globus prod), S3_BUCKET, S3_PREFIX, GLOBUS_* , STORE_BACKEND=dynamo, DYNAMO_STREAMS_TABLE.",
+      "iac": "StreamFilesBucket only created when AuthMode!=dev (Condition CreateStreamFilesBucket, template.yaml:183,415-424); but S3 backend selected only in non-dev too, so parity holds.",
+      "env_parity": "dev=local FS; staging/prod=globus by default (STORAGE_BACKEND auto). S3 backend only used if StorageBackend param explicitly set to s3 — note the S3 bucket exists but is not the default backend.",
+      "rollback": "Stateless Lambda; bucket Retain not set (default Delete) — see STOR issues.",
+      "drift": "Default STORAGE_BACKEND auto=globus but the provisioned bucket is S3 — mismatch between created resource and default backend."
+    },
+    "sync_parity": "No search-doc emitted here; stream accounting only. Stream files are not part of v1 Globus Search schema.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "Whole base64 payload decoded into memory and stored synchronously inside the 30s/256MB API Lambda; FileUploadRequest allows up to 100 files with no per-request byte cap, risking OOM / 30s timeout for large inline uploads.", "evidence": "app/routers/files.py:94-128; app/models.py:49-55; template.yaml:62,68"},
+      {"severity": "low", "dimension": "security", "desc": "On Globus backend the user's dependent_token JSON is parsed and an access_token forwarded to the storage PUT; failures are silently swallowed (bare except) so a malformed token degrades to server-token upload without signal.", "evidence": "app/routers/files.py:62-71"},
+      {"severity": "low", "dimension": "security", "desc": "Caller-supplied metadata dict is persisted verbatim as S3 object user-metadata (stringified) with no key validation, enabling header-size abuse.", "evidence": "storage/s3.py:55-58"}
+    ]
+  },
+  {
+    "feature_id": "FILE-02",
+    "area": "files",
+    "name": "POST /stream/{stream_id}/upload-url — presigned direct-upload URL",
+    "files": ["aws/v2/app/routers/files.py:153-188", "aws/v2/storage/s3.py:145-171", "aws/v2/storage/globus_https.py:340-363", "aws/v2/storage/local.py:123-138", "aws/v2/app/models.py:57-61"],
+    "user_story": "As a submitter, I want a presigned upload URL so that I can PUT large files directly to storage without proxying bytes through the API.",
+    "expected_behavior": "Owner/curator + stream-open check; expires_in clamped to min(req,86400); storage.get_upload_url builds a presigned S3 PUT (s3) / Globus HTTPS PUT descriptor (globus) / API-relative path note (local). Returns url/method/headers/path/expires_in.",
+    "inputs": "Path stream_id; UploadUrlRequest{filename, content_type, size_bytes?, expires_in?}; Authorization.",
+    "outputs": "{success, stream_id, storage_backend, url, method, headers, path, expires_in}.",
+    "side_effects": "None persistent (S3 presigned PUT only generated, not executed).",
+    "error_paths": "400 stream not found; 403 authz; 400 not open; 400 ValueError from sanitization (e.g. bad filename); 400 if backend returns None (none currently do).",
+    "security": {
+      "authN": "get_auth.",
+      "authZ": "ensure_stream_owner_or_curator (files.py:164).",
+      "IAM": "S3 generate_presigned_url uses the Lambda execution role creds (S3CrudPolicy) — the presigned PUT inherits Lambda role permissions scoped to one Key under streams/.",
+      "secrets": "Globus get_upload_url returns the raw endpoint URL with auth_type=bearer but no token — client must supply its own.",
+      "data_exposure": "S3 presigned PUT URL is scoped to exactly one Key built from sanitized stream_id+filename (s3.py:152-153). expires_in attacker-controllable up to 86400s (24h).",
+      "encryption": "Presigned PUT pins Content-Type only; does not enforce SSE header.",
+      "network_boundaries": "Client uploads directly to S3/Globus, bypassing API."
+    },
+    "deployability": {"env_vars": "S3_BUCKET, S3_PREFIX, STORAGE_BACKEND.", "iac": "Same bucket policies.", "env_parity": "local returns a non-functional /stream/{id}/upload note (no presign) — dev clients must use FILE-01.", "rollback": "Stateless.", "drift": "Default backend globus, so S3 presign path only active when StorageBackend=s3."},
+    "sync_parity": "N/A (no search doc).",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Presigned S3 PUT URL allows the client to upload with no checksum/size enforcement and a Content-Type the server pins; max validity is 24h (86400s) which is long for a write-capable URL. No restriction couples the URL to the authenticated user once issued.", "evidence": "app/routers/files.py:168; storage/s3.py:155-171"},
+      {"severity": "low", "dimension": "functionality", "desc": "upload-url does not call append_stream; the separate upload-confirm step is required to record the file, but nothing enforces confirm, so direct-uploaded objects can exist in S3 unreferenced by stream accounting.", "evidence": "app/routers/files.py:153-188 vs 191-234"}
+    ]
+  },
+  {
+    "feature_id": "FILE-03",
+    "area": "files",
+    "name": "POST /stream/{stream_id}/upload-confirm — register an out-of-band upload",
+    "files": ["aws/v2/app/routers/files.py:27-39", "aws/v2/app/routers/files.py:191-234", "aws/v2/app/models.py:64-68"],
+    "user_story": "As a submitter who used a presigned URL, I want to confirm the upload so that the stream's file accounting reflects the new object.",
+    "expected_behavior": "Owner/curator + open check; validates payload.path belongs to this stream via _path_belongs_to_stream (rejects '..', enforces backend-specific prefix); verifies storage.get_file(path) is not None (object really exists); records file_info and append_stream(+1 file, +size_bytes).",
+    "inputs": "Path stream_id; ConfirmUploadRequest{path, size_bytes, checksum_md5, metadata}; Authorization.",
+    "outputs": "{success, stream_id, file{filename,path,size_bytes,checksum_md5,stored_at,storage_backend,metadata}}.",
+    "side_effects": "Mutates stream accounting; trusts client-supplied size_bytes/checksum (not recomputed).",
+    "error_paths": "400 not found; 403 authz; 400 not open; 400 path not in stream; 400 uploaded path does not exist.",
+    "security": {
+      "authN": "get_auth.",
+      "authZ": "owner/curator.",
+      "IAM": "S3 get_file (read) under role.",
+      "secrets": "none.",
+      "data_exposure": "_path_belongs_to_stream is the path-traversal guard: rejects '..' segments; local requires streams/{id}/ prefix; s3 allows streams/{id}/ OR {id}/ prefix; globus requires {id}_ prefix (files.py:27-39).",
+      "encryption": "n/a.",
+      "network_boundaries": "n/a."
+    },
+    "deployability": {"env_vars": "STORAGE_BACKEND, S3_BUCKET.", "iac": "—", "env_parity": "Path-prefix logic forks by backend_name; must match the prefix used by the actual deployed backend.", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "size_bytes and checksum_md5 are taken verbatim from the client and recorded into stream accounting / file_info without re-deriving from the stored object, so a caller can misreport size (skewing totals) even though existence is verified.", "evidence": "app/routers/files.py:208-228; models.py:64-68"},
+      {"severity": "low", "dimension": "security", "desc": "S3 branch of _path_belongs_to_stream accepts both 'streams/{id}/' and bare '{id}/' prefixes; combined with S3Storage._s3_key prepending the prefix only when absent, a path like '{id}/x' maps to a different key than 'streams/{id}/x', a subtle prefix-confusion surface.", "evidence": "app/routers/files.py:35-36; storage/s3.py:38-40"}
+    ]
+  },
+  {
+    "feature_id": "FILE-04",
+    "area": "files",
+    "name": "POST /stream/{stream_id}/download-url — presigned/scoped download URL + download counter",
+    "files": ["aws/v2/app/routers/files.py:237-276", "aws/v2/storage/s3.py:132-143", "aws/v2/storage/globus_https.py:327-338", "aws/v2/storage/local.py:113-121"],
+    "user_story": "As a stream owner/curator, I want a download URL for a stream file so that I (or my tooling) can retrieve the object and have the parent dataset's download_count incremented.",
+    "expected_behavior": "Requires path; owner/curator check; _path_belongs_to_stream; storage.get_download_url(path) (S3: HEAD then presigned GET at DEFAULT expires_in=3600; Globus: returns endpoint URL needing bearer; local: file:// URL). Fire-and-forget increment of parent submission download_count if stream has source_id+version.",
+    "inputs": "Path stream_id; DownloadUrlRequest{path}; Authorization.",
+    "outputs": "{success, stream_id, path, download_url, storage_backend}.",
+    "side_effects": "Increments download_count on the parent submission version (files.py:262-268).",
+    "error_paths": "400 could not determine path; 400 not found; 403 authz; 400 path not in stream; 400 file not found / download unavailable.",
+    "security": {
+      "authN": "get_auth.",
+      "authZ": "ensure_stream_owner_or_curator — download is NOT public; restricted to owner/curator (files.py:253).",
+      "IAM": "S3 presigned GET via Lambda role; HEAD precheck.",
+      "secrets": "Globus download URL requires the client's own bearer token (no server token embedded).",
+      "data_exposure": "S3 presigned GET expiry is hardcoded to backend default 3600s; client cannot set it here. URL scoped to one Key.",
+      "encryption": "n/a.",
+      "network_boundaries": "Client fetches directly from S3."
+    },
+    "deployability": {"env_vars": "STORAGE_BACKEND, S3_BUCKET.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "DownloadUrlRequest carries no expires_in; the S3 presigned GET always uses the 3600s default. Long-running consumers cannot extend, and there is no per-object access logging tie-back.", "evidence": "app/models.py:71-72; storage/s3.py:132-143"},
+      {"severity": "low", "dimension": "functionality", "desc": "download_count is incremented per URL issuance, not per actual byte download, so the metric overcounts when a URL is requested but not used.", "evidence": "app/routers/files.py:261-268"}
+    ]
+  },
+  {
+    "feature_id": "FILE-05",
+    "area": "files",
+    "name": "GET /stream/{stream_id}/files — list stream files",
+    "files": ["aws/v2/app/routers/files.py:279-299", "aws/v2/storage/s3.py:173-198", "aws/v2/storage/local.py:140-171", "aws/v2/storage/globus_https.py:365-382"],
+    "user_story": "As a stream owner/curator, I want to list the files in my stream so that I can review what has been uploaded.",
+    "expected_behavior": "Owner/curator check; storage.list_files(stream_id) (S3: paginated list under streams/{id}/; local: rglob of .meta.json; globus: in-memory _metadata_cache filtered by {id}_ prefix). Returns FileMetadata dicts.",
+    "inputs": "Path stream_id; Authorization.",
+    "outputs": "{success, stream_id, storage_backend, file_count, files[]}.",
+    "side_effects": "None.",
+    "error_paths": "400 not found; 403 authz.",
+    "security": {"authN": "get_auth.", "authZ": "owner/curator (files.py:289).", "IAM": "S3 ListBucket/GetObject via role.", "secrets": "none.", "data_exposure": "Listing restricted to owner/curator; stream_id sanitized before prefix.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "STORAGE_BACKEND, S3_BUCKET.", "iac": "—", "env_parity": "Globus list_files reads an in-process _metadata_cache that does NOT survive Lambda cold starts — listing on Globus is effectively non-functional in the deployed prod backend.", "rollback": "Stateless.", "drift": "Globus backend list_files cannot enumerate previously uploaded files across invocations."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "high", "dimension": "functionality", "desc": "GlobusHTTPSStorage.list_files (and therefore get_stream_size/delete_stream_files and stream-level preview) returns only files in a per-instance in-memory cache; in Lambda each cold start starts empty, so the production default storage backend (globus) cannot reliably list previously uploaded files.", "evidence": "storage/globus_https.py:365-382,97-98,264-265"}
+    ]
+  },
+  {
+    "feature_id": "PREV-01",
+    "area": "preview",
+    "name": "GET /stream/{stream_id}/preview — preview all files in a stream",
+    "files": ["aws/v2/app/routers/preview.py:22-53", "aws/v2/preview.py:202-234"],
+    "user_story": "As a stream owner/curator, I want quick previews of every file in my stream so that I can inspect data before publishing.",
+    "expected_behavior": "Owner/curator check; list_files; for each file get_file content and generate_preview (CSV stats, JSON structure, text head, binary magic-byte info). Returns previews[].",
+    "inputs": "Path stream_id; Authorization.",
+    "outputs": "{success, stream_id, file_count, previews[{filename,path,size_bytes,preview}]}.",
+    "side_effects": "Reads full file content into Lambda memory for every file (no size cap here, unlike profiler).",
+    "error_paths": "400 not found; 403 authz.",
+    "security": {"authN": "get_auth.", "authZ": "owner/curator (preview.py:32).", "IAM": "S3 read.", "secrets": "none.", "data_exposure": "Restricted to owner/curator.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "STORAGE_BACKEND.", "iac": "—", "env_parity": "Depends on list_files; broken on Globus backend (see FILE-05).", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "Reads every file fully into memory with no MAX_FILE_BYTES cap (unlike profiler.py:21,267); a stream with large files will OOM/timeout the 256MB/30s API Lambda.", "evidence": "app/routers/preview.py:37-46; preview.py:202-234"}
+    ]
+  },
+  {
+    "feature_id": "PREV-02",
+    "area": "preview",
+    "name": "GET /stream/{stream_id}/files/{filename}/preview — single-file preview",
+    "files": ["aws/v2/app/routers/preview.py:56-101"],
+    "user_story": "As a stream owner/curator, I want to preview one named file with configurable row/line limits so that I can inspect a specific upload.",
+    "expected_behavior": "Owner/curator; finds file by matching f.filename==filename or f.path.endswith(filename); if not found falls back to path streams/{stream_id}/{filename}; generate_preview with max_rows/max_lines.",
+    "inputs": "Path stream_id, filename; query max_rows(20), max_lines(50); Authorization.",
+    "outputs": "{success, stream_id, filename, preview}.",
+    "side_effects": "Reads file content.",
+    "error_paths": "400 not found; 403 authz; 400 file not found; 400 could not read.",
+    "security": {"authN": "get_auth.", "authZ": "owner/curator (preview.py:69).", "IAM": "S3 read.", "secrets": "none.", "data_exposure": "The fallback path 'streams/{stream_id}/{filename}' is built without sanitizing filename; on local/S3 backends a filename containing '../' (URL-encoded) could escape the stream prefix. LocalStorage._full_path resolves+relative_to(base) guard mitigates traversal outside base (local.py:37-44); S3Storage.get_file has NO traversal guard — _s3_key just concatenates, so 'streams/{id}/../other/...' would normalize the S3 key only if S3 collapses '..' (S3 does NOT collapse, so key is literal). Net: the f.path.endswith(filename) match also lets a filename equal to a suffix of another stream's file path match cross-stream entries within the same list, but list_files is already scoped to this stream.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "STORAGE_BACKEND.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Fallback path 'streams/{stream_id}/{filename}' is constructed from the raw path-param filename with no _sanitize_filename call; while LocalStorage._full_path blocks escapes via relative_to(base), S3Storage.get_file performs no '..' validation, so a crafted filename could address keys outside the intended stream prefix (literal '..' in S3 key, or via the {id}/ vs streams/{id}/ confusion).", "evidence": "app/routers/preview.py:80-83; storage/s3.py:122-130,38-40; storage/local.py:37-44"},
+      {"severity": "low", "dimension": "functionality", "desc": "f.path.endswith(filename) matching is loose; a short filename can match an unintended file's path suffix.", "evidence": "app/routers/preview.py:75"}
+    ]
+  },
+  {
+    "feature_id": "PREV-03",
+    "area": "preview",
+    "name": "GET /preview/{source_id} — published dataset stored profile (UNAUTH)",
+    "files": ["aws/v2/app/routers/preview.py:106-152", "aws/v2/dataset_card.py:126-151"],
+    "user_story": "As any portal visitor, I want to see a dataset's structural profile so that I can understand its contents before downloading.",
+    "expected_behavior": "_get_profile_and_record loads record via store.get(source_id) and returns profile ONLY when record.status=='published'; parses dataset_profile (JSON). Increments view_count fire-and-forget. NO auth dependency.",
+    "inputs": "Path source_id; (no auth).",
+    "outputs": "{success, profile} — full DatasetProfile (column stats, sample_rows, file paths, preview_lines).",
+    "side_effects": "view_count increment on the resolved version.",
+    "error_paths": "404 no profile (covers unpublished, missing, or unparseable).",
+    "security": {"authN": "NONE — fully public.", "authZ": "Gated only by status=='published' (preview.py:111-122).", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Exposes full profile including sample data rows and internal storage paths of any PUBLISHED dataset to anonymous callers; does not honor mdf.acl (a published-but-ACL-restricted dataset's profile would still be served). No version param — always resolves latest_version which may differ from what is in the search index.", "encryption": "n/a.", "network_boundaries": "Public read endpoint."},
+    "deployability": {"env_vars": "STORE_BACKEND=dynamo, DYNAMO_SUBMISSIONS_TABLE.", "iac": "DynamoDBCrudPolicy.", "env_parity": "Same.", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "Profile schema is internal (not part of v1 Globus Search doc) but sample_rows/columns shape must match what dataset_card profile_summary and frontend expect; no v1 equivalent.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Unauthenticated; serves the full dataset profile (sample data rows, internal storage paths) for any published dataset and ignores mdf.acl, so a dataset published with a restricted ACL would still have its profiled contents and file paths exposed to anonymous users.", "evidence": "app/routers/preview.py:106-152; metadata.py:154,517-518 (acl parsed but never checked here)"},
+      {"severity": "low", "dimension": "security", "desc": "view_count increment is unauthenticated and unthrottled (beyond API GW global throttle), allowing trivial counter inflation.", "evidence": "app/routers/preview.py:131-138"}
+    ]
+  },
+  {
+    "feature_id": "PREV-04",
+    "area": "preview",
+    "name": "GET /preview/{source_id}/files — list files from stored profile (UNAUTH)",
+    "files": ["aws/v2/app/routers/preview.py:155-177"],
+    "user_story": "As a portal visitor, I want the file list of a published dataset so that I can see its file inventory.",
+    "expected_behavior": "Published-only profile load; returns path/filename/size_bytes/content_type/format per file; view_count increment.",
+    "inputs": "Path source_id.",
+    "outputs": "{success, source_id, files[]}.",
+    "side_effects": "view_count increment.",
+    "error_paths": "404 no profile.",
+    "security": {"authN": "NONE.", "authZ": "status=='published'.", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Exposes internal storage paths (fp.path) publicly.", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "STORE_BACKEND, DYNAMO_SUBMISSIONS_TABLE.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A (internal profile).",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "Publicly exposes internal storage paths of profiled files for every published dataset; combined with the storage backend's URL scheme this can reveal directory structure.", "evidence": "app/routers/preview.py:168-175"}
+    ]
+  },
+  {
+    "feature_id": "PREV-05",
+    "area": "preview",
+    "name": "GET /preview/{source_id}/files/{path:path} — file detail from profile (UNAUTH, path:path route)",
+    "files": ["aws/v2/app/routers/preview.py:180-197"],
+    "user_story": "As a portal visitor, I want the detailed profile of a specific file so that I can inspect its columns/stats.",
+    "expected_behavior": "Published-only; iterates profile['files'] and returns the entry whose fp.path==path OR fp.filename==path. PURELY a dict lookup against pre-stored profile JSON — the {path:path} segment is NEVER used to touch the filesystem or storage backend, so there is no real path-traversal filesystem risk despite the {path:path} converter.",
+    "inputs": "Path source_id, path (greedy, may contain slashes).",
+    "outputs": "{success, source_id, file{full FileProfile}}.",
+    "side_effects": "view_count increment.",
+    "error_paths": "404 no profile; 404 file not found in profile.",
+    "security": {"authN": "NONE.", "authZ": "status=='published'.", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Only returns entries already present in the stored profile; the {path:path} value cannot reach storage. Safe from traversal because there is no get_file call.", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "STORE_BACKEND.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "The {path:path} greedy converter is benign here (dict membership test only, no filesystem/storage access), but the route's existence is an audit trap — any future code that passes this `path` to storage.get_file would become a traversal sink. Document that it is data-only today.", "evidence": "app/routers/preview.py:180-197"}
+    ]
+  },
+  {
+    "feature_id": "PREV-06",
+    "area": "preview",
+    "name": "GET /preview/{source_id}/sample — sample rows / preview lines (UNAUTH)",
+    "files": ["aws/v2/app/routers/preview.py:200-242"],
+    "user_story": "As a portal visitor, I want a quick data sample so that I can judge a dataset's relevance before downloading.",
+    "expected_behavior": "Published-only; returns first file with sample_rows (tabular) else first file with preview_lines (text); else 'No previewable data'.",
+    "inputs": "Path source_id.",
+    "outputs": "{success, source_id, filename, format, columns, n_rows, sample_rows} or preview_lines variant.",
+    "side_effects": "view_count increment.",
+    "error_paths": "404 no profile.",
+    "security": {"authN": "NONE.", "authZ": "status=='published'.", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Serves up to MAX_SAMPLE_ROWS of actual data values from any published dataset to anonymous users; ignores acl.", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "STORE_BACKEND.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "Exposes raw sampled data values of any published dataset without auth or ACL check.", "evidence": "app/routers/preview.py:213-236; profiler.py:155-159"}
+    ]
+  },
+  {
+    "feature_id": "STRM-01",
+    "area": "streams",
+    "name": "POST /stream/create — create a stream (ROUTER DISABLED)",
+    "files": ["aws/v2/app/routers/streams.py:31-56", "aws/v2/app/__init__.py:67,70"],
+    "user_story": "As a lab operator, I want to open a stream so that I can incrementally append instrument files.",
+    "expected_behavior": "Generates stream_id (or uses payload.stream_id), status='open', records user_id=auth.user_id. NOTE: streams router is commented out in app/__init__.py (line 67,70) so this endpoint is NOT mounted in the running app.",
+    "inputs": "StreamCreateRequest{title, lab_id, organization, metadata, stream_id}; Authorization.",
+    "outputs": "{success, stream_id, stream}.",
+    "side_effects": "create_stream (put_item with attribute_not_exists guard).",
+    "error_paths": "Dynamo ConditionalCheckFailed on duplicate stream_id (uncaught -> 500 via global handler).",
+    "security": {"authN": "get_auth (when mounted).", "authZ": "None on create beyond authN; any authenticated user can create. is_submitter NOT enforced here.", "IAM": "Dynamo Streams CRUD.", "secrets": "none.", "data_exposure": "n/a.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "DYNAMO_STREAMS_TABLE.", "iac": "StreamsTable present.", "env_parity": "Endpoint disabled across all envs (commented include_router).", "rollback": "Trivial (not live).", "drift": "Streams table provisioned but stream-* HTTP API surface is dark; file/preview stream endpoints (FILE-*, PREV-01/02) still reference streams and remain mounted, so streams created out-of-band (e.g. via snapshot pipeline) are still reachable through files router."},
+    "sync_parity": "Stream snapshot path creates a SUBMISSION (pending_curation) which later flows into the v1-compatible search doc on publish; stream records themselves are not indexed.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "streams router is disabled (app/__init__.py:67,70) yet files.py and preview.py expose /stream/{id}/upload, /files, /preview which require a stream to exist; with create/append/close unmounted there is no live HTTP path to create streams, leaving the file/preview stream endpoints effectively orphaned in the deployed app.", "evidence": "app/__init__.py:66-76; app/routers/files.py:42; app/routers/streams.py:31-56"},
+      {"severity": "low", "dimension": "security", "desc": "stream_create does not call require_submitter — any authenticated user could create streams if the router were re-enabled (inconsistent with submission gating).", "evidence": "app/routers/streams.py:31-36"}
+    ]
+  },
+  {
+    "feature_id": "STRM-02",
+    "area": "streams",
+    "name": "POST /stream/{stream_id}/append, GET /stream/{stream_id}, /close, /snapshot (ROUTER DISABLED)",
+    "files": ["aws/v2/app/routers/streams.py:59-243", "aws/v2/app/models.py:34-39,75-93"],
+    "user_story": "As a lab operator, I want to append file accounting to a stream, check status, close it (optionally minting a DOI), and snapshot it into a curatable submission so that streamed data becomes a citable dataset.",
+    "expected_behavior": "append: owner/curator, bounds file_count<=MAX_STREAM_APPEND_COUNT(10000) and total_bytes<=50GB (413 over limit). status: owner/curator. close: owner/curator, sets closed, optional DOI job. snapshot: owner/curator; builds flat v2 dataset metadata, creates submission status=pending_curation, enqueues profile job. ALL DISABLED (router not included).",
+    "inputs": "Various stream request bodies; Authorization.",
+    "outputs": "Stream/submission JSON + job descriptors.",
+    "side_effects": "Streams table updates; Submissions put; SQS profile/DOI jobs.",
+    "error_paths": "400 not found; 403 authz; 413 size; 400 update-without-prior; 500 close failure.",
+    "security": {"authN": "get_auth.", "authZ": "ensure_stream_owner_or_curator on append/status/close/snapshot.", "IAM": "Dynamo + SQS.", "secrets": "DataCite creds via DOI job.", "data_exposure": "GET /stream returns full stream record to owner/curator only.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "MAX_STREAM_APPEND_COUNT/BYTES, ASYNC_QUEUE_URL.", "iac": "AsyncJobsQueue.", "env_parity": "Disabled in all envs.", "rollback": "Not live.", "drift": "—"},
+    "sync_parity": "snapshot writes dataset_mdata flat-v2 JSON; on later publish the search doc is built by search_client.build_gmeta_entry (v1-compatible). Snapshot dataset lacks user_email and uses operator/user_id as author — minor schema completeness gap vs full submissions.",
+    "issues": [
+      {"severity": "low", "dimension": "sync", "desc": "Snapshot-created submissions set user_email=None and author from operator/user_id only; downstream citation/DataCite generation may produce sparse creator metadata vs v1 records.", "evidence": "app/routers/streams.py:199-230"},
+      {"severity": "low", "dimension": "functionality", "desc": "GET /stream/{id} returns success:false with 200 (not 404) when missing, before authz, inconsistent with the 400 used by sibling endpoints.", "evidence": "app/routers/streams.py:112-116"}
+    ]
+  },
+  {
+    "feature_id": "SRCH-01",
+    "area": "search",
+    "name": "GET /search — full-text dataset+stream search with facets/filters",
+    "files": ["aws/v2/app/routers/search.py:69-115", "aws/v2/search.py:181-268,604-636", "aws/v2/search_client.py:262-296,479-526"],
+    "user_story": "As a portal visitor, I want to search published datasets (and my own streams) with facet filters so that I can find relevant data.",
+    "expected_behavior": "Optional auth; q/query required; type all/datasets/streams; limit clamped 1..SEARCH_MAX_RESULTS(50); offset>=0; filters mapped to dc.year/mdf.organization/dc.creators.name/dc.subjects/mdf.domains. search_all -> search_datasets (Globus faceted_search first; falls back to Dynamo scan of PUBLISHED records when Globus unavailable or mock-with-no-data) + search_streams (only streams visible to the authenticated caller).",
+    "inputs": "Query q/query/type/limit/offset/year/organization/author/keyword/domain; optional Authorization.",
+    "outputs": "{query, total, offset, results[dataset|stream], facets}.",
+    "side_effects": "Rebuilds in-memory author index lazily elsewhere; Globus Search read via UNAUTHENTICATED SearchClient (search_client.py:237-244).",
+    "error_paths": "400 query required; Globus errors swallowed -> Dynamo fallback.",
+    "security": {
+      "authN": "get_optional_auth (anonymous allowed for datasets; streams require auth).",
+      "authZ": "Datasets: only status=='published' in Dynamo fallback; Globus path relies on index visible_to + unauthenticated read client (so only 'public' visible_to entries returned). Streams: _stream_visible_to_auth restricts to owner or curator (search.py:237-245).",
+      "IAM": "Dynamo scan; Globus Search via client-credentials only for ingest, reads are anonymous.",
+      "secrets": "GLOBUS_CLIENT_ID/SECRET used only for ingest token, not reads.",
+      "data_exposure": "Dynamo fallback returns ALL published datasets regardless of mdf.acl — a published dataset with a restricted (non-public) ACL would still appear in fallback results, whereas the Globus path would correctly hide it via visible_to. Inconsistent ACL enforcement between primary and fallback search paths.",
+      "encryption": "n/a.",
+      "network_boundaries": "Public read endpoint; outbound to Globus Search."
+    },
+    "deployability": {"env_vars": "USE_MOCK_SEARCH (dev true/prod false), SEARCH_INDEX_UUID, TEST_SEARCH_INDEX_UUID, SEARCH_MAX_RESULTS/DATASET_SCAN/STREAM_SCAN.", "iac": "template.yaml:232-234,246-248.", "env_parity": "prod uses real index fed3e94e-...; staging/test uses ab19b80b-...; both selected via SEARCH_INDEX_UUID/TEST_SEARCH_INDEX_UUID. test_mode (TEST_SEARCH_INDEX_UUID) is never wired from the /search router (always uses SEARCH_INDEX_UUID), so the staging index UUID requires SEARCH_INDEX_UUID to point at it at deploy time.", "rollback": "Stateless reads; index unaffected.", "drift": "If SEARCH_INDEX_UUID='not-configured' the client silently falls back to Mock then Dynamo scan (search_client.py:563-567), masking misconfiguration."},
+    "sync_parity": "Result normalization (_format_globus_search_results) reads mdf.source_id/version/organization/domains/latest/root_version/download_url and dc.title/creators/subjects/description/year/license/doi — must match the v1 index field layout (1a57bbe5-...) for fast re-sync. build_gmeta_entry writes the same content.mdf/content.dc/content.data layout, preserving v1 compatibility.",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "Dynamo fallback search (search_datasets) returns every status=='published' record with no mdf.acl filtering, so a dataset published with a non-public ACL is leaked in fallback results, contradicting the Globus-path visibility model. Any condition that triggers fallback (Globus down, USE_MOCK_SEARCH, index not-configured) exposes restricted published metadata.", "evidence": "search.py:47-49,213-234; search_client.py:74-76 (visible_to derived from acl on the index side only)"},
+      {"severity": "med", "dimension": "sync", "desc": "search_datasets faceted total comes from Globus, but when it falls through to Dynamo the 'total' reflects only the scanned page set (SEARCH_MAX_DATASET_SCAN=1000) and facets are empty; pagination/total contract differs from the v1/Globus contract, risking inconsistent result counts during cutover.", "evidence": "search.py:213-234,604-636"},
+      {"severity": "low", "dimension": "functionality", "desc": "search_all sorts combined dataset+stream results by score but Globus dataset scores and the local _simple_match stream scores are on different scales, so ranking across the two types is arbitrary.", "evidence": "search.py:624-628; search.py:129-139"}
+    ]
+  },
+  {
+    "feature_id": "SRCH-02",
+    "area": "search",
+    "name": "GET /search/semantic — vector (cosine) search over embedding snapshot",
+    "files": ["aws/v2/app/routers/search.py:118-128", "aws/v2/search.py:275-333", "aws/v2/embedding_snapshot.py:323-369", "aws/v2/embeddings.py:69-99"],
+    "user_story": "As a portal visitor, I want semantic search so that I can find datasets by meaning, not just keywords.",
+    "expected_behavior": "limit clamped 1..50; embeds query via OpenAI (embed_text), loads current snapshot from S3 (mdf-embeddings-${env}) / local; cosine-ranks; returns top-k sidecar rows. Returns {available:false,...} when no snapshot or embedding fails.",
+    "inputs": "Query q (required), limit.",
+    "outputs": "{available, query, model, snapshot_built_at, snapshot_count, total, results[]}.",
+    "side_effects": "OpenAI embeddings API call per request (cost); loads+caches snapshot in memory.",
+    "error_paths": "Graceful available:false on missing snapshot / embedding error.",
+    "security": {
+      "authN": "NONE — fully public.",
+      "authZ": "Snapshot only contains published+latest datasets (build_snapshot filters status=='published' and latest!=false), so no unpublished leakage.",
+      "IAM": "S3 read on embeddings bucket.",
+      "secrets": "OPENAI_API_KEY used server-side; not exposed to client.",
+      "data_exposure": "Each public query triggers a billable OpenAI call — cost/DoS amplification with no per-caller rate limit beyond API GW global throttle (100 rps).",
+      "encryption": "Embeddings bucket PublicAccessBlock all-true (template.yaml:434-438).",
+      "network_boundaries": "Outbound to api.openai.com."
+    },
+    "deployability": {"env_vars": "OPENAI_API_KEY, EMBEDDING_MODEL, EMBEDDING_DIMS, EMBEDDING_SNAPSHOT_BUCKET, EMBEDDING_SNAPSHOT_PREFIX.", "iac": "EmbeddingsSnapshotBucket (template.yaml:430-444) + S3CrudPolicy.", "env_parity": "S3 in prod/staging, filesystem in dev (EMBEDDING_SNAPSHOT_DIR). EMBEDDING_DIMS must match the dims used at build time or cosine scan breaks.", "rollback": "Snapshot is content-hashed + pointer-swapped; rolling back deletes nothing.", "drift": "If OPENAI_API_KEY='not-configured' (template default), embed_text raises EmbeddingError -> available:false (graceful)."},
+    "sync_parity": "Sidecar row schema (source_id/version/title/authors/keywords/description/publication_year/organization/doi) is independent of the Globus v1 index; not required for v1 cutover but must stay stable for the frontend.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Unauthenticated endpoint makes a billable OpenAI embedding call on every request with no rate limiting per caller; an attacker can drive OpenAI cost / exhaust the key's quota.", "evidence": "app/routers/search.py:118-128; search.py:294-302; embeddings.py:84-99"}
+    ]
+  },
+  {
+    "feature_id": "SRCH-03",
+    "area": "search",
+    "name": "POST /embed — embed arbitrary text (UNAUTH, exposes embedding service)",
+    "files": ["aws/v2/app/routers/search.py:131-148", "aws/v2/embeddings.py:69-99"],
+    "user_story": "As a frontend, I want to embed a query string so that I can run client-side cosine scanning over the public snapshot blob without seeing the OpenAI key.",
+    "expected_behavior": "Validates text length 1..8000; returns {model, dims, embedding[]} from OpenAI. 503 on EmbeddingError.",
+    "inputs": "JSON {text}.",
+    "outputs": "{model, dims, embedding}.",
+    "side_effects": "OpenAI embeddings API call per request.",
+    "error_paths": "422 validation; 503 embedding unavailable.",
+    "security": {
+      "authN": "NONE.",
+      "authZ": "None.",
+      "IAM": "n/a (direct httpx to OpenAI).",
+      "secrets": "OPENAI_API_KEY kept server-side (the stated benefit), but the endpoint itself is an open proxy to a paid OpenAI embeddings API.",
+      "data_exposure": "Open, unauthenticated, billable OpenAI proxy. text up to 8000 chars per call.",
+      "encryption": "n/a.",
+      "network_boundaries": "Outbound to api.openai.com."
+    },
+    "deployability": {"env_vars": "OPENAI_API_KEY, EMBEDDING_MODEL, EMBEDDING_DIMS, OPENAI_TIMEOUT_SECONDS.", "iac": "—", "env_parity": "Behaves identically across envs; 'not-configured' key -> 503.", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "POST /embed is a completely unauthenticated proxy to the paid OpenAI embeddings API; any internet caller can run arbitrary 8000-char embeddings on the MDF OpenAI key, enabling cost abuse / quota exhaustion. No auth, no per-IP rate limit (only the 100 rps global API GW throttle).", "evidence": "app/routers/search.py:131-148; embeddings.py:60-99"}
+    ]
+  },
+  {
+    "feature_id": "SRCH-04",
+    "area": "search",
+    "name": "GET /datasets/{source_id}/related — related by author or embedding similarity",
+    "files": ["aws/v2/app/routers/search.py:151-170", "aws/v2/search.py:336-419,505-597"],
+    "user_story": "As a portal visitor, I want related datasets (shared authors or semantically similar) so that I can discover more relevant data.",
+    "expected_behavior": "limit clamped 1..50; by=author -> find_related_by_author over in-memory author index (published+latest only); by=similar -> find_similar_by_embedding over snapshot (no OpenAI call, anchor vector already in snapshot). 400 unsupported relation.",
+    "inputs": "Path source_id; query by(author|similar), limit.",
+    "outputs": "{source_id, authors, results[], total} or similarity result.",
+    "side_effects": "Lazily builds/caches author index (scans up to 100000 published submissions).",
+    "error_paths": "400 unsupported by; graceful empty when source not in index/snapshot.",
+    "security": {"authN": "NONE.", "authZ": "Author index and snapshot both filter status=='published' and latest!=false, so only public-published metadata surfaces.", "IAM": "Dynamo scan + S3 read.", "secrets": "none (no OpenAI call on similar).", "data_exposure": "Author index built from published records only; acl not consulted (same caveat as PREV-03 — published-but-restricted datasets included).", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "EMBEDDING_SNAPSHOT_BUCKET, STORE_BACKEND.", "iac": "—", "env_parity": "Author index in-memory per Lambda instance — cold starts re-scan Dynamo (latency).", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "Author index keys (orcid/family,given/name) and result row schema are internal; not part of v1 index.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "find_related_by_author rebuilds a full-corpus in-memory index (scan up to 100000 records) on first call per warm Lambda; under reserved concurrency 10 this is a repeated cold-start cost and the cache is never invalidated on new publishes within a warm instance.", "evidence": "search.py:505-556; app/routers/search.py:166-167"},
+      {"severity": "low", "dimension": "security", "desc": "Like PREV-03, the author/similar indexes include published datasets without consulting mdf.acl, so restricted-but-published datasets are discoverable.", "evidence": "search.py:513-518,185-192"}
+    ]
+  },
+  {
+    "feature_id": "CARD-01",
+    "area": "cards",
+    "name": "GET /card/{source_id} — dataset card (UNAUTH read) with caller permissions",
+    "files": ["aws/v2/app/routers/cards.py:22-60", "aws/v2/dataset_card.py:35-153"],
+    "user_story": "As a portal visitor, I want a compact dataset card so that I can preview a dataset; as an owner/curator, I want my permission flags so the UI can show edit/curate actions.",
+    "expected_behavior": "store.get(source_id, version) ('latest'->None); 404 unless status=='published'; build_dataset_card; view_count increment; permissions computed from optional auth (can_edit if owner|curator & editable status; can_delete if curator; can_curate if curator & pending_curation).",
+    "inputs": "Path source_id; query version; optional Authorization.",
+    "outputs": "{success, card, permissions}.",
+    "side_effects": "view_count increment.",
+    "error_paths": "404 not found / not published.",
+    "security": {
+      "authN": "get_optional_auth.",
+      "authZ": "Card served for any published dataset (no acl check); permissions only reflect owner/curator.",
+      "IAM": "Dynamo read.",
+      "secrets": "none.",
+      "data_exposure": "Card includes download_url, archive_size, full data_sources list, profile_summary with sample_rows, DOI links — all public for published datasets. external_provenance exposed. No acl gating.",
+      "encryption": "n/a.",
+      "network_boundaries": "Public read."
+    },
+    "deployability": {"env_vars": "STORE_BACKEND, DYNAMO_SUBMISSIONS_TABLE.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "Card is an internal projection (not the search doc), but it reuses parse_metadata; fields (authors as names, license name, doi) must stay consistent with search result rows for UI parity. Not part of v1 index contract.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Card serves download_url and sample data (profile_summary.sample_rows) for any published dataset to anonymous callers without honoring mdf.acl; a restricted-but-published dataset's download link and sample rows are exposed.", "evidence": "app/routers/cards.py:48-52; dataset_card.py:76-80,141-151"},
+      {"severity": "low", "dimension": "functionality", "desc": "card links.self points to /status/{source_id} which is a curation/status endpoint, not a public detail URL; likely a wrong link for the public card.", "evidence": "dataset_card.py:70"}
+    ]
+  },
+  {
+    "feature_id": "CARD-02",
+    "area": "cards",
+    "name": "GET /citation/{source_id} — citation export (BibTeX/RIS/APA/DataCite XML, UNAUTH)",
+    "files": ["aws/v2/app/routers/cards.py:63-100", "aws/v2/citation.py"],
+    "user_story": "As a researcher, I want citation exports of a published dataset so that I can cite it in my paper.",
+    "expected_behavior": "store.get; 404 unless published; format bibtex/ris/apa/datacite/all; returns the requested representation(s).",
+    "inputs": "Path source_id; query version, format.",
+    "outputs": "{success, source_id, version, <format fields>, content_type}.",
+    "side_effects": "None.",
+    "error_paths": "404 not found / not published.",
+    "security": {"authN": "NONE.", "authZ": "published-only.", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Public citation metadata for published datasets (intended).", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "STORE_BACKEND.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "DataCite XML generation must mirror what was registered at DOI minting; authors/year/publisher pulled from parse_metadata — keep consistent with v1 DataCite records.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "No view_count increment here (unlike card/detail), so citation exports are not counted as accesses — metric inconsistency.", "evidence": "app/routers/cards.py:63-100"}
+    ]
+  },
+  {
+    "feature_id": "CARD-03",
+    "area": "cards",
+    "name": "GET /detail/{slug} — slug-resolved dataset card (UNAUTH)",
+    "files": ["aws/v2/app/routers/cards.py:103-154"],
+    "user_story": "As a portal user landing on a detail URL, I want the slug (source_id+version) resolved to a dataset card so deep links work.",
+    "expected_behavior": "_parse_detail_slug splits trailing -X.Y into (source_id, version); ?version overrides; 'latest'->None; 404 unless published; build_dataset_card; view_count increment; returns card + permissions.",
+    "inputs": "Path slug; query version; optional Authorization.",
+    "outputs": "{success, source_id, version, card, permissions}.",
+    "side_effects": "view_count increment.",
+    "error_paths": "404 not found / not published.",
+    "security": {"authN": "get_optional_auth.", "authZ": "published-only; same acl gap as CARD-01.", "IAM": "Dynamo read.", "secrets": "none.", "data_exposure": "Same as CARD-01.", "encryption": "n/a.", "network_boundaries": "Public."},
+    "deployability": {"env_vars": "STORE_BACKEND.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "Slug format must match frontend detail URLs (source_id-version). The regex ^(.+)-(\\d+\\.\\d+)$ greedily splits; a source_id that itself ends in -N.M (e.g. '..._v2.1') is correctly handled by the docstring examples, but a source_id ending in a version-like suffix without an appended version could be misparsed.", "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Same unauth + no-acl exposure of download_url and sample rows as CARD-01.", "evidence": "app/routers/cards.py:137-141; dataset_card.py:76-80,141-151"},
+      {"severity": "low", "dimension": "functionality", "desc": "_parse_detail_slug regex may mis-split a source_id whose name legitimately ends in '-<digits>.<digits>' when no explicit version is appended, resolving to the wrong (source_id, version) pair.", "evidence": "app/routers/cards.py:18,103-114"}
+    ]
+  },
+  {
+    "feature_id": "ADM-01",
+    "area": "admin",
+    "name": "GET /admin/stats — submission counts and access totals (curator-only)",
+    "files": ["aws/v2/app/routers/admin.py:30-53", "aws/v2/app/auth.py:186-191"],
+    "user_story": "As a curator, I want aggregate submission stats so that I can monitor the corpus.",
+    "expected_behavior": "require_curator; list_all(limit=10000) full scan; tallies counts by status and sums view_count/download_count.",
+    "inputs": "Authorization (curator).",
+    "outputs": "{success, total, by_status, access_totals}.",
+    "side_effects": "Full Dynamo scan (up to 10000 items).",
+    "error_paths": "403 not curator; 401 unauth.",
+    "security": {"authN": "get_auth via require_curator.", "authZ": "is_curator (CURATOR_USER_IDS / CURATOR_GROUP_IDS / ALLOW_ALL_CURATORS). In dev/auto, ALLOW_ALL_CURATORS=true makes everyone a curator.", "IAM": "Dynamo scan.", "secrets": "none.", "data_exposure": "Aggregates only; curator-gated.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "CURATOR_GROUP_IDS, ALLOW_ALL_CURATORS, STORE_BACKEND.", "iac": "template.yaml:235-239.", "env_parity": "dev/auto -> ALLOW_ALL_CURATORS true (anyone curates); prod -> false + group check.", "rollback": "Stateless.", "drift": "If ALLOW_ALL_CURATORS accidentally 'true' in prod, all curator endpoints open to any authenticated user."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "deployability", "desc": "Curator authorization collapses to 'any authenticated user' whenever ALLOW_ALL_CURATORS resolves truthy; the 'auto' default is wired to true for dev-auth and false for production, but a misconfigured AllowAllCurators=true param in prod would silently open all /admin endpoints.", "evidence": "app/auth.py:155-157; template.yaml:235-239,330-333"},
+      {"severity": "low", "dimension": "functionality", "desc": "list_all(limit=10000) is a capped full scan; corpora >10000 produce undercounted stats with no pagination signal.", "evidence": "app/routers/admin.py:35"}
+    ]
+  },
+  {
+    "feature_id": "ADM-02",
+    "area": "admin",
+    "name": "GET /admin/embeddings/status — embedding coverage report (curator-only)",
+    "files": ["aws/v2/app/routers/admin.py:8-18,66-122", "aws/v2/embedding_snapshot.py:372-382"],
+    "user_story": "As a curator, I want to see which published datasets have/lack embeddings and which are stale so that I can decide when to rebuild.",
+    "expected_behavior": "require_curator; list_all(limit=100000) scan; for published+latest counts with_embedding/without/stale (by string-compare of embedding_generated_at < metadata_updated_at), by_model breakdown, missing/stale samples (<=50 each), and current snapshot pointer.",
+    "inputs": "Authorization (curator).",
+    "outputs": "{success, current_model, published_total, with_embedding, without_embedding, stale, by_model, missing_sample, stale_sample, snapshot}.",
+    "side_effects": "Large Dynamo scan (100000).",
+    "error_paths": "403/401.",
+    "security": {"authN": "require_curator.", "authZ": "curator-gated.", "IAM": "Dynamo scan + S3 read pointer.", "secrets": "none.", "data_exposure": "Curator-only; exposes source_id/version samples.", "encryption": "n/a.", "network_boundaries": "n/a."},
+    "deployability": {"env_vars": "EMBEDDING_SNAPSHOT_BUCKET, EMBEDDING_MODEL.", "iac": "—", "env_parity": "—", "rollback": "Stateless.", "drift": "—"},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Staleness uses lexicographic string comparison of two ISO timestamps; correct only while both are Z-suffixed UTC ISO-8601 of equal precision — a record with a differently-formatted metadata_updated_at would mis-flag staleness.", "evidence": "app/routers/admin.py:8-18"},
+      {"severity": "low", "dimension": "functionality", "desc": "list_all(limit=100000) full scan on every status call is an expensive curator operation with no caching.", "evidence": "app/routers/admin.py:75"}
+    ]
+  },
+  {
+    "feature_id": "ADM-03",
+    "area": "admin",
+    "name": "POST /admin/embeddings/rebuild — async embedding rebuild dispatch (curator-only)",
+    "files": ["aws/v2/app/routers/admin.py:60-166", "aws/v2/async_jobs.py:258-...", "aws/v2/embedding_snapshot.py:167-261"],
+    "user_story": "As a curator, I want to (re)generate dataset embeddings and rebuild the snapshot asynchronously so that semantic search stays current without blocking on the 30s API timeout.",
+    "expected_behavior": "require_curator; enqueue_rebuild_dispatch_job(force, limit, build_snapshot) to SQS; the async worker scans Dynamo, fans out JOB_GENERATE_EMBEDDING per pending record, then JOB_BUILD_EMBEDDING_SNAPSHOT. Returns dispatch_job descriptor. On enqueue error returns {success:false,error}.",
+    "inputs": "Optional RebuildEmbeddingsRequest{force, build_snapshot, limit}; Authorization (curator).",
+    "outputs": "{success, model, force, limit, build_snapshot, dispatch_job, message}.",
+    "side_effects": "SQS message; downstream OpenAI embedding calls (billable) and S3 snapshot writes in the worker.",
+    "error_paths": "403/401; returns success:false on enqueue exception (not raised).",
+    "security": {"authN": "require_curator.", "authZ": "curator-gated.", "IAM": "sqs:SendMessage on AsyncJobsQueue.", "secrets": "OPENAI_API_KEY used in worker.", "data_exposure": "none.", "encryption": "n/a.", "network_boundaries": "API->SQS->worker->OpenAI/S3."},
+    "deployability": {"env_vars": "ASYNC_QUEUE_URL, ASYNC_DISPATCH_MODE (sqs in prod, inline in dev-auth), OPENAI_API_KEY.", "iac": "AsyncJobsQueue + worker SQS event source; worker timeout 120s.", "env_parity": "In dev-auth ASYNC_DISPATCH_MODE=inline so rebuild runs synchronously and could exceed the 30s API timeout for non-tiny corpora.", "rollback": "Snapshot pointer-swap; old artifacts retained.", "drift": "If OPENAI_API_KEY not-configured, worker embedding jobs fail; snapshot may build empty."},
+    "sync_parity": "N/A (embeddings are independent of the v1 search index).",
+    "issues": [
+      {"severity": "low", "dimension": "deployability", "desc": "In dev-auth (inline dispatch) a rebuild executes synchronously in the API request; the endpoint's own docstring notes this would blow past API Gateway's 30s cap for any non-tiny corpus, so dev rebuilds of real-sized data will time out.", "evidence": "app/routers/admin.py:131-138; template.yaml:210,306"},
+      {"severity": "low", "dimension": "functionality", "desc": "Enqueue failures return HTTP 200 {success:false} instead of 5xx, so monitoring/clients keying on status codes will treat a failed dispatch as success.", "evidence": "app/routers/admin.py:151-153"}
+    ]
+  },
+  {
+    "feature_id": "ADM-04",
+    "area": "admin",
+    "name": "POST /admin/embeddings/snapshot — rebuild snapshot only (curator-only)",
+    "files": ["aws/v2/app/routers/admin.py:169-190", "aws/v2/async_jobs.py:254-...", "aws/v2/embedding_snapshot.py:167-261"],
+    "user_story": "As a curator, I want to rebuild just the embedding snapshot (no re-embedding) so that a stale snapshot over fresh Dynamo vectors is refreshed cheaply.",
+    "expected_behavior": "require_curator; enqueue_snapshot_build_job to SQS; worker runs build_snapshot (packs Float32 bin + JSON sidecar, content-hashed keys, atomic current.json pointer swap, invalidates cache). Returns snapshot_job.",
+    "inputs": "Authorization (curator).",
+    "outputs": "{success, snapshot_job, message}.",
+    "side_effects": "SQS message -> S3 writes (bin/json/pointer).",
+    "error_paths": "403/401; success:false on enqueue exception.",
+    "security": {"authN": "require_curator.", "authZ": "curator-gated.", "IAM": "sqs:SendMessage; worker S3CrudPolicy on embeddings bucket.", "secrets": "none (no OpenAI in snapshot-only).", "data_exposure": "Snapshot bin+sidecar may be served publicly if EMBEDDING_SNAPSHOT_PUBLIC_URL/CloudFront configured; bucket itself is private (PublicAccessBlock).", "encryption": "n/a.", "network_boundaries": "API->SQS->worker->S3."},
+    "deployability": {"env_vars": "ASYNC_QUEUE_URL, EMBEDDING_SNAPSHOT_BUCKET, EMBEDDING_SNAPSHOT_PUBLIC_URL.", "iac": "EmbeddingsSnapshotBucket has CORS GET/HEAD * (template.yaml:439-444) to support browser cosine scan.", "env_parity": "S3 prod/staging; filesystem dev.", "rollback": "Content-hashed; previous artifacts retained; pointer can be reverted.", "drift": "Public URL only emitted if EMBEDDING_SNAPSHOT_PUBLIC_URL set."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "deployability", "desc": "Embeddings bucket allows CORS GET/HEAD from any origin (AllowedOrigins ['*']) so that browsers can fetch the snapshot blob directly; if a CloudFront/public path is later attached this makes the entire sidecar (titles, descriptions, authors, dois of all published datasets) world-readable by design — acceptable for public data but should be confirmed no private datasets ever enter the snapshot.", "evidence": "template.yaml:439-444; embedding_snapshot.py:185-207"}
+    ]
+  },
+  {
+    "feature_id": "STOR-01",
+    "area": "storage",
+    "name": "Storage backend abstraction + factory (env-selected local/s3/globus)",
+    "files": ["aws/v2/storage/base.py:42-235", "aws/v2/storage/factory.py:20-62", "aws/v2/storage/__init__.py"],
+    "user_story": "As an operator, I want a pluggable storage backend selected by environment so that dev uses local FS and prod uses Globus/S3 without code changes.",
+    "expected_behavior": "get_storage_backend() returns a cached singleton keyed by STORAGE_BACKEND (local default). base._build_path enforces date-prefixed streams/{id}/{file} layout; _sanitize_stream_id (allowlist [A-Za-z0-9._:-]) and _sanitize_filename (per-segment allowlist, rejects '', '.', '..') are the central path-safety controls.",
+    "inputs": "STORAGE_BACKEND env or override arg.",
+    "outputs": "StorageBackend instance.",
+    "side_effects": "Module-level singleton (process-cached).",
+    "error_paths": "ValueError on unknown backend; ValueError on bad stream_id/filename.",
+    "security": {
+      "authN": "n/a.",
+      "authZ": "n/a.",
+      "IAM": "n/a at factory level.",
+      "secrets": "Globus backend pulls token from arg/env/disk cache(~/.mdf)/client-credentials.",
+      "data_exposure": "Central sanitization is the primary traversal control; note get_file/get_download_url on S3 and globus DO NOT re-run _sanitize_filename — they trust the caller path (routers enforce _path_belongs_to_stream, but the preview single-file fallback bypasses that, see PREV-02).",
+      "encryption": "No SSE/KMS configured on either S3 bucket.",
+      "network_boundaries": "Globus outbound HTTPS; S3 via SDK."
+    },
+    "deployability": {"env_vars": "STORAGE_BACKEND (auto->local dev/globus prod), S3_BUCKET, S3_PREFIX, GLOBUS_ENDPOINT_ID/BASE_PATH/HTTPS_SERVER, GLOBUS_ACCESS_TOKEN/CLIENT_ID/SECRET.", "iac": "template.yaml:215-221,310-316.", "env_parity": "auto storage resolves local for dev-auth and globus for non-dev; the provisioned S3 bucket (mdf-stream-files-${env}) is NOT the default backend in prod (globus is), so the S3 path is only exercised if StorageBackend param is explicitly 's3'.", "rollback": "Singleton resets per cold start.", "drift": "Resource/backend mismatch: an S3 bucket is created for non-dev but the default backend is globus; either the bucket is unused or globus list_files is broken (FILE-05)."},
+    "sync_parity": "Storage paths are not part of the v1 search doc; download_url written into the search doc (mdf.download_url) is derived from the dataset metadata, not from these stream paths.",
+    "issues": [
+      {"severity": "med", "dimension": "deployability", "desc": "STORAGE_BACKEND auto resolves to 'globus' for non-dev, but GlobusHTTPSStorage.list_files relies on a per-process in-memory metadata cache that is empty on each Lambda cold start; combined with the S3 bucket being provisioned-but-not-default, the deployed file-listing/preview features are unreliable in prod.", "evidence": "template.yaml:215-218; storage/globus_https.py:365-382; storage/__init__.py"},
+      {"severity": "low", "dimension": "security", "desc": "Globus backend can silently fall back to a token cached on disk at ~/.mdf/v2_https_tokens.json; in Lambda that file should not exist, but the precedence (constructor->env->disk->client-creds) means a stray cached token would be used without logging which source won.", "evidence": "storage/globus_https.py:104-132,46-55"}
+    ]
+  },
+  {
+    "feature_id": "STOR-02",
+    "area": "storage",
+    "name": "LocalStorage backend (dev) — filesystem with traversal guard",
+    "files": ["aws/v2/storage/local.py:19-224"],
+    "user_story": "As a developer, I want local filesystem storage so that I can run the API without cloud credentials.",
+    "expected_behavior": "Writes under FILE_STORE_PATH (default /tmp/mdf_files) resolved; _full_path resolves candidate and asserts relative_to(base) (traversal guard); store_file writes content + sidecar .meta.json; list_files rglobs .meta.json; get_upload_url returns a non-presigned API note (no direct upload).",
+    "inputs": "FILE_STORE_PATH.",
+    "outputs": "FileMetadata; file:// download URLs.",
+    "side_effects": "Local disk writes.",
+    "error_paths": "ValueError on traversal; returns None/[] on missing.",
+    "security": {"authN": "n/a.", "authZ": "n/a.", "IAM": "n/a.", "secrets": "none.", "data_exposure": "download_url is a file:// path to the Lambda /tmp — not externally fetchable; harmless leak of internal path.", "encryption": "n/a.", "network_boundaries": "Local only; not for prod."},
+    "deployability": {"env_vars": "FILE_STORE_PATH.", "iac": "Used only for dev-auth.", "env_parity": "Dev only; /tmp is ephemeral per Lambda instance.", "rollback": "n/a.", "drift": "Not used in prod."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "On Lambda, local backend writes to ephemeral /tmp that does not persist across invocations/instances; only suitable for single-process dev, never for the deployed staging/prod app.", "evidence": "storage/local.py:28-31"}
+    ]
+  },
+  {
+    "feature_id": "STOR-03",
+    "area": "storage",
+    "name": "S3Storage backend — object storage + presigned URLs",
+    "files": ["aws/v2/storage/s3.py:20-240"],
+    "user_story": "As an operator, I want S3-backed storage with presigned upload/download so that large files bypass the API.",
+    "expected_behavior": "Keys built as {S3_PREFIX}{streams/{id}/date/file}; put_object with content-type+user-metadata; get_download_url HEADs then presigns GET (expires default 3600); get_upload_url presigns PUT; list_files paginates list_objects_v2; checksum_md5 from ETag on list (note: ETag != MD5 for multipart).",
+    "inputs": "S3_BUCKET, S3_PREFIX.",
+    "outputs": "FileMetadata; presigned URLs.",
+    "side_effects": "S3 put/delete/list.",
+    "error_paths": "NoSuchKey->None; ClientError on head->None for download/delete.",
+    "security": {
+      "authN": "n/a (uses Lambda role).",
+      "authZ": "n/a at backend; routers gate access.",
+      "IAM": "S3CrudPolicy scoped to mdf-stream-files-${env} (template.yaml:278-279).",
+      "secrets": "none.",
+      "data_exposure": "get_file/get_download_url/_s3_key perform NO '..' sanitization and NO bucket-prefix containment check on the path argument; they rely entirely on the router-layer _path_belongs_to_stream. The preview single-file fallback (PREV-02) does not call that guard, so a crafted filename reaches _s3_key unchecked (literal '..' segments yield a literal S3 key, which S3 does not collapse — limited but non-zero key-confusion risk).",
+      "encryption": "No ServerSideEncryption specified on put_object; relies on bucket default (S3-managed SSE is on by default for new buckets, but not explicitly enforced).",
+      "network_boundaries": "Direct client<->S3 for presigned ops."
+    },
+    "deployability": {"env_vars": "S3_BUCKET (mdf-stream-files-${env}), S3_PREFIX=streams/.", "iac": "StreamFilesBucket PublicAccessBlock all-true; Condition CreateStreamFilesBucket (not dev).", "env_parity": "Bucket created for non-dev; backend only active if StorageBackend=s3 (default is globus).", "rollback": "Bucket has DeletionPolicy default (Delete) — destroying the stack could delete stored files.", "drift": "S3 backend provisioned but not the default; risk of unused bucket or, if switched, the globus->s3 cutover changes path semantics."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "S3 path operations (get_file, get_download_url, delete_file via _s3_key) do not validate against '..' or enforce the bucket prefix on the caller-supplied path; safety depends entirely on each router calling _path_belongs_to_stream, which the preview single-file fallback skips.", "evidence": "storage/s3.py:38-40,122-143; app/routers/preview.py:80-83"},
+      {"severity": "low", "dimension": "deployability", "desc": "StreamFilesBucket has no explicit DeletionPolicy/UpdateReplacePolicy (Retain), unlike the DynamoDB tables, so a stack delete/replace can destroy uploaded files.", "evidence": "template.yaml:415-424 vs 478-482"},
+      {"severity": "low", "dimension": "functionality", "desc": "checksum_md5 is populated from S3 ETag in list_files, which is not the MD5 for multipart-uploaded or SSE-KMS objects, so reported checksums can be wrong.", "evidence": "storage/s3.py:191"}
+    ]
+  },
+  {
+    "feature_id": "STOR-04",
+    "area": "storage",
+    "name": "GlobusHTTPSStorage backend — primary prod backend",
+    "files": ["aws/v2/storage/globus_https.py:58-419"],
+    "user_story": "As an operator, I want Globus HTTPS storage so that MDF's 1PB endpoint holds dataset files with per-user token authorization.",
+    "expected_behavior": "Flat key {stream_id}_{YYYYMMDD}_{filename}; PUT via user_token (preferred) or server client-credentials token; _sanitize_remote_path rejects '..', URLs, leading slashes; get_download_url returns the endpoint URL (requires client bearer); list_files reads in-process cache only.",
+    "inputs": "GLOBUS_ENDPOINT_ID, GLOBUS_BASE_PATH, GLOBUS_HTTPS_SERVER, token sources.",
+    "outputs": "FileMetadata; HTTPS endpoint URLs.",
+    "side_effects": "HTTPS PUT/GET/DELETE to Globus; in-memory metadata cache.",
+    "error_paths": "404->None; raises on other HTTP errors; ValueError on bad path/token.",
+    "security": {
+      "authN": "Bearer token (user or server client-credentials with scope <server>:all).",
+      "authZ": "Relies on Globus endpoint ACLs; user_token performs the action as the user.",
+      "IAM": "n/a (Globus, not AWS).",
+      "secrets": "GLOBUS_CLIENT_ID/SECRET drive client-credentials token; token also read from env or ~/.mdf disk cache.",
+      "data_exposure": "_sanitize_remote_path enforces no-'..'/no-URL/no-leading-slash. get_file uses _full_url which sanitizes. download URL has no expiry concept (auth required at fetch).",
+      "encryption": "TLS in transit; at-rest per Globus endpoint config.",
+      "network_boundaries": "Outbound HTTPS to data.materialsdatafacility.org."
+    },
+    "deployability": {"env_vars": "GLOBUS_ENDPOINT_ID, GLOBUS_BASE_PATH (/tmp/${env} non-dev), GLOBUS_HTTPS_SERVER, GLOBUS_CLIENT_ID/SECRET.", "iac": "template.yaml:219,314.", "env_parity": "GLOBUS_BASE_PATH defaults to /tmp/${env} which looks like a placeholder/test path, not a production data path under /mdf/streams.", "rollback": "n/a (external store).", "drift": "list_files in-memory cache breaks enumeration across Lambda invocations (see FILE-05/STOR-01)."},
+    "sync_parity": "N/A (storage paths not in search doc).",
+    "issues": [
+      {"severity": "high", "dimension": "functionality", "desc": "list_files/get_stream_size/delete_stream_files depend on a per-instance in-memory _metadata_cache populated only by store_file within the same warm Lambda; in production these return empty after a cold start, breaking file listing, stream-level preview, and bulk delete for the default prod backend.", "evidence": "storage/globus_https.py:97-98,365-382,402-414"},
+      {"severity": "med", "dimension": "deployability", "desc": "GLOBUS_BASE_PATH defaults to /tmp/${Environment} (e.g. /tmp/staging), an apparent placeholder, while the module docstring/NCSA layout expects /mdf/streams; production file writes may land on an unintended endpoint path unless GLOBUS_BASE_PATH is overridden.", "evidence": "template.yaml:219,314; storage/globus_https.py:78,193-205"},
+      {"severity": "low", "dimension": "security", "desc": "Server client-credentials token is requested with scope '<https_server>:all', a broad data-access scope; any compromise of GLOBUS_CLIENT_SECRET grants full endpoint data access.", "evidence": "storage/globus_https.py:141-164"}
+    ]
+  },
+  {
+    "feature_id": "TRAN-01",
+    "area": "storage",
+    "name": "transfer.py — Globus Transfer orchestration (server+user tokens, ACL grant/revoke)",
+    "files": ["aws/v2/transfer.py:33-324"],
+    "user_story": "As a submitter referencing globus:// data, I want MDF to transfer it into MDF storage so that my dataset files are hosted by MDF.",
+    "expected_behavior": "Server creds (client-credentials, transfer:all scope) mkdir destination /mdf_open/{source_id}/{version}/ and add a temporary rw ACL for the user identity; user's transfer token submits the actual TransferData (checksum sync, 24h deadline); status checks and ACL cleanup run via server creds; scheduled cleanup_stale_transfers (rate 6h) revokes ACLs and updates records.",
+    "inputs": "source_endpoint, source_path, source_id, version, user_transfer_token, user_identity_id.",
+    "outputs": "{task_id, acl_rule_id, destination_path, ...}.",
+    "side_effects": "Creates dirs/ACLs on NCSA endpoint; submits transfer task; later revokes ACLs.",
+    "error_paths": "mkdir 502 'Exists' tolerated; ACL failure logged-and-continued; raises on other API errors.",
+    "security": {
+      "authN": "Server client-credentials + user transfer token.",
+      "authZ": "Server creds require endpoint-manager role; user token scopes the transfer to the user's source access.",
+      "IAM": "n/a (Globus).",
+      "secrets": "GLOBUS_CLIENT_ID/SECRET (transfer:all scope).",
+      "data_exposure": "Grants the user rw ACL on the destination path for the transfer window; ACL cleanup is best-effort — a failed cleanup leaves the user with persistent rw on /mdf_open/{source_id}/{version}/.",
+      "encryption": "Globus-managed.",
+      "network_boundaries": "Globus Transfer service."
+    },
+    "deployability": {"env_vars": "GLOBUS_CLIENT_ID/SECRET.", "iac": "TransferCleanupSchedule rate(6 hours) on async worker (template.yaml:355-360).", "env_parity": "Requires endpoint-manager role on NCSA collection in the deployed account.", "rollback": "Stale-transfer sweep mitigates orphaned ACLs.", "drift": "Destination /mdf_open differs from storage backend's /tmp/${env} base path — transfer-landed data and HTTPS-uploaded data live in different trees."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "If add_endpoint_acl_rule succeeds but the transfer/cleanup path later fails to revoke (cleanup is best-effort and only swept every 6h or on the scheduled job), the user retains rw access to the destination directory; ACL creation failures are also swallowed (logged, continue), so a transfer can proceed in an inconsistent permission state.", "evidence": "transfer.py:124-141,202-221,355-360"},
+      {"severity": "low", "dimension": "deployability", "desc": "Transfer destination root /mdf_open is hardcoded and unrelated to GLOBUS_BASE_PATH (/tmp/${env}); transferred datasets and stream-uploaded files land in different endpoint trees, complicating a unified clone/download path.", "evidence": "transfer.py:27,109; storage/globus_https.py:78"}
+    ]
+  },
+  {
+    "feature_id": "CLON-01",
+    "area": "storage",
+    "name": "clone.py — StreamCloner (client-side download helper, not an HTTP endpoint)",
+    "files": ["aws/v2/clone.py:21-263"],
+    "user_story": "As a researcher, I want to clone a stream's files to my local machine so that I can work with the data offline.",
+    "expected_behavior": "Resolves stream via stream_store; lists files; downloads each (Globus via HTTPS GET with cached token; other backends via storage.get_file); writes to dest_dir/{stream_id}; _validate_globus_url enforces https scheme and an allow-list of hosts (GLOBUS_HTTPS_SERVER + GLOBUS_ALLOWED_HOSTS) before sending the bearer token.",
+    "inputs": "stream_id or url; dest_dir; optional file_filter; cached Globus token.",
+    "outputs": "{success, downloaded, total_bytes, files, errors}.",
+    "side_effects": "Local filesystem writes; outbound HTTPS GET with bearer token.",
+    "error_paths": "ValueError if stream missing / no token / untrusted host / non-https.",
+    "security": {
+      "authN": "Globus cached token (~/.mdf).",
+      "authZ": "Whatever the token grants on the endpoint.",
+      "IAM": "n/a.",
+      "secrets": "Bearer token only sent to allow-listed hosts (_validate_globus_url is the SSRF/token-leak guard).",
+      "data_exposure": "Token-leak guard prevents sending the bearer to arbitrary hosts; default allow-list is just data.materialsdatafacility.org plus GLOBUS_ALLOWED_HOSTS.",
+      "encryption": "TLS.",
+      "network_boundaries": "Outbound HTTPS; follow_redirects=True on the httpx client could follow a redirect to a non-allow-listed host AFTER the initial validated request (validation is only on the first URL).",
+      "network": "client-side tool"
+    },
+    "deployability": {"env_vars": "GLOBUS_HTTPS_SERVER, GLOBUS_ALLOWED_HOSTS.", "iac": "Not a deployed endpoint (CLI/library).", "env_parity": "Used by clients/CLI, not the Lambda HTTP surface.", "rollback": "n/a.", "drift": "Relies on stream_store list_files which on globus is the broken in-memory cache."},
+    "sync_parity": "N/A.",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "The httpx client uses follow_redirects=True while _validate_globus_url only validates the initial URL's host; a 3xx redirect to a non-allow-listed host would carry the Authorization bearer to that host (token leak via redirect).", "evidence": "clone.py:40,147-168"}
+    ]
+  }
+]

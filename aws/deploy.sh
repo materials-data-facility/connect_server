@@ -203,7 +203,12 @@ deploy_prod() {
         warn "DataCite SSM parameters not found — using defaults from samconfig.toml"
     fi
 
-    ensure_s3_bucket "mdf-sam-deployments-$env"
+    # Account-unique artifact bucket (S3 bucket names are global; suffix with
+    # the account id so a fresh account never collides with another deploy).
+    local account s3_bucket
+    account=$(aws sts get-caller-identity --query Account --output text)
+    s3_bucket="mdf-sam-deployments-${env}-${account}"
+    ensure_s3_bucket "$s3_bucket"
     build
 
     # Read base parameter_overrides from samconfig.toml and append credentials.
@@ -232,6 +237,7 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     log "Deploying stack $stack_name..."
     sam deploy \
         --config-env "$env" \
+        --s3-bucket "$s3_bucket" \
         --no-fail-on-empty-changeset \
         --parameter-overrides "$all_params"
 
@@ -407,10 +413,6 @@ help() {
 case "${1:-help}" in
     local)
         local_server
-        ;;
-    dev)
-        check_deps
-        deploy_dev
         ;;
     staging)
         check_deps

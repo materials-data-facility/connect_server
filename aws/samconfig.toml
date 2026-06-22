@@ -22,21 +22,6 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 disable_rollback = false
 
 # ===========================================================================
-# Development Environment
-# ===========================================================================
-
-[dev]
-[dev.deploy.parameters]
-stack_name = "mdf-connect-v2-dev"
-s3_bucket = "mdf-sam-deployments-dev"
-s3_prefix = "mdf-connect-v2"
-region = "us-east-1"
-capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=dev AuthMode=dev"
-confirm_changeset = false
-tags = "Project=mdf-connect Environment=dev Team=MDF"
-
-# ===========================================================================
 # Staging Environment
 # ===========================================================================
 
@@ -47,7 +32,16 @@ s3_bucket = "mdf-sam-deployments-staging"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=staging AuthMode=production AllowAllCurators=true DataCiteUsername=Globus.TEST DataCitePassword=NTroFAzElE DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+# SECURITY: AllowAllCurators removed — it made every authenticated Globus user a
+# curator (able to approve/publish, mint DOIs, and delete any dataset). With it
+# omitted the template resolves AllowAllCurators=false for production auth, so
+# curator rights come from CuratorGroupIds. NOTE: ensure curators are members of
+# the CuratorGroupIds Globus group before deploying, or curation will be locked out.
+# SECURITY: DataCite staging credentials removed from source control (the old
+# password was committed and must be rotated). deploy.sh resolves them from SSM
+# (/mdf/staging/datacite-*) — create those SSM params before deploying staging.
+# Staging uses MOCK DataCite (fake 10.99999/... DOIs) — no DataCite creds needed.
+parameter_overrides = "Environment=staging AuthMode=production UseMockDatacite=true SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================
@@ -61,5 +55,8 @@ s3_bucket = "mdf-sam-deployments-prod"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+# SECURITY: AllowAllCurators removed (see staging note). In prod this is critical —
+# it previously let any authenticated user mint REAL DataCite DOIs (10.18126) and
+# delete any dataset. Curator rights now require CuratorGroupIds membership.
+parameter_overrides = "Environment=prod AuthMode=production DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
 tags = "Project=mdf-connect Environment=prod Team=MDF"

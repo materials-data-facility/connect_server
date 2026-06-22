@@ -623,6 +623,20 @@ def _is_v1_format(mdata: dict) -> bool:
     return False
 
 
+def dataset_is_public(record: dict) -> bool:
+    """True when a dataset is publicly visible (acl empty/None or contains "public").
+
+    Mirrors the Globus Search visible_to rule. Used to gate anonymous read access
+    to published-but-restricted datasets across search, cards, citations, and
+    previews. Fails closed if metadata cannot be parsed.
+    """
+    try:
+        acl = parse_metadata(record).acl or ["public"]
+    except Exception:
+        return False
+    return "public" in acl
+
+
 def parse_metadata(record: dict) -> DatasetMetadata:
     """Parse a submission record into DatasetMetadata.
 

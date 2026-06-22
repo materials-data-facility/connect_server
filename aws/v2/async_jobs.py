@@ -533,6 +533,23 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             logger.warning("Failed to update prior version search entries for %s", source_id, exc_info=True)
 
+    # Gate publication on successful search indexing. Marking a dataset
+    # "published" while it is absent from the search index produces a
+    # published-but-invisible record (Dynamo/search drift, dead /detail links,
+    # and a dirty re-sync vs the previous stack). If indexing failed, leave the
+    # dataset unpublished and return failure so the SQS worker retries (the DOI
+    # step is idempotent/update-only and safe to repeat).
+    if not result.get("search_ingest", {}).get("success"):
+        now = _utc_now()
+        submission["status"] = "publish_failed"
+        submission["updated_at"] = now
+        store.upsert_submission(submission)
+        result["success"] = False
+        result["status"] = "publish_failed"
+        result["error"] = "Search ingest failed; dataset left unpublished pending retry"
+        logger.error("Publish aborted (search ingest failed) for %s v%s", source_id, version)
+        return result
+
     # Step 3: Update status to published
     now = _utc_now()
     submission["status"] = "published"

@@ -1,0 +1,51 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RuntimeLogs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-east-1:557062710055:log-group:/aws/lambda/mdf-connect-v2-*:*"
+    },
+    {
+      "Sid": "RuntimeDynamo",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem",
+        "dynamodb:Query", "dynamodb:Scan", "dynamodb:BatchGetItem", "dynamodb:BatchWriteItem",
+        "dynamodb:DescribeTable", "dynamodb:ConditionCheckItem"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:557062710055:table/mdf-*",
+        "arn:aws:dynamodb:us-east-1:557062710055:table/mdf-*/index/*"
+      ]
+    },
+    {
+      "Sid": "RuntimeS3Data",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": [
+        "arn:aws:s3:::mdf-stream-files-*", "arn:aws:s3:::mdf-stream-files-*/*",
+        "arn:aws:s3:::mdf-embeddings-*", "arn:aws:s3:::mdf-embeddings-*/*"
+      ]
+    },
+    {
+      "Sid": "RuntimeSqs",
+      "Effect": "Allow",
+      "Action": ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"],
+      "Resource": "arn:aws:sqs:us-east-1:557062710055:mdf-async-*"
+    },
+    {
+      "Sid": "RuntimeSes",
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RuntimeSsmRead",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+      "Resource": "arn:aws:ssm:us-east-1:557062710055:parameter/mdf/*"
+    }
+  ]
+}

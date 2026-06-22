@@ -78,9 +78,20 @@ class GlobusSearchClient:
         data_sources = meta.data_sources or []
         location = data_sources[0] if data_sources else None
 
+        # source_name = the v1 dataset-family grouping key. Preserve the original
+        # v1 source_name when present (migrated datasets carry it in extensions),
+        # otherwise use the full, stable source_id. Never derive it by rsplit():
+        # for v2 "mdf-<uuid>" ids that corrupted the grouping/facet key and broke
+        # v1 index parity on re-sync/cutover.
+        source_name = (meta.extensions or {}).get("mdf_source_name") or source_id
+
         mdf_block: Dict[str, Any] = {
             "source_id": source_id,
-            "source_name": source_id.rsplit("-", 1)[0] if "-" in source_id else source_id,
+            "source_name": source_name,
+            # resource_type is required for v1 parity: the v1 extraction/enumeration
+            # query filters on mdf.resource_type:"dataset". Omitting it made v2-native
+            # datasets invisible to v1 sync tooling (zero results on re-sync).
+            "resource_type": "dataset",
             "version": version,
             "organization": submission.get("organization", ""),
             "acl": acl,

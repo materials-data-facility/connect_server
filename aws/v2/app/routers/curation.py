@@ -156,9 +156,13 @@ async def approve(
                 existing_metadata = json.loads(existing_metadata)
             except Exception:
                 existing_metadata = {}
-        # Deep merge metadata updates into existing flat metadata
+        # Deep merge metadata updates into existing flat metadata.
+        # Store as a JSON string to match the submit path (submissions.py uses
+        # json.dumps). Assigning a raw dict here made dataset_mdata a Dynamo Map
+        # on this path but a String on others, forcing every reader to handle
+        # both and risking sync/serialization divergence.
         deep_merge(existing_metadata, payload.metadata_updates)
-        submission["dataset_mdata"] = existing_metadata
+        submission["dataset_mdata"] = json.dumps(existing_metadata)
         submission["metadata_updated_at"] = now
 
     submission["status"] = "approved"

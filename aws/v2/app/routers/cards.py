@@ -19,6 +19,24 @@ _VERSION_SUFFIX_RE = re.compile(r"^(.+)-(\d+\.\d+)$")
 _EDITABLE_STATUSES = {"pending_curation", "rejected", "published"}
 
 
+def _visible_to(auth: Optional[AuthContext], record: Optional[Dict[str, Any]]) -> bool:
+    """A record is viewable when it is published AND (public, or caller is owner/curator).
+
+    Without this, a restricted-but-published dataset's card/citation/profile would
+    be served to anonymous callers (ACL bypass / data exposure).
+    """
+    if not record or record.get("status") != "published":
+        return False
+    if auth:
+        owner_id = record.get("user_id")
+        if owner_id and owner_id == auth.user_id:
+            return True
+        if is_curator(auth):
+            return True
+    from v2.metadata import dataset_is_public
+    return dataset_is_public(record)
+
+
 def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> Dict[str, bool]:
     """Compute user permissions for a dataset record."""
     if not auth:
@@ -46,7 +64,7 @@ async def get_card(
         version = None
 
     record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    if not _visible_to(auth, record):
         raise HTTPException(404, "Dataset not found")
 
     card = build_dataset_card(record)
@@ -65,10 +83,11 @@ async def get_citation(
     source_id: str,
     version: Optional[str] = Query(None),
     format: Optional[str] = Query("all"),
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    if not _visible_to(auth, record):
         raise HTTPException(404, "Dataset not found")
 
     fmt = (format or "all").lower()
@@ -135,7 +154,7 @@ async def get_card_by_slug(
         version = None
 
     record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    if not _visible_to(auth, record):
         raise HTTPException(404, "Dataset not found")
 
     card = build_dataset_card(record)

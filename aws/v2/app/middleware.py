@@ -171,4 +171,11 @@ def configure_app_middleware(app: FastAPI) -> None:
         }
         logger.info(json.dumps(log_data, sort_keys=True))
         response.headers["X-Request-Id"] = request_id
+        # Baseline security headers (served over HTTPS via API Gateway).
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
         return response

@@ -49,6 +49,22 @@ def _is_searchable_dataset(record: Dict[str, Any]) -> bool:
     return record.get("status") == "published"
 
 
+def _is_public_dataset(record: Dict[str, Any]) -> bool:
+    """True only when the dataset is publicly visible.
+
+    The Globus Search path enforces visibility via visible_to (public only when
+    "public" is in the acl). The local DynamoDB fallback must apply the SAME
+    rule, otherwise a restricted-but-published dataset's metadata leaks to every
+    unauthenticated caller whenever the Globus path is unavailable.
+    """
+    try:
+        acl = parse_metadata(record).acl or ["public"]
+    except Exception:
+        # Fail closed: if metadata can't be parsed, treat as non-public.
+        return False
+    return "public" in acl
+
+
 def _extract_searchable_text(record: Dict[str, Any]) -> str:
     """Extract all searchable text from a submission record."""
     parts = []
@@ -217,6 +233,10 @@ def search_datasets(
     results = []
     for record in all_submissions:
         if not _is_searchable_dataset(record):
+            continue
+        # ACL parity with the Globus path: the unauthenticated fallback must not
+        # surface restricted (non-public) datasets.
+        if not _is_public_dataset(record):
             continue
         text = _extract_searchable_text(record)
         score = _simple_match(text, query)

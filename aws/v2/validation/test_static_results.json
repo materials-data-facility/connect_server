@@ -1,0 +1,100 @@
+[
+  {
+    "finding_id": "IAC-01",
+    "verdict": "CONFIRMED",
+    "evidence": "aws/template.yaml:223,229,254 (ApiFunction) + 318,324,342 (AsyncWorkerFunction)",
+    "detail": "GLOBUS_CLIENT_SECRET (223), DATACITE_PASSWORD (229), OPENAI_API_KEY (254) are injected as plaintext Lambda environment variables via !Ref to NoEcho CFN parameters (params declared lines 20-24, 29-33, 159-163). NoEcho:true only redacts the values from CloudFormation console/describe-stacks output; the resolved values are stored in cleartext in the Lambda function configuration (Environment.Variables) and are readable by anyone with lambda:GetFunctionConfiguration. They are NOT sourced from SSM SecureString or Secrets Manager, and are not KMS-wrapped beyond the default Lambda env-var encryption-at-rest. Same three secrets repeated for AsyncWorkerFunction (lines 318/324/342). Static/CloudFormation-source confirmation (live stack not reachable).",
+    "repro": ""
+  },
+  {
+    "finding_id": "IAC-02",
+    "verdict": "CONFIRMED",
+    "evidence": "aws/samconfig.toml:50",
+    "detail": "Staging DataCite password is committed in plaintext in the repo: parameter_overrides line for [staging] contains 'DataCitePassword=NTroFAzElE' (account Globus.TEST, api.test.datacite.org). This is a real test-account credential checked into version control. (Prod block line 64 does NOT inline a DataCitePassword, so prod relies on the default 'not-configured' unless supplied at deploy time — itself a separate gap, but the staging secret is committed.)",
+    "repro": ""
+  },
+  {
+    "finding_id": "AUTH-02",
+    "verdict": "CONFIRMED",
+    "evidence": "aws/samconfig.toml:50 (staging) and :64 (prod); v2/app/auth.py:155-157 (is_curator)",
+    "detail": "Both staging (samconfig.toml:50) and prod (samconfig.toml:64) set 'AllowAllCurators=true' in parameter_overrides. template.yaml:235-238 passes this through to the ALLOW_ALL_CURATORS env var (the explicit 'true' overrides the auto default). auth.py is_curator() short-circuits: lines 155-157 return True whenever os.environ['ALLOW_ALL_CURATORS'].lower() in ('true','1','yes'). Therefore every authenticated user (any valid Globus token in production AuthMode) is treated as a curator in BOTH staging and prod — they can approve/reject/publish/mint-DOI/delete any submission. require_curator (auth.py:186-191) and ensure_submission_owner_or_curator (166-173) all defer to this is_curator, so the bypass is system-wide.",
+    "repro": "ALLOW_ALL_CURATORS=true -> is_curator(any_auth) == True (auth.py:155)"
+  },
+  {
+    "finding_id": "IAC-06",
+    "verdict": "PARTIAL",
+    "evidence": "aws/template.yaml:478-527 (SubmissionsTable), 529-554 (StreamsTable); policies 274-277, 362-365",
+    "detail": "CONFIRMED parts: Neither SubmissionsTable nor StreamsTable declares PointInTimeRecoverySpecification (no PITR / continuous backups) nor SSESpecification (relies on AWS-owned-key default encryption only; no customer-managed KMS key, no explicit encryption block). Both Lambdas attach DynamoDBCrudPolicy to each table (ApiFunction 274-277, AsyncWorker 362-365); the SAM DynamoDBCrudPolicy canned policy includes dynamodb:DeleteItem and BatchWriteItem, so both functions can delete items. REFUTED sub-claim in the finding text ('~478-555, ~274-291'): the tables DO carry DeletionPolicy: Retain and UpdateReplacePolicy: Retain (lines 480-481 and 531-532), so the table resources themselves survive stack deletion/replacement — only PITR and SSE are missing. Hence PARTIAL: no-PITR / no-SSE / Crud-incl-Delete confirmed; 'no retain' is false for the tables.",
+    "repro": ""
+  },
+  {
+    "finding_id": "IAC-07-S3-SQS",
+    "verdict": "PARTIAL",
+    "evidence": "aws/template.yaml:415-424 (StreamFilesBucket), 430-444 (EmbeddingsSnapshotBucket), 450-464 (SQS queue + DLQ)",
+    "detail": "CONFIRMED: StreamFilesBucket (415) and EmbeddingsSnapshotBucket (430) declare NO BucketEncryption (no SSE-S3/SSE-KMS block; rely on S3 default SSE-S3) and NO DeletionPolicy/UpdateReplacePolicy:Retain (both buckets are deleted on stack deletion — note tables ARE retained but buckets are NOT). AsyncJobsDLQ (450) and AsyncJobsQueue (456) declare NO SqsManagedSseEnabled and NO KmsMasterKeyId (queues are unencrypted unless the account/region default applies; SAM/CFN does not enable SSE by default for SQS). Both buckets do set full PublicAccessBlockConfiguration (420-424, 434-438), and EmbeddingsSnapshotBucket sets a wildcard CORS GET/HEAD AllowedOrigins:['*'] (439-444) intended for public CloudFront read. PARTIAL only because the finding conflated buckets with the tables' Retain policy; buckets genuinely lack Retain, encryption, and the queues lack SSE.",
+    "repro": ""
+  },
+  {
+    "finding_id": "IAM-BREADTH",
+    "verdict": "CONFIRMED",
+    "evidence": "aws/template.yaml:287-291 + 372-376 (ses:SendEmail Resource:'*'), 278-281 + 366-369 (S3CrudPolicy), 274-277 + 362-365 (DynamoDBCrudPolicy)",
+    "detail": "CONFIRMED: Both Lambdas grant ses:SendEmail on Resource:'*' (ApiFunction 287-291, AsyncWorker 372-376) with NO Condition (no ses:FromAddress / ses:FromDisplayName scoping) — either function can send mail as any SES-verified identity in the account. S3CrudPolicy (278-281, 366-369) is the SAM canned policy: bucket-wide Get/Put/Delete/List on the named buckets (object-level '*' under the bucket, no prefix restriction to S3_PREFIX='streams/'). DynamoDBCrudPolicy (274-277, 362-365) grants full table CRUD incl. Delete. No least-privilege scoping (no leading-keys condition, no resource ARNs narrower than table/bucket).",
+    "repro": ""
+  },
+  {
+    "finding_id": "CORS",
+    "verdict": "CONFIRMED",
+    "evidence": "aws/template.yaml:390-409 (HttpApi CORS); v2/app/__init__.py:18-28 (CORSMiddleware)",
+    "detail": "API-Gateway HttpApi: in prod, explicit AllowOrigins (materialsdatafacility.org, app.materialsdatafacility.org, 393-394) with AllowCredentials:true (409) — a valid, safe combination. In non-prod (dev/staging) AllowOrigins=['*'] (395) with AllowCredentials:false (409) — also safe (no credentialed wildcard). App-level CORSMiddleware mirrors this correctly: __init__.py line 20 sets _cors_allow_credentials = (_cors_raw != '*'), so when CORS_ALLOWED_ORIGINS='*' (set for non-prod, template 241-244) credentials are disabled, and only when explicit origins are configured are credentials enabled. NO insecure 'origin=* AND credentials=true' combination exists at either the gateway or app layer in any environment. Confirmed as correctly configured (no mismatch).",
+    "repro": ""
+  },
+  {
+    "finding_id": "SEC-HEADERS",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/app/middleware.py:88-174 (only header set is line 173)",
+    "detail": "CONFIRMED: The single app middleware (security_and_logging_middleware) sets exactly one response header: response.headers['X-Request-Id'] (line 173). NO HSTS (Strict-Transport-Security), NO X-Content-Type-Options, NO X-Frame-Options, NO Content-Security-Policy, NO Referrer-Policy, NO Permissions-Policy anywhere in v2/ application code (grep over v2/**/*.py finds these strings only inside v2/validation/live_probe.py, which is a test probe checking for their absence, not app code emitting them). Despite the middleware function being named 'security_...', it implements only request-size limiting + rate limiting + logging, no security response headers.",
+    "repro": "grep -rniE 'strict-transport|content-security|x-frame-options|x-content-type-options|referrer-policy|permissions-policy' v2/ --include='*.py'  -> only live_probe.py"
+  },
+  {
+    "finding_id": "RATE-LIMIT-INMEM",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/app/middleware.py:16-17, 72-85, 127-147",
+    "detail": "CONFIRMED: The rate limiter state is a module-level Python dict guarded by a threading.Lock (_RATE_LIMIT_STATE/_RATE_LOCK, lines 16-17). _check_rate_limit (72-85) counts requests in an in-process deque per (actor,path-prefix) key. This state lives in a single Lambda execution-environment's memory only; it is NOT shared across concurrent Lambda containers (ApiReservedConcurrency default 10 -> up to 10 independent buckets) and is reset on cold start. So the effective global limit is roughly limit x (number of warm containers), and a distributed/parallel client across containers is not bound by the per-path limits. There is no DynamoDB/Redis/ElastiCache backing store. The real coarse global cap is the API Gateway throttle (template 387-389, default 100 rps / 200 burst), not this middleware.",
+    "repro": ""
+  },
+  {
+    "finding_id": "SYNC-02",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/search_client.py:81-117 (mdf_block has no resource_type); v2/scripts/extract_mdf_production_datasets.py:73,189",
+    "detail": "CONFIRMED and CRITICAL. build_gmeta_entry constructs the mdf block with keys {source_id, source_name, version, organization, acl, ingest_date, domains[, external_*, dataset_doi, version_count, latest, root_version, previous_version, version, download_url]} — there is NO 'resource_type' key written anywhere (search_client.py 81-117). The v1 extraction tooling enumerates datasets with the advanced query mdf.resource_type:\"dataset\" (extract_mdf_production_datasets.py:73, repeated in the saved manifest line 189). Globus Search advanced queries on a missing field match nothing, so re-running the v1 extractor against a v2-native index returns 0 datasets. Verified by repro: build_gmeta_entry(v2 submission).content.mdf has no 'resource_type' (=> 0 hits). This breaks any v1-based re-sync / re-harvest of v2-native records and any external consumer filtering on mdf.resource_type.",
+    "repro": "repro_sync_parity.py SYNC-02 section: \"'resource_type' present in mdf block? False\" ; query mdf.resource_type:\"dataset\" -> 0 v2-native hits"
+  },
+  {
+    "finding_id": "INFRA-06",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/search_client.py:83",
+    "detail": "CONFIRMED. build_gmeta_entry derives mdf.source_name = source_id.rsplit('-',1)[0] if '-' in source_id else source_id (line 83). For v2-native ids of the form 'mdf-<uuid>', the LAST hyphen-delimited segment is stripped, so 'mdf-9f8a7b6c-1234-4def-9012-abcdef012345' -> source_name 'mdf-9f8a7b6c-1234-4def-9012' (NOT 'mdf' as the finding text guessed — the actual bug is it lops off only the final UUID group, producing a near-unique-but-mangled token, which is arguably worse for grouping because no two datasets share it). For v1-style collision-suffixed ids like 'oqmd_v13-1' -> 'oqmd_v13' (correct family) but 'mdf-collision-2' -> 'mdf-collision'. The rsplit-on-last-dash heuristic does not reconstruct the v1 source_name family/facet grouping for v2 uuid ids and silently truncates any '-N' collision suffix. Verdict CONFIRMED (mechanism), with the note that the computed value for a uuid id is the de-tailed uuid, not the literal 'mdf'.",
+    "repro": "repro_sync_parity.py INFRA-06: 'mdf-9f8a...012345' -> source_name 'mdf-9f8a7b6c-1234-4def-9012'; 'oqmd_v13-1' -> 'oqmd_v13'"
+  },
+  {
+    "finding_id": "MIGRATE-V1-LOSS",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/metadata.py:383-551 (migrate_v1_payload); v2/search_client.py:118-134 (build_gmeta_entry content)",
+    "detail": "CONFIRMED (lossy). migrate_v1_payload maps a defined subset and silently DROPS several DataCite/mdf fields. Fields DROPPED by migrate_v1_payload (verified by repro on a realistic v1 doc): dc.fundingReferences (no funding mapping), dc.geoLocations (no geo_locations mapping), dc.dates (Collected/Submitted/etc), dc.formats, dc.language, dc.identifier/DOI (not pulled here — recovered separately by convert_production_datasets.py:168-172 from dc.identifier, so DOI survives the full pipeline but NOT migrate_v1_payload alone), dc.descriptions[1..] (only descriptions[0] kept, types beyond the first abstract lost), and all internal mdf.* bookkeeping (scroll_id, mdf_id, ingest_date, version, resource_type). COLLAPSED: mdf.organizations[] -> single organization (first only, metadata.py:508-511); multiple descriptions -> one. Then build_gmeta_entry FURTHER reduces the search doc: dc.creators become [{name}] ONLY (search_client.py:123) — given_name/family_name/orcid/affiliations are discarded for the index (still present in DynamoDB dataset_mdata, but not searchable/facetable). The search doc dc block carries only {title, creators(name), publisher, year, description, subjects, license}; funding, related_works, methods, facility, geo_locations, formats, language, ml, fields_of_science never reach the index.",
+    "repro": "repro_sync_parity.py: DROPPED list (funding/geo/dates/formats/language/identifier/2nd-desc/mdf-internal) + creators collapsed to [{'name': 'Curie, Marie'}, {'name': 'Bohr, Niels'}] (orcid/affiliations lost in search doc)"
+  },
+  {
+    "finding_id": "IDENTITY-REMAP",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/scripts/convert_production_datasets.py:184-193, 304-314; v2/scripts/ingest_converted_datasets.py:139-151",
+    "detail": "CONFIRMED. convert_production_datasets.convert_entry sets the new record's source_id := mdf.source_name (line 186, 'Promote source_name to source_id'), preserving the old id as legacy_source_id := mdf.source_id (187). ingest_converted_datasets.build_submission_record hardcodes user_id = 'v1-migration' (line 144) for every migrated submission and status='published', schema_version='2'. The redirect map (old source_id -> new source_id) is OPTIONAL: only produced when --redirect-map is passed (convert script 304-314), is a static JSON file, and there is NO backend route/handler that consumes it to 301/302-redirect stale v1 source_id URLs (legacy_source_id is only stashed in extensions for traceability, ingest script 136-137). So old deep links/source_ids are not transparently resolved post-migration unless a redirect layer is added separately.",
+    "repro": "convert: record['source_id']=mdf.source_name (line 186); ingest: record['user_id']='v1-migration' (line 144)"
+  },
+  {
+    "finding_id": "ERROR-ENVELOPE-DRIFT",
+    "verdict": "CONFIRMED",
+    "evidence": "v2/app/__init__.py:36-39 (500 handler); v2/app/middleware.py:104-112,117-125 (413), 135-147 (429); v2/FRONTEND_API.md:63-71",
+    "detail": "CONFIRMED contract inconsistency. The global 500 exception handler returns {'detail': 'Internal server error', 'request_id': ...} with NO 'success' key (__init__.py:36-39). The middleware 413 (body too large) and 429 (rate limit) responses return {'success': false, 'error': ..., 'request_id': ...} (middleware.py:104-112, 117-125, 135-147) — a different shape ('error' vs 'detail', plus a 'success' field). Standard FastAPI HTTPException 4xx (401/403/404) emit yet a third shape: {'detail': ...} only. FRONTEND_API.md:63 asserts 'All responses include \"success\": true|false' but its own very next lines (65, 70) show error bodies as {'detail': ...} with no success. So three error envelopes coexist (success+error / detail+request_id / detail) and none of the 4xx/5xx error shapes actually satisfies the documented 'all responses include success' contract.",
+    "repro": "500 -> {'detail','request_id'} (__init__.py:38); 413/429 -> {'success','error','request_id'} (middleware.py:108,120,138); HTTPException -> {'detail'}"
+  }
+]

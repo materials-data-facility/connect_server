@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from v2.app.auth import ensure_stream_owner_or_curator, get_auth
+from v2.app.auth import ensure_stream_owner_or_curator, get_auth, get_optional_auth, is_curator
 from v2.app.deps import get_storage, get_stream_store_dep, get_submission_store
 from v2.app.models import AuthContext
 from v2.preview import generate_preview
@@ -103,13 +103,28 @@ async def preview_file(
 
 # ── Dataset-level preview (new) ────────────────────────────────────
 
-def _get_profile_and_record(source_id: str, store: SubmissionStore):
-    """Load the stored DatasetProfile + record for a source_id (published only).
+def _record_visible(auth: Optional[AuthContext], record: Optional[dict]) -> bool:
+    """Published AND (public, or caller is owner/curator). Gates anonymous access
+    to restricted-but-published dataset profiles, file lists, and sample data."""
+    if not record or record.get("status") != "published":
+        return False
+    if auth:
+        owner_id = record.get("user_id")
+        if owner_id and owner_id == auth.user_id:
+            return True
+        if is_curator(auth):
+            return True
+    from v2.metadata import dataset_is_public
+    return dataset_is_public(record)
+
+
+def _get_profile_and_record(source_id: str, store: SubmissionStore, auth: Optional[AuthContext] = None):
+    """Load the stored DatasetProfile + record for a source_id (published + visible).
 
     Returns (profile_dict, record_dict) or (None, None).
     """
     record = store.get(source_id)
-    if not record or record.get("status") != "published":
+    if not _record_visible(auth, record):
         return None, None
     profile = record.get("dataset_profile")
     if profile is None:
@@ -141,10 +156,11 @@ def _increment_view(source_id: str, record: Optional[dict], store: SubmissionSto
 @router.get("/preview/{source_id}")
 async def dataset_preview(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Return the stored DatasetProfile for a dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -155,10 +171,11 @@ async def dataset_preview(
 @router.get("/preview/{source_id}/files")
 async def dataset_files(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """List all files in the dataset with metadata."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -181,10 +198,11 @@ async def dataset_files(
 async def dataset_file_detail(
     source_id: str,
     path: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Get detailed profile of a specific file in the dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -200,10 +218,11 @@ async def dataset_file_detail(
 @router.get("/preview/{source_id}/sample")
 async def dataset_sample(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Quick sample data from the first tabular file in the dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 

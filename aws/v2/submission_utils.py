@@ -2,6 +2,21 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 
+def version_sort_key(value: str):
+    """Numeric-aware sort key for dotted version strings.
+
+    Ensures "2.0" < "10.0" (numeric) instead of lexicographic "10.0" < "2.0".
+    Non-numeric segments fall back to their string value.
+    """
+    parts = []
+    for part in str(value or "0").split("."):
+        if part.isdigit():
+            parts.append((0, int(part)))
+        else:
+            parts.append((1, part))
+    return parts
+
+
 def latest_version(items: List[Dict[str, Any]]) -> Optional[str]:
     if not items:
         return None
@@ -9,16 +24,7 @@ def latest_version(items: List[Dict[str, Any]]) -> Optional[str]:
     if not versions:
         return None
 
-    def sort_key(value: str):
-        parts = []
-        for part in value.split("."):
-            if part.isdigit():
-                parts.append(int(part))
-            else:
-                parts.append(part)
-        return parts
-
-    versions_sorted = sorted(versions, key=sort_key)
+    versions_sorted = sorted(versions, key=version_sort_key)
     return versions_sorted[-1]
 
 

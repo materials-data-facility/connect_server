@@ -1,0 +1,659 @@
+[
+  {
+    "feature_id": "SUB-01",
+    "area": "Submissions",
+    "name": "POST /submit",
+    "files": [
+      "aws/v2/app/routers/submissions.py:519-743",
+      "aws/v2/metadata.py:383-551",
+      "aws/v2/submission_utils.py:5-47",
+      "aws/v2/app/auth.py:194-219",
+      "aws/v2/store.py:107-115"
+    ],
+    "user_story": "As a researcher in the MDF submitters group, I want to POST dataset metadata (v1 or v2 format) so that a new versioned submission is created and queued for curation, transfer, and profiling.",
+    "expected_behavior": "Accepts a raw JSON metadata dict. Rejects empty/NaN bodies and bodies over MAX_SUBMIT_METADATA_BYTES (262144). Auto-detects v1 (dc/mdf/custom) payloads via _is_v1_payload and runs migrate_v1_payload. Validates through DatasetMetadata (Pydantic), then enforces title, >=1 non-empty author, data_sources presence (unless update_metadata_only/update), data_source URL format (_validate_data_sources), and size caps (MAX_SUBMIT_DATA_SOURCES=2000, MAX_SUBMIT_AUTHORS=1000). Resolves source_id from extensions/mdf block or generates one (generate_source_id -> mdf-<uuid4hex>). For non-update with a colliding source_id+existing versions, appends an 8-char uuid suffix. Computes version (1.0 for new; major/minor bump for update based on has_new_data). Populates version/latest/previous_version/root_version, inherits dataset_doi and data_sources from prior published versions, flips latest=false on prior version, persists record with status pending_curation, schema_version '2'. Emails curators. Dispatches profile jobs for stream:// sources and an inline transfer job for external Globus endpoints if a dependent transfer token is present.",
+    "inputs": {
+      "body": "raw JSON object (validated into DatasetMetadata); recognizes v1 dc/mdf/custom/projects shape and migrates it. Key fields: title, authors[], description, keywords, data_sources[], organization, test, update, extensions.mdf_source_id/mdf_source_name (or mdf.source_id for v1)",
+      "headers": "Authorization: Bearer <Globus token> (production); optional X-Groups-Token/X-MDF-Token for group resolution",
+      "auth_dep": "require_submitter (must be in REQUIRED_GROUP_MEMBERSHIP group in production)"
+    },
+    "outputs": {
+      "status": 200,
+      "body": "{success, source_id, version, versioned_source_id, organization, [profile_jobs], [transfer_job|transfer_warning]}"
+    },
+    "side_effects": [
+      "DynamoDB put_submission on mdf-submissions-<env> (PK source_id, SK version), status=pending_curation",
+      "DynamoDB upsert on prior version (latest=false flip) via _flip_latest_on_prior",
+      "SES email to CURATOR_EMAILS via notify_curators_new_submission",
+      "Async profile jobs (SQS or inline) for stream:// sources",
+      "Inline transfer job (InlineJobDispatcher) for external Globus endpoints — initiates Globus Transfer + ACL grant"
+    ],
+    "error_paths": [
+      "400 'POST data empty or not JSON' when metadata falsy",
+      "400 'Submission may not contain NaN or Infinity' when json.dumps(allow_nan=False) fails",
+      "413 'Submission metadata exceeds N bytes' when serialized > MAX_SUBMIT_METADATA_BYTES",
+      "400 'Invalid metadata: ...' on Pydantic validation error",
+      "400 'title is required and cannot be empty'",
+      "400 'At least one author is required' / 'Author at position N has an empty name'",
+      "413 'Too many data_sources/authors'",
+      "400 'Invalid data_sources: ...' on URL format errors",
+      "400 'You must provide data_sources before submission' when no data_sources and not update",
+      "400 'Missing source_id for update submission' when update=true and no source_id",
+      "400 'Update requested but no prior submission found' when update=true but no prior version",
+      "500 'Internal error while storing submission' on store.put_submission exception",
+      "403 'You must be a member of the MDF submitters group to submit datasets' (require_submitter)",
+      "401 from get_auth when no/invalid token"
+    ],
+    "security": {
+      "authN": "Globus userinfo introspection in get_auth (production); user_id=sub, email from userinfo",
+      "authZ": "require_submitter -> is_submitter checks REQUIRED_GROUP_MEMBERSHIP group membership",
+      "iam": "DynamoDBCrudPolicy(SubmissionsTable), sqs:SendMessage(AsyncJobsQueue), ses:SendEmail(*)",
+      "secrets": "GLOBUS_CLIENT_ID/SECRET (dependent token exchange for groups+transfer)",
+      "data_exposure": "user_email/user_id stored in record; transfer token extracted from dependent_token and passed to inline job only (not persisted to SQS/SQLite, see async_jobs.py:240-242)",
+      "missing_checks": "No server-side authorization that the caller owns the supplied extensions.mdf_source_id on an update — but update path requires existing_versions and increments versioning; ownership of prior record is NOT re-checked on update (see SUB-12 issue). Pydantic accepts arbitrary extensions dict (stored verbatim)."
+    },
+    "deployability": {
+      "env_vars": "MAX_SUBMIT_METADATA_BYTES, MAX_SUBMIT_DATA_SOURCES, MAX_SUBMIT_AUTHORS, DEFAULT_ORGANIZATION, ASYNC_DISPATCH_MODE, ASYNC_QUEUE_URL, GLOBUS_CLIENT_ID/SECRET, REQUIRED_GROUP_MEMBERSHIP, CURATOR_EMAILS/SES_FROM_EMAIL",
+      "iac": "ApiFunction, SubmissionsTable, AsyncJobsQueue, StreamFilesBucket",
+      "parity": "ASYNC_DISPATCH_MODE=sqs in prod/staging (IsDevAuth false), inline in dev. Transfer job always inline regardless.",
+      "idempotency": "put_submission uses ConditionExpression attribute_not_exists -> first version is conditional; collision-suffix logic prevents accidental overwrite. Re-submitting same body generates a new source_id (non-idempotent by design)."
+    },
+    "sync_parity": "Writes Dynamo record schema (source_id, version, versioned_source_id, dataset_mdata JSON, status, schema_version, dataset_doi). dataset_mdata is the flat v2 schema. v1-format payloads are migrated on ingest via migrate_v1_payload, matching the same function the sync scripts use (convert_production_datasets.py imports migrate_v1_payload). source_id generation differs from v1 (mdf-<uuid> vs v1 source_name); migration promotes source_name to source_id (ingest script). The search-doc is built later at publish (search_client.build_gmeta_entry) using dc/mdf/data blocks to match v1 index schema.",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "Update path does not re-verify the caller owns the prior submission. A submitter can set extensions.mdf_source_id to another user's source_id with update=true; if prior versions exist, the code proceeds to create a new version, flip latest on the prior (foreign) record, and inherit its dataset_doi/data_sources — effectively hijacking another user's dataset lineage. No ensure_submission_owner_or_curator call in submit().", "evidence": "aws/v2/app/routers/submissions.py:583-684"},
+      {"severity": "med", "dimension": "functionality", "desc": "increment_version assumes 'major.minor'. If a prior version is non-conformant (e.g. '1' or '1.2.3'), increment_version's split fails and silently resets to '1.0', which then collides with the existing 1.0 version and can violate the put_submission ConditionExpression (raising, then caught as generic 500).", "evidence": "aws/v2/submission_utils.py:25-34; aws/v2/app/routers/submissions.py:600,686-690"},
+      {"severity": "med", "dimension": "functionality", "desc": "Pydantic DatasetMetadata.model_dump() returns 'update' and 'test' as part of flat; these are then stored inside dataset_mdata (json.dumps(flat)) as well as the top-level record. 'update' persisted in metadata could affect later parse/re-validation flows and pollutes the search-doc-derived metadata.", "evidence": "aws/v2/metadata.py:157-159; aws/v2/app/routers/submissions.py:548,669"},
+      {"severity": "low", "dimension": "functionality", "desc": "_validate_data_sources lets absolute paths and unknown schemes pass through silently (comment 'Other formats pass through'), so malformed non-globus/non-http sources are accepted.", "evidence": "aws/v2/app/routers/submissions.py:76-77"},
+      {"severity": "low", "dimension": "sync", "desc": "publication_year defaults to current UTC year when absent, which diverges from the v1 record's original dc.publicationYear for re-submitted/edited datasets; migrate path preserves it but new submits without it will drift.", "evidence": "aws/v2/app/routers/submissions.py:560-562"}
+    ]
+  },
+  {
+    "feature_id": "SUB-02",
+    "area": "Submissions",
+    "name": "POST /submissions/{source_id}/metadata (edit metadata)",
+    "files": [
+      "aws/v2/app/routers/submissions.py:196-299",
+      "aws/v2/app/auth.py:166-173",
+      "aws/v2/submission_utils.py:37-43",
+      "aws/v2/metadata.py:105-186"
+    ],
+    "user_story": "As a submitter or curator, I want to edit a submission's metadata so that I can correct fields before publication or push a minor revision after publication.",
+    "expected_behavior": "Resolves the submission (by version or latest). Requires owner-or-curator. Only allowed when status in {pending_curation, rejected, published}. Builds updates from non-None MetadataEditRequest fields (whitelist of editable fields), deep_merges into existing dataset_mdata, re-validates via DatasetMetadata. For published status: auto-creates a minor version bump (new record, status=published, latest=true, previous_version/root_version set, prior flipped latest=false) and enqueues a publish job (mint_doi=False) to update DataCite + reindex. For pending_curation/rejected: updates in place.",
+    "inputs": {
+      "path": "source_id",
+      "body": "MetadataEditRequest {title, authors[], description, keywords[], license, funding[], related_works[], methods[], facility, fields_of_science[], domains[], ml, geo_locations[], tags[], extensions, version?}",
+      "auth_dep": "get_auth"
+    },
+    "outputs": {
+      "status": 200,
+      "body": "pending/rejected: {success, source_id, version, updated_fields}; published: {success, source_id, version, new_version, updated_fields}"
+    },
+    "side_effects": [
+      "DynamoDB upsert (in-place) for pending/rejected",
+      "DynamoDB put_submission for new minor version + upsert flip on prior (published path)",
+      "Publish job enqueue (mint_doi=False) -> DataCite metadata update + search re-ingest + email notify_submitter_approved"
+    ],
+    "error_paths": [
+      "404 'Submission not found' (resolve)",
+      "403 'You do not have permission for this submission'",
+      "400 \"Cannot edit metadata when status is '<status>'\"",
+      "400 'No metadata fields provided'",
+      "400 'Invalid metadata after edit: ...'"
+    ],
+    "security": {
+      "authN": "get_auth",
+      "authZ": "ensure_submission_owner_or_curator (owner via record.user_id == auth.user_id, or curator)",
+      "data_exposure": "none beyond updated_fields list",
+      "missing_checks": "Published-path new record copies user_id=auth.user_id (the editor), NOT the original owner — a curator editing a published dataset reassigns ownership of the new minor version to the curator (see issue)."
+    },
+    "deployability": {
+      "env_vars": "ASYNC_DISPATCH_MODE/ASYNC_QUEUE_URL (publish job), DataCite + Search creds for the downstream publish job",
+      "iac": "ApiFunction, SubmissionsTable, AsyncJobsQueue",
+      "idempotency": "Minor bump uses put_submission (conditional) so duplicate concurrent edits on the same published version would create the same new_version id and the second put fails (uncaught -> 500 inside the handler? actually put_submission exception not wrapped here)."
+    },
+    "sync_parity": "Re-validates the flat v2 schema; minor-bump record carries version/latest/previous_version/root_version that the search doc depends on. Consistent with v1 versioning contract (latest flag).",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "On the published minor-bump path, new_record['user_id'] is set to auth.user_id (the editor). If a curator edits another user's published dataset, the newly created latest version is owned by the curator, silently transferring ownership and dropping the original submitter from list_by_user / future ownership checks.", "evidence": "aws/v2/app/routers/submissions.py:251-252"},
+      {"severity": "med", "dimension": "functionality", "desc": "Published minor-bump uses store.put_submission (conditional attribute_not_exists). Concurrent edits or a retried request producing the same new_version raise a ConditionalCheckFailed that is NOT caught in this handler, surfacing as an unhandled 500.", "evidence": "aws/v2/app/routers/submissions.py:272; aws/v2/store.py:107-111"},
+      {"severity": "med", "dimension": "functionality", "desc": "deep_merge replaces list-valued fields wholesale (authors, keywords) but for dict fields recurses; editing 'extensions' deep-merges so keys can never be removed via this endpoint, and partial author edits are impossible (must send full list).", "evidence": "aws/v2/submission_utils.py:37-43; aws/v2/app/routers/submissions.py:226"},
+      {"severity": "low", "dimension": "functionality", "desc": "metadata edit allowed on 'published' creates a new version even when updates are a no-op semantically (e.g. resubmitting identical values), generating unnecessary DOI metadata updates and search re-ingests.", "evidence": "aws/v2/app/routers/submissions.py:237-278"}
+    ]
+  },
+  {
+    "feature_id": "SUB-03",
+    "area": "Submissions",
+    "name": "POST /submissions/{source_id}/withdraw",
+    "files": ["aws/v2/app/routers/submissions.py:302-360", "aws/v2/app/auth.py:166-173"],
+    "user_story": "As a submitter or curator, I want to withdraw a pending submission so that it leaves the curation queue and the prior published version (if any) remains the latest.",
+    "expected_behavior": "Resolves submission, requires owner-or-curator, requires status==pending_curation. Appends a 'withdrawn' curation_history entry, sets status=withdrawn, upserts. If the withdrawn record was latest=true with a previous_version, restores latest=true on the prior version.",
+    "inputs": {"path": "source_id", "body": "WithdrawRequest {reason?, version?}", "auth_dep": "get_auth"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status:'withdrawn'}"},
+    "side_effects": ["DynamoDB upsert (status=withdrawn + curation_history)", "DynamoDB upsert on prior version (latest=true restore)"],
+    "error_paths": [
+      "404 'Submission not found'",
+      "403 'You do not have permission for this submission'",
+      "400 \"Can only withdraw submissions with status 'pending_curation', current status is '<status>'\""
+    ],
+    "security": {
+      "authN": "get_auth",
+      "authZ": "ensure_submission_owner_or_curator",
+      "missing_checks": "none material; withdraw does not delete the search entry (correct, since pending isn't indexed)."
+    },
+    "deployability": {"env_vars": "store backend only", "iac": "SubmissionsTable", "idempotency": "Re-calling on a withdrawn record returns 400 (status check) — safe."},
+    "sync_parity": "Latest-flag restore on prior version keeps Dynamo + (eventual) search latest pointer consistent with v1 latest semantics. No search write here, so a withdrawn 'latest' minor bump leaves the search index pointing at the now-non-latest record until a reindex — see issue.",
+    "issues": [
+      {"severity": "med", "dimension": "sync", "desc": "Withdraw restores latest=true on the prior version in Dynamo but does NOT re-ingest the prior version into Globus Search. If a metadata-edit minor bump (published path) is later withdrawn, the search index still reflects the withdrawn version as latest (it was indexed at publish). Search latest pointer drifts from Dynamo.", "evidence": "aws/v2/app/routers/submissions.py:339-353"},
+      {"severity": "low", "dimension": "functionality", "desc": "withdraw only permitted from pending_curation, so a published minor-bump (status=published) cannot be withdrawn via this endpoint; only delete (curator-only) can remove it.", "evidence": "aws/v2/app/routers/submissions.py:312-314"}
+    ]
+  },
+  {
+    "feature_id": "SUB-04",
+    "area": "Submissions",
+    "name": "POST /submissions/{source_id}/resubmit",
+    "files": ["aws/v2/app/routers/submissions.py:363-405", "aws/v2/app/auth.py:166-173"],
+    "user_story": "As a submitter or curator, I want to resubmit a rejected submission so that it re-enters the curation queue after fixes.",
+    "expected_behavior": "Resolves submission, requires owner-or-curator, requires status==rejected. Appends 'resubmitted' curation_history entry, sets status=pending_curation, upserts.",
+    "inputs": {"path": "source_id", "body": "ResubmitRequest {notes?, version?}", "auth_dep": "get_auth"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status:'pending_curation'}"},
+    "side_effects": ["DynamoDB upsert (status + curation_history)"],
+    "error_paths": [
+      "404 'Submission not found'",
+      "403 'You do not have permission for this submission'",
+      "400 \"Can only resubmit submissions with status 'rejected', current status is '<status>'\""
+    ],
+    "security": {"authN": "get_auth", "authZ": "ensure_submission_owner_or_curator", "missing_checks": "none"},
+    "deployability": {"env_vars": "store backend", "iac": "SubmissionsTable", "idempotency": "status-gated, safe"},
+    "sync_parity": "No search write (pending is not indexed) — consistent. Does not re-send a curator notification email on resubmit (see issue).",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Resubmit does not call notify_curators_new_submission, so curators get no email when a previously-rejected dataset re-enters the queue; they must poll /curation/pending.", "evidence": "aws/v2/app/routers/submissions.py:395-398"}
+    ]
+  },
+  {
+    "feature_id": "SUB-05",
+    "area": "Submissions",
+    "name": "POST /submissions/{source_id}/delete",
+    "files": ["aws/v2/app/routers/submissions.py:408-453", "aws/v2/app/auth.py:186-191"],
+    "user_story": "As a curator, I want to soft-delete a submission so that it is removed from active workflows while keeping an audit trail.",
+    "expected_behavior": "Curator-only (require_curator). Resolves submission, rejects if already deleted, appends 'deleted' curation_history entry, sets status=deleted, deleted_at, deleted_by, upserts. Soft-delete only (record retained).",
+    "inputs": {"path": "source_id", "body": "DeleteSubmissionRequest {reason (required), version?}", "auth_dep": "require_curator"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status:'deleted'}"},
+    "side_effects": ["DynamoDB upsert (status=deleted)"],
+    "error_paths": ["404 'Submission not found'", "400 'Submission is already deleted'", "403 'You do not have curator permissions'", "422 if reason missing (Pydantic)"],
+    "security": {"authN": "get_auth via require_curator", "authZ": "require_curator", "missing_checks": "Soft delete leaves the Globus Search entry intact — a deleted (previously published) dataset remains searchable/resolvable until search delete_entry is called separately (see issue)."},
+    "deployability": {"env_vars": "CURATOR_GROUP_IDS/CURATOR_USER_IDS/ALLOW_ALL_CURATORS", "iac": "SubmissionsTable", "idempotency": "already-deleted -> 400, safe"},
+    "sync_parity": "Soft-delete diverges search index from Dynamo state: status=deleted in Dynamo but the dataset is still 'published' in the search index. v1 cutover/re-sync would re-expose it unless search delete is wired.",
+    "issues": [
+      {"severity": "high", "dimension": "sync", "desc": "Deleting a published submission sets status=deleted in Dynamo but never deletes the Globus Search entry (no search_client.delete_entry call). The dataset stays discoverable in /search and resolvable via /card,/detail (those gate on record.status=='published' which is now false, so card 404s — but the SEARCH index still returns it, producing dead links). Dynamo/search drift.", "evidence": "aws/v2/app/routers/submissions.py:438-443; aws/v2/search_client.py:225-235 (delete_entry exists but is not called)"},
+      {"severity": "low", "dimension": "functionality", "desc": "Delete acts on a single resolved version (latest or specified) — there is no cascade across all versions of a dataset, so other versions of a 'deleted' dataset remain published.", "evidence": "aws/v2/app/routers/submissions.py:415-443"}
+    ]
+  },
+  {
+    "feature_id": "SUB-06",
+    "area": "Submissions",
+    "name": "GET /versions/{source_id}",
+    "files": ["aws/v2/app/routers/submissions.py:746-807", "aws/v2/app/auth.py:127-158"],
+    "user_story": "As any user, I want to list the versions of a dataset so that I can navigate its history; non-owners see only published versions.",
+    "expected_behavior": "Lists all versions. If caller is not curator and not the owner of any version, filters to status==published. Sorts by version string, paginates (offset/limit), returns per-version summary (version, title, status, doi, timestamps), total_count, and dataset-level DOI (from any published version).",
+    "inputs": {"path": "source_id", "query": "limit(1-500,def 50), offset(>=0)", "auth_dep": "get_optional_auth"},
+    "outputs": {"status": 200, "body": "{success, source_id, versions[], total_count, dataset_doi} or {success:false, error} (200) when none"},
+    "side_effects": [],
+    "error_paths": ["Returns {success:false, error:'No versions found for this source_id'} with HTTP 200 (not 404)"],
+    "security": {
+      "authN": "get_optional_auth (None when unauthenticated)",
+      "authZ": "privileged = curator OR owner of any version; else published-only filter",
+      "data_exposure": "Per-version summary excludes user_email/user_id, so safe; but version-string sort is lexicographic (see issue).",
+      "missing_checks": "none material"
+    },
+    "deployability": {"env_vars": "store backend", "iac": "SubmissionsTable", "idempotency": "read-only"},
+    "sync_parity": "Reads version/status/dataset_doi fields that must match v1 versioning semantics. dataset_doi resolved from first published version.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "Versions are sorted with key x.get('version','0') as a string (lexicographic), so '10.0' sorts before '2.0' and '1.10' before '1.9'. Pagination and 'latest' presentation are wrong for datasets with >=10 minor/major versions. latest_version() elsewhere uses numeric sort, creating inconsistency.", "evidence": "aws/v2/app/routers/submissions.py:769; contrast aws/v2/submission_utils.py:12-22"},
+      {"severity": "low", "dimension": "functionality", "desc": "Returns HTTP 200 with success:false for not-found instead of 404, inconsistent with sibling endpoints (e.g. /stats returns 404). Contract inconsistency for clients.", "evidence": "aws/v2/app/routers/submissions.py:755-756,766-767"}
+    ]
+  },
+  {
+    "feature_id": "SUB-07",
+    "area": "Submissions",
+    "name": "GET /versions/{source_id}/diff",
+    "files": ["aws/v2/app/routers/submissions.py:456-516", "aws/v2/app/routers/submissions.py:184-194"],
+    "user_story": "As a user with access, I want to diff two versions of a dataset so that I can see exactly what metadata changed.",
+    "expected_behavior": "Loads from_version and to_version records (404 each if missing). Applies _can_access_submission to BOTH (owner, curator, or published). Computes added/removed/changed/unchanged across dataset_mdata keys, skipping system fields {version, latest, previous_version, root_version, update, test}.",
+    "inputs": {"path": "source_id", "query": "from (alias), to (alias) — both required", "auth_dep": "get_optional_auth"},
+    "outputs": {"status": 200, "body": "{success, source_id, from_version{}, to_version{}, diff{added,removed,changed,unchanged}}"},
+    "side_effects": [],
+    "error_paths": [
+      "404 'Version <X> not found' (either version)",
+      "404 'Submission not found' if access denied to either version (avoids leaking existence)"
+    ],
+    "security": {
+      "authN": "get_optional_auth",
+      "authZ": "_can_access_submission on both endpoints (owner/curator/published)",
+      "missing_checks": "Access check correctly applied to both records and returns generic 404 on denial. Note: a missing version returns a distinct 404 message BEFORE the access check, so an unauthenticated user can distinguish 'version exists but private' (after both load) vs 'version missing' — minor existence oracle.",
+      "data_exposure": "diff exposes full field values of both versions (legitimate for accessible records)"
+    },
+    "deployability": {"env_vars": "store backend", "iac": "SubmissionsTable", "idempotency": "read-only"},
+    "sync_parity": "Reads dataset_mdata flat schema; skip_fields align with the v2 versioning fields.",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "The 'Version X not found' 404 is returned before the access-control check, so the existence of a private (unpublished) version is distinguishable from a non-existent one by an unauthenticated caller (existence oracle / minor info leak).", "evidence": "aws/v2/app/routers/submissions.py:464-471"}
+    ]
+  },
+  {
+    "feature_id": "SUB-08",
+    "area": "Submissions",
+    "name": "GET /stats/{source_id}",
+    "files": ["aws/v2/app/routers/submissions.py:810-844"],
+    "user_story": "As any visitor, I want aggregate view/download stats for a published dataset so that I can gauge its popularity.",
+    "expected_behavior": "Aggregates view_count/download_count across all published versions, counts versions, computes first_published (min published_at|created_at) and last_updated (max updated_at). No auth required.",
+    "inputs": {"path": "source_id", "auth_dep": "none"},
+    "outputs": {"status": 200, "body": "{success, source_id, view_count, download_count, version_count, first_published, last_updated}"},
+    "side_effects": [],
+    "error_paths": ["404 'No published dataset found' when no published versions"],
+    "security": {"authN": "none (public)", "authZ": "implicitly only aggregates published versions", "data_exposure": "only counts/timestamps — safe", "missing_checks": "no rate-specific limit (covered by default rate limiter)"},
+    "deployability": {"env_vars": "store backend", "iac": "SubmissionsTable", "idempotency": "read-only"},
+    "sync_parity": "Reads view_count/download_count counters that are NOT part of the search doc nor v1 schema (v2-only). No re-sync implication, but counters are not in the SQLite dev schema's GSI and rely on ADD-based atomic increments in Dynamo.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "view_count/download_count are atomically incremented via DynamoDB ADD (no attribute_exists guard); fine, but counters are stored as Decimal in Dynamo and cast with int() here — Decimal('0') works, but unset returns absent -> handled by 'or 0'. Acceptable.", "evidence": "aws/v2/app/routers/submissions.py:827-828; aws/v2/store.py:271-277"}
+    ]
+  },
+  {
+    "feature_id": "SUB-09",
+    "area": "Submissions",
+    "name": "GET /status/{source_id}",
+    "files": ["aws/v2/app/routers/submissions.py:847-935", "aws/v2/app/routers/submissions.py:98-106,184-194", "aws/v2/transfer.py"],
+    "user_story": "As a submitter/curator, I want the full status of my submission (incl. live transfer progress) so that I can track ingest and curation.",
+    "expected_behavior": "Resolves by version or latest. Applies _can_access_submission (owner/curator/published) — returns {success:false} if denied. If transfer_status=='active', performs an inline Globus transfer status check (check_transfer_status per task), updates bytes/files, on completion cleans up ACLs and sets succeeded/failed, persisting via upsert. Returns _normalize_record(record) (full record) + transfer summary.",
+    "inputs": {"path": "source_id", "query": "version?", "auth_dep": "get_optional_auth"},
+    "outputs": {"status": 200, "body": "{success, submission:<full record>, [transfer{status,bytes,files,destination}]}"},
+    "side_effects": ["Globus Transfer API calls (check_transfer_status, cleanup_transfer_acl)", "DynamoDB upsert of refreshed transfer state"],
+    "error_paths": ["Returns {success:false, error:'Submission not found'} with HTTP 200 for missing or access-denied"],
+    "security": {
+      "authN": "get_optional_auth",
+      "authZ": "_can_access_submission",
+      "data_exposure": "Returns the FULL submission record via _normalize_record for any caller who can access it. For a PUBLISHED dataset, _can_access_submission returns True for an UNAUTHENTICATED caller, so the entire record — including user_id, user_email, curation_history, transfer fields, approved_by/rejected_by — is exposed publicly (see issue).",
+      "missing_checks": "No field projection / redaction before returning the raw record to public callers."
+    },
+    "deployability": {"env_vars": "store backend, Globus transfer creds", "iac": "SubmissionsTable", "idempotency": "inline transfer check mutates record; repeated calls re-check (extra Globus API calls / cost)"},
+    "sync_parity": "Returns raw Dynamo record shape; clients depending on this shape must track v2 field set. Transfer fields are v2-only (not in v1 or search doc).",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "For published datasets _can_access_submission returns True even for unauthenticated users, and the handler returns the entire raw record (user_id, user_email, curation_history with curator_ids/reasons, approved_by/rejected_by, internal transfer task ids and destination paths). This leaks submitter PII and internal curation notes to the public. /card and /detail use a sanitized card builder; /status does not.", "evidence": "aws/v2/app/routers/submissions.py:866-885,98-106; aws/v2/app/routers/submissions.py:184-194"},
+      {"severity": "med", "dimension": "functionality", "desc": "Inline transfer status check fires Globus Transfer API calls on every /status GET while transfer_status=='active', with no caching/debounce. A polling client (or scraper) on a public-but-active submission causes unbounded outbound Globus calls and Dynamo writes.", "evidence": "aws/v2/app/routers/submissions.py:870-871,888-934"},
+      {"severity": "low", "dimension": "functionality", "desc": "Returns HTTP 200 with success:false for not found/denied rather than 404/403, an existence/permission oracle that is also inconsistent with sibling endpoints.", "evidence": "aws/v2/app/routers/submissions.py:856-867"}
+    ]
+  },
+  {
+    "feature_id": "SUB-10",
+    "area": "Submissions",
+    "name": "GET /status (query-param variant)",
+    "files": ["aws/v2/app/routers/submissions.py:937-961"],
+    "user_story": "As a client, I want to query submission status via ?source_id&version so that I can fetch state without a path param.",
+    "expected_behavior": "Requires source_id query (400 if missing). Resolves by version or latest. Applies _can_access_submission. Returns _normalize_record(record). Unlike /status/{source_id}, does NOT perform the inline transfer check.",
+    "inputs": {"path": "none", "query": "source_id (required), version?", "auth_dep": "get_optional_auth"},
+    "outputs": {"status": 200, "body": "{success, submission} or {success:false,error}"},
+    "side_effects": [],
+    "error_paths": ["400 'Missing source_id'", "{success:false} (200) for not found / denied"],
+    "security": {
+      "authN": "get_optional_auth",
+      "authZ": "_can_access_submission",
+      "data_exposure": "Same full-record exposure as SUB-09 for published datasets (user_email/PII/curation_history leaked to public).",
+      "missing_checks": "No redaction"
+    },
+    "deployability": {"env_vars": "store backend", "iac": "SubmissionsTable", "idempotency": "read-only"},
+    "sync_parity": "Returns raw record shape; same v2 contract concerns as SUB-09.",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "Same PII/curation-history public exposure as SUB-09: returns the full raw record for any published dataset to unauthenticated callers (no field projection).", "evidence": "aws/v2/app/routers/submissions.py:958-961"}
+    ]
+  },
+  {
+    "feature_id": "SUB-11",
+    "area": "Submissions",
+    "name": "POST /status/update",
+    "files": ["aws/v2/app/routers/submissions.py:964-995", "aws/v2/app/auth.py:144-173", "aws/v2/store.py:116-123"],
+    "user_story": "As a curator, I want to set a submission's status directly so that I can correct workflow state out of band.",
+    "expected_behavior": "Curator-only (explicit is_curator check -> 403). Validates status in {pending_curation, approved, published, rejected}. Loads the exact (source_id, version) record (404 if missing), re-checks ensure_submission_owner_or_curator, then calls store.update_status (Dynamo update_item SET status+updated_at).",
+    "inputs": {"body": "StatusUpdateRequest {source_id, version, status}", "auth_dep": "get_auth"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status}"},
+    "side_effects": ["DynamoDB update_item (status, updated_at)"],
+    "error_paths": [
+      "403 'Only curators may update submission status'",
+      "400 'status must be one of: ...'",
+      "404 'Submission not found'"
+    ],
+    "security": {"authN": "get_auth", "authZ": "is_curator + ensure_submission_owner_or_curator (redundant given curator gate)", "missing_checks": "Setting status to 'published' here does NOT trigger DOI mint / search ingest / email — it only flips the Dynamo status, so a manual 'published' bypasses the publish pipeline and leaves the dataset un-indexed (see issue)."},
+    "deployability": {"env_vars": "curator env vars", "iac": "SubmissionsTable", "idempotency": "idempotent set"},
+    "sync_parity": "Direct status flip can desync Dynamo (status=published) from search index (not ingested). Breaks v1-parity expectation that published == indexed.",
+    "issues": [
+      {"severity": "high", "dimension": "sync", "desc": "A curator can set status='published' via /status/update, which only updates the Dynamo status field and bypasses _process_publish_submission (no DOI, no Globus Search ingest, no embedding, no approval email). Result: a 'published' dataset that is invisible to /search and has no DOI — Dynamo/search drift and a broken publish contract.", "evidence": "aws/v2/app/routers/submissions.py:973-988; aws/v2/store.py:116-123"},
+      {"severity": "low", "dimension": "functionality", "desc": "Allowed status 'approved' set here does not enqueue a publish job either, so 'approved' via this path never progresses to published (unlike the curation /approve flow which auto-publishes).", "evidence": "aws/v2/app/routers/submissions.py:973-988"}
+    ]
+  },
+  {
+    "feature_id": "SUB-12",
+    "area": "Submissions",
+    "name": "GET /submissions (list mine / org)",
+    "files": ["aws/v2/app/routers/submissions.py:998-1062", "aws/v2/store.py:125-147,468-496", "aws/v2/store.py:561-573"],
+    "user_story": "As a submitter, I want to list my submissions (with optional status filter/counts); as a curator, I want org-wide listing so that I can manage the queue.",
+    "expected_behavior": "Requires auth (user_id). Without organization: lists by user_id via user-submissions GSI (or sqlite). With organization: requires curator (403 otherwise), lists by org via org-submissions GSI. Parses dataset_mdata to dict. Optional include_counts fetches up to 1000 and computes status counts. Applies status filter (CSV), pagination (start_key opaque cursor).",
+    "inputs": {"query": "organization?, status? (CSV), include_counts?, limit?(def 50), start_key?", "auth_dep": "get_auth"},
+    "outputs": {"status": 200, "body": "{success, [counts], [total], submissions[], next_key}"},
+    "side_effects": [],
+    "error_paths": ["400 'Missing user identity'", "403 'Organization-wide listing requires curator permissions'", "401 from get_auth"],
+    "security": {
+      "authN": "get_auth",
+      "authZ": "Self-listing scoped to auth.user_id (GSI partition); org-listing curator-gated",
+      "data_exposure": "Returns full records (incl. user_email) but scoped to the caller's own user_id or to a curator — acceptable.",
+      "missing_checks": "Self-listing trusts the GSI partition key = auth.user_id, so no IDOR for self path. Org path correctly curator-gated."
+    },
+    "deployability": {
+      "env_vars": "GSI_USER_INDEX(def user-submissions), GSI_ORG_INDEX(def org-submissions) — NOT set in template.yaml, rely on hardcoded defaults matching the GSI IndexNames",
+      "iac": "SubmissionsTable GSIs user-submissions, org-submissions",
+      "parity": "include_counts path overfetches (max(limit,1000)) and recomputes; counts are over the fetched page only, so counts are approximate for users with >1000 submissions.",
+      "drift": "If template GSI IndexName were ever renamed without setting GSI_USER_INDEX/GSI_ORG_INDEX env, queries would fail — silent coupling to defaults."
+    },
+    "sync_parity": "Reads raw Dynamo records; org partition key must be present (v1-migration script omits organization when empty, so those records are absent from org-submissions GSI — consistent but means migrated datasets with blank org won't appear in org listings).",
+    "issues": [
+      {"severity": "med", "dimension": "deployability", "desc": "GSI_USER_INDEX/GSI_ORG_INDEX (and GSI_STATUS_INDEX) are read from env with hardcoded defaults but are NOT defined in template.yaml. The code silently depends on the literal IndexName strings ('user-submissions','org-submissions','status-submissions') matching the template. A rename in one place without the other breaks listing/curation with a runtime fallback to expensive table scans (status) or a hard error (user/org).", "evidence": "aws/v2/store.py:127,139,155; aws/v2/config.py:13-14; template.yaml:504-527 (no env override set)"},
+      {"severity": "low", "dimension": "functionality", "desc": "include_counts computes counts over only the first 1000 fetched items and reports response['total']=len(items); for users/orgs with >1000 submissions the counts and total silently undercount.", "evidence": "aws/v2/app/routers/submissions.py:1023,1043-1049"},
+      {"severity": "low", "dimension": "functionality", "desc": "When include_counts is set, pagination is disabled (parsed_key=None, last_key=None) so clients cannot page a counted listing; this is undocumented in the response.", "evidence": "aws/v2/app/routers/submissions.py:1025,1056-1058"}
+    ]
+  },
+  {
+    "feature_id": "CUR-01",
+    "area": "Curation",
+    "name": "GET /curation/pending",
+    "files": ["aws/v2/app/routers/curation.py:43-92", "aws/v2/store.py:149-201,498-507", "aws/v2/metadata.py:626-661"],
+    "user_story": "As a curator, I want the list of pending submissions (with title/authors/data sources) so that I can triage the review queue.",
+    "expected_behavior": "Curator-only. Lists up to 1000 pending_curation submissions (status-submissions GSI, fallback scan). Optional organization filter (in-memory). Parses each via parse_metadata to surface title/authors/description/data_sources. Sorts by submitted_at ascending, paginates (offset/limit capped at 200).",
+    "inputs": {"query": "limit?(def 50,max 200), offset?, organization?", "auth_dep": "require_curator"},
+    "outputs": {"status": 200, "body": "{success, pending_count, submissions[], limit, offset}"},
+    "side_effects": [],
+    "error_paths": ["403 'You do not have curator permissions'"],
+    "security": {
+      "authN": "get_auth via require_curator",
+      "authZ": "require_curator",
+      "data_exposure": "Exposes submitter user_id+user_email to curators (expected for curation)",
+      "missing_checks": "none material"
+    },
+    "deployability": {
+      "env_vars": "GSI_STATUS_INDEX(def status-submissions) — not in template (relies on default); curator env vars",
+      "iac": "SubmissionsTable status-submissions GSI",
+      "parity": "list_by_status capped at 1000; organization filter applied AFTER the 1000-row fetch, so a large queue could omit some orgs' items beyond the cap."
+    },
+    "sync_parity": "Reads dataset_mdata via parse_metadata (handles v1+v2). file_count/total_bytes are v2-only fields (default 0), not in v1.",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Organization filtering is performed in Python after fetching only the first 1000 pending items; with a large global queue, items for a specific org beyond the 1000-row window are invisible. pending_count also reflects post-filter count, not the true total.", "evidence": "aws/v2/app/routers/curation.py:54-58"},
+      {"severity": "low", "dimension": "deployability", "desc": "Depends on status-submissions GSI; if absent, list_by_status falls back to a full table Scan with FilterExpression (expensive, and the fallback is silent except for the swallowed exception).", "evidence": "aws/v2/store.py:149-201"}
+    ]
+  },
+  {
+    "feature_id": "CUR-02",
+    "area": "Curation",
+    "name": "GET /curation/{source_id}",
+    "files": ["aws/v2/app/routers/curation.py:95-113", "aws/v2/app/routers/curation.py:22-40"],
+    "user_story": "As a curator, I want full submission detail + curation history so that I can make an informed approve/reject decision.",
+    "expected_behavior": "Curator-only. Resolves submission by version or latest. Returns the raw submission, curation_history, current_status, and can_approve/can_reject booleans (true only when status==pending_curation).",
+    "inputs": {"path": "source_id", "query": "version?", "auth_dep": "require_curator"},
+    "outputs": {"status": 200, "body": "{success, submission:<raw>, curation_history, current_status, can_approve, can_reject}"},
+    "side_effects": [],
+    "error_paths": ["404 'Submission not found'", "403 'You do not have curator permissions'"],
+    "security": {"authN": "require_curator", "authZ": "require_curator", "data_exposure": "Full raw record to curators only — acceptable", "missing_checks": "none"},
+    "deployability": {"env_vars": "curator env vars", "iac": "SubmissionsTable", "idempotency": "read-only"},
+    "sync_parity": "Reads raw Dynamo record; no schema write.",
+    "issues": []
+  },
+  {
+    "feature_id": "CUR-03",
+    "area": "Curation",
+    "name": "POST /curation/{source_id}/approve",
+    "files": [
+      "aws/v2/app/routers/curation.py:116-198",
+      "aws/v2/async_jobs.py:221-223,479-560",
+      "aws/v2/curation.py:116-214",
+      "aws/v2/datacite.py:62-269",
+      "aws/v2/search_client.py:62-165"
+    ],
+    "user_story": "As a curator, I want to approve a pending submission (optionally minting a DOI and applying metadata fixes) so that it is published, DOI-registered, indexed, and the submitter is notified.",
+    "expected_behavior": "Curator-only. Requires status==pending_curation (400 otherwise). Records 'approved' curation_history with curator_id+timestamp. If metadata_updates provided, deep_merges into dataset_mdata. Sets status=approved, approved_at/by, upserts. Then ALWAYS enqueues a publish job (mint_doi flag controls only the DOI step). In inline mode, refreshes record to reflect publish result (status->published, doi). Publish pipeline: _mint_doi_for_submission (DataCite mint/update with version-aware logic), search ingest (build_gmeta_entry), prior-version reindex with latest=false, status=published, approval email, embedding job.",
+    "inputs": {"path": "source_id", "body": "CurationApproveRequest {notes?, mint_doi?(def true), metadata_updates?, version?}", "auth_dep": "require_curator"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status, approved_by, approved_at, publish_job, [doi]}"},
+    "side_effects": [
+      "DynamoDB upsert (approved), then upsert (published) in publish job",
+      "DataCite DOI mint/update (real client if creds set, else Mock)",
+      "Globus Search ingest (real or Mock per USE_MOCK_SEARCH) + prior-version reindex",
+      "SES approval email to submitter",
+      "Embedding job (OpenAI) enqueue"
+    ],
+    "error_paths": [
+      "404 'Submission not found'",
+      "403 'You do not have curator permissions'",
+      "400 'Submission is not pending curation (status: <status>)'"
+    ],
+    "security": {
+      "authN": "require_curator",
+      "authZ": "require_curator",
+      "secrets": "DATACITE_USERNAME/PASSWORD, GLOBUS_CLIENT_ID/SECRET (search ingest token), OPENAI_API_KEY",
+      "missing_checks": "Approve writes status=approved before the publish job runs; in SQS mode the API returns while publish runs async, so a failed DOI mint or search ingest leaves the record stuck at 'approved' (publish job sets it to 'published' even if DOI/search failed — see issues)."
+    },
+    "deployability": {
+      "env_vars": "USE_MOCK_DATACITE, DATACITE_*, USE_MOCK_SEARCH, SEARCH_INDEX_UUID/TEST_SEARCH_INDEX_UUID, ASYNC_DISPATCH_MODE, OPENAI_API_KEY, SES_FROM_EMAIL",
+      "iac": "AsyncJobsQueue + AsyncWorkerFunction (SQS path), SubmissionsTable",
+      "parity": "Prod uses SQS (async) so approve returns before publish completes; dev uses inline. mint_doi default True in API model but template defaults DataCite to test API + prefix 10.23677; USE_MOCK_DATACITE auto=false in prod.",
+      "idempotency": "Re-approving is blocked by the pending_curation status gate. But re-running the publish job (SQS retry, maxReceiveCount=3) re-mints/updates DOI and re-ingests — mint_doi path generates a deterministic suffix so DataCite update path is idempotent; version DOI suffix appends -v<version> each call (idempotent on same version)."
+    },
+    "sync_parity": "Search ingest builds the v1-compatible dc/mdf/data GMetaEntry (search_client.build_gmeta_entry) — this is the schema that MUST match the v1 Globus Search index (1a57bbe5...). DOI suffix derived from source_id via _generate_suffix. Critical sync surface.",
+    "issues": [
+      {"severity": "high", "dimension": "functionality", "desc": "_process_publish_submission sets status='published' unconditionally at the end even if DOI minting failed AND/OR search ingest failed (both failures are only logged as warnings). A dataset can be marked 'published' in Dynamo while absent from the search index and/or without a DOI, silently breaking discoverability and the published==indexed contract.", "evidence": "aws/v2/async_jobs.py:512-541 (failures warn-only) ,536-541 (unconditional published)"},
+      {"severity": "med", "dimension": "functionality", "desc": "In SQS mode the approve handler returns 200 with status 'approved' (not 'published') and a queued publish_job; the result['doi'] is only populated in inline mode. Clients cannot tell from the response whether publishing/DOI succeeded, and there is no status callback. Combined with the unconditional 'published' flip, partial failures are invisible.", "evidence": "aws/v2/app/routers/curation.py:185-197"},
+      {"severity": "med", "dimension": "sync", "desc": "build_gmeta_entry derives mdf.source_name as source_id.rsplit('-',1)[0]. For v2 generated source_ids ('mdf-<uuid>') this yields 'mdf', and for collision-suffixed ids it strips the suffix — both diverge from the v1 contract where source_name is a meaningful dataset name. This pollutes the v1-compatible search doc's source_name field used for version grouping/faceting.", "evidence": "aws/v2/search_client.py:83"},
+      {"severity": "med", "dimension": "functionality", "desc": "metadata_updates deep_merge in approve stores dataset_mdata as a Python dict on the record (submission['dataset_mdata']=existing_metadata), then upsert_submission(Dynamo) stores it as a native Map while put paths elsewhere store it as a JSON string. This dual representation (dict vs JSON string) of dataset_mdata across code paths invites parse inconsistencies (every reader must handle both).", "evidence": "aws/v2/app/routers/curation.py:152-161; contrast aws/v2/app/routers/submissions.py:669 (json.dumps)"},
+      {"severity": "low", "dimension": "functionality", "desc": "Approve uses datetime.now(timezone.utc).isoformat() WITHOUT the 'Z'/+00:00 normalization used elsewhere (submissions.py uses .replace('+00:00','Z')), producing inconsistent timestamp formats ('+00:00' here vs 'Z' in submit/edit) across the same record's fields.", "evidence": "aws/v2/app/routers/curation.py:133 vs aws/v2/app/routers/submissions.py:234"}
+    ]
+  },
+  {
+    "feature_id": "CUR-04",
+    "area": "Curation",
+    "name": "POST /curation/{source_id}/reject",
+    "files": ["aws/v2/app/routers/curation.py:201-266", "aws/v2/email_utils.py:154-204"],
+    "user_story": "As a curator, I want to reject a pending submission with a required reason (and optional suggestions) so that the submitter is notified and can revise/resubmit.",
+    "expected_behavior": "Curator-only. Requires non-empty reason (400) and status==pending_curation (400). Appends 'rejected' curation_history with curator_id/reason/suggestions, sets status=rejected, rejected_at/by, rejection_reason, upserts. Sends rejection email to submitter (notify_submitter_rejected). Errors in email are swallowed.",
+    "inputs": {"path": "source_id", "body": "CurationRejectRequest {reason (required), suggestions?, version?}", "auth_dep": "require_curator"},
+    "outputs": {"status": 200, "body": "{success, source_id, version, status:'rejected', rejected_by, rejected_at, reason}"},
+    "side_effects": ["DynamoDB upsert (rejected)", "SES rejection email to submitter"],
+    "error_paths": [
+      "400 'reason is required for rejection'",
+      "404 'Submission not found'",
+      "403 'You do not have curator permissions'",
+      "400 'Submission is not pending curation (status: <status>)'"
+    ],
+    "security": {"authN": "require_curator", "authZ": "require_curator", "data_exposure": "Rejection reason/suggestions emailed to submitter (HTML-escaped via _escape)", "missing_checks": "none"},
+    "deployability": {"env_vars": "SES_FROM_EMAIL, CURATION/PORTAL_URL, curator env vars", "iac": "SubmissionsTable, ses:SendEmail", "idempotency": "status-gated, safe"},
+    "sync_parity": "No search write (rejected isn't indexed). Timestamp uses isoformat() without 'Z' normalization (same inconsistency as approve).",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Timestamps use datetime.now(timezone.utc).isoformat() (yields '+00:00'), inconsistent with the 'Z'-normalized timestamps written by submit/withdraw/delete on the same record.", "evidence": "aws/v2/app/routers/curation.py:222"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-01",
+    "area": "Submissions",
+    "name": "AuthN/AuthZ resolution (get_auth, is_curator, is_submitter)",
+    "files": ["aws/v2/app/auth.py:1-219", "aws/v2/curation.py:38-59"],
+    "user_story": "As the platform, I want to resolve a Globus identity and its curator/submitter roles so that endpoints can enforce authorization.",
+    "expected_behavior": "AUTH_MODE=production validates a Bearer token via Globus userinfo (any valid Globus token, not introspect), sets user_id=sub. Resolves group memberships via X-Groups-Token or dependent-token exchange (needs GLOBUS_CLIENT_ID/SECRET). is_curator: user in CURATOR_USER_IDS, or group in CURATOR_GROUP_IDS, or ALLOW_ALL_CURATORS truthy. is_submitter: dev->true; else REQUIRED_GROUP_MEMBERSHIP empty->true, else must be in that group. AUTH_MODE=dev only honored when LOCAL_DEV_AUTH/AWS_SAM_LOCAL set, else forced to production.",
+    "inputs": {"headers": "Authorization, X-Groups-Token, X-MDF-Token, X-User-* (dev only)"},
+    "outputs": {"context": "AuthContext{user_id,name,user_email,identities,group_info,dependent_token}"},
+    "side_effects": ["Globus userinfo call", "Globus dependent-token exchange + GroupsClient.get_my_groups (when configured)"],
+    "error_paths": [
+      "401 'Missing Authorization header' / 'Missing Bearer token'",
+      "401 'Invalid or expired token' (AuthAPIError or no sub)",
+      "401 'Authentication failed: <e>' (any other exception)"
+    ],
+    "security": {
+      "authN": "Globus userinfo (works for any-issuer Globus token)",
+      "authZ": "group/user-id based curator/submitter checks",
+      "secrets": "GLOBUS_CLIENT_ID/SECRET for dependent token exchange",
+      "missing_checks": "Token is validated by userinfo (so it must be a valid Globus access token) but the resource server / audience is NOT checked — any valid Globus token for ANY app the user authorized passes authN. If groups token exchange fails (no creds, or scope missing), group_info is empty and is_curator/is_submitter silently deny (could lock out legitimate curators if the dependent scope is misconfigured)."
+    },
+    "deployability": {
+      "env_vars": "AUTH_MODE, GLOBUS_CLIENT_ID/SECRET, CURATOR_USER_IDS, CURATOR_GROUP_IDS, ALLOW_ALL_CURATORS, REQUIRED_GROUP_MEMBERSHIP, LOCAL_DEV_AUTH",
+      "iac": "GlobusClientId/Secret SAM params; CuratorGroupIds default 3ce2c53e-...; RequiredGroupMembership default cc192dca-...; ALLOW_ALL_CURATORS auto=false in prod",
+      "parity": "Dev auth disabled in deployed (non-dev) stacks via _allow_local_dev_auth guard. CURATOR_USER_IDS is referenced in code but NOT set anywhere in template.yaml (only CURATOR_GROUP_IDS is) — curator-by-user-id is effectively unconfigurable in deployed stacks.",
+      "drift": "curation.py module re-reads CURATOR_USER_IDS/CURATOR_GROUP_IDS at IMPORT time into module globals, while app/auth.py reads them per-call from os.environ. The module-level snapshot can go stale relative to runtime env, and _is_curator in curation.py is a parallel, divergent implementation of is_curator."
+    },
+    "sync_parity": "Identity (Globus sub) stored as user_id/owner — must remain stable for ownership checks across v1->v2 (v1-migration sets user_id='v1-migration', so migrated datasets have a synthetic non-Globus owner and are owned by no real user).",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "get_auth validates the token via Globus userinfo but never checks the token's audience/resource server, so a token the user issued for any unrelated Globus app is accepted as authentication for this API (token-substitution / confused-deputy surface).", "evidence": "aws/v2/app/auth.py:62-77"},
+      {"severity": "med", "dimension": "deployability", "desc": "curation.py reads CURATOR_USER_IDS/CURATOR_GROUP_IDS into module-level globals at import time (lines 29-35) and defines a second _is_curator; app/auth.py reads them per request. Two sources of truth for curator membership that can diverge; the module-level snapshot is fixed at cold start.", "evidence": "aws/v2/curation.py:29-59; aws/v2/app/auth.py:144-158"},
+      {"severity": "low", "dimension": "deployability", "desc": "CURATOR_USER_IDS is honored by code but is not surfaced as a SAM parameter / Lambda env var in template.yaml, so the user-id-based curator path cannot be configured on deployed stacks (only group-based works).", "evidence": "aws/v2/app/auth.py:145; template.yaml:130-137 (only CuratorGroupIds param)"},
+      {"severity": "low", "dimension": "functionality", "desc": "v1-migration records set user_id='v1-migration'; ensure_submission_owner_or_curator will never match a real user, so only curators can mutate migrated datasets (acceptable, but no real submitter can claim/edit their migrated dataset).", "evidence": "aws/v2/scripts/ingest_converted_datasets.py:143; aws/v2/app/auth.py:166-173"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-02",
+    "area": "Submissions",
+    "name": "Publish pipeline / job dispatch (async_jobs, async_worker, SQS vs inline)",
+    "files": [
+      "aws/v2/async_jobs.py:31-269,272-560,699-734",
+      "aws/v2/async_worker.py:1-43",
+      "aws/v2/curation.py:116-214",
+      "template.yaml:293-376,450-465"
+    ],
+    "user_story": "As the platform, I want to run publish/transfer/profile/embedding work either inline (dev) or via SQS (prod) so that approval returns quickly and heavy work runs in the worker Lambda.",
+    "expected_behavior": "get_job_dispatcher selects Inline (ASYNC_DISPATCH_MODE=inline, dev), SQS (prod), or Sqlite (local worker). Publish job runs _process_publish_submission (DOI + search + status + email + embedding). Transfer jobs ALWAYS run inline (token must not be persisted). SQS worker handle_sqs_event processes each record, returning batchItemFailures for partial-batch retries (DLQ after maxReceiveCount=3). EventBridge schedule (rate 6h) triggers cleanup_transfers.",
+    "inputs": {"job_payloads": "publish{source_id,version,mint_doi}, transfer{...,user_transfer_token}, profile, embedding, cleanup"},
+    "outputs": {"dispatch": "{mode, queued, job_type, message_id|job_id|result}"},
+    "side_effects": ["SQS SendMessage / inline process_job", "DLQ on repeated failure"],
+    "error_paths": [
+      "ValueError 'ASYNC_QUEUE_URL is required for ASYNC_DISPATCH_MODE=sqs' (misconfig)",
+      "Unknown job type -> ValueError",
+      "SQS batchItemFailures -> retry then DLQ"
+    ],
+    "security": {
+      "authN": "n/a (internal)",
+      "authZ": "n/a",
+      "secrets": "user_transfer_token deliberately kept out of SQS/SQLite payloads (inline only)",
+      "missing_checks": "handle_sqs_event indexes body['job_type']/body['payload'] without validation; a malformed message raises KeyError, caught -> reported as batchItemFailure (retried 3x then DLQ). OK."
+    },
+    "deployability": {
+      "env_vars": "ASYNC_DISPATCH_MODE, ASYNC_QUEUE_URL, plus all DOI/search/email/embedding env on BOTH ApiFunction and AsyncWorkerFunction",
+      "iac": "AsyncJobsQueue(VisibilityTimeout 180, retention param), AsyncJobsDLQ, AsyncWorkerFunction(SQS event, BatchSize, schedule), reserved concurrency",
+      "parity": "ApiFunction ASYNC_DISPATCH_MODE = sqs in prod/staging, inline in dev. AsyncWorkerFunction always inline. Both functions carry full env (DataCite/Search/SES/OpenAI) so parity is maintained, but any env added to one must be added to the other (manual drift risk).",
+      "idempotency": "Publish job is re-runnable (mint idempotent-ish, search re-ingest idempotent). SQS retries (maxReceiveCount=3) can double-send approval emails (no dedup) and re-enqueue embedding jobs."
+    },
+    "sync_parity": "Publish job is the sole writer of the v1-compatible Globus Search doc (build_gmeta_entry). SQS visibility timeout (180s) vs worker timeout (param def 120s) — worker must finish within visibility window or message redelivers, risking duplicate publish/search ingest.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "SQS retries (maxReceiveCount=3) re-run _process_publish_submission with no idempotency guard, so a transient failure mid-pipeline can send the submitter multiple 'published' emails and enqueue multiple embedding jobs for the same version. No dedup key.", "evidence": "aws/v2/async_jobs.py:543-555; template.yaml:462-464"},
+      {"severity": "low", "dimension": "deployability", "desc": "ApiFunction and AsyncWorkerFunction duplicate ~25 env vars; adding a new config to one but not the other (e.g. a new DOI flag) silently changes behavior between the synchronous (inline dev) and async (prod worker) paths. No shared env construct.", "evidence": "template.yaml:206-259 vs 302-347"},
+      {"severity": "low", "dimension": "deployability", "desc": "AsyncJobsQueue VisibilityTimeout is fixed at 180s but AsyncWorkerTimeoutSeconds is a parameter (default 120, max 900). If raised above 180, a slow job's message becomes visible and is redelivered before the first invocation finishes -> duplicate processing. The two are not linked.", "evidence": "template.yaml:70-75,460"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-03",
+    "area": "Submissions",
+    "name": "Persistence abstraction (store.py: Sqlite vs Dynamo) + config",
+    "files": ["aws/v2/store.py:11-573", "aws/v2/config.py:1-16", "template.yaml:209,305"],
+    "user_story": "As the platform, I want a pluggable submission store so that dev runs on SQLite and prod runs on DynamoDB with the same interface.",
+    "expected_behavior": "get_store() returns SqliteSubmissionStore when STORE_BACKEND=sqlite, else DynamoSubmissionStore. Dynamo uses PK source_id + SK version, GSIs user/org/status. put_submission is conditional (no-overwrite); upsert_submission is unconditional. SQLite mirrors columns + lazy ALTER migrations; JSON fields auto-(de)serialized in _row_to_dict.",
+    "inputs": {"env": "STORE_BACKEND, DYNAMO_SUBMISSIONS_TABLE, DYNAMO_ENDPOINT_URL, AWS_REGION, SQLITE_PATH, GSI_* "},
+    "outputs": {"interface": "get/get_submission/list_versions/put/upsert/update_status/list_by_*/increment_counter/update_embedding"},
+    "side_effects": ["DynamoDB or SQLite writes"],
+    "error_paths": ["ConditionalCheckFailedException on put_submission when (source_id,version) exists", "GSI-missing -> scan fallback (status only)"],
+    "security": {
+      "authN": "n/a",
+      "authZ": "store has no per-caller authz — callers must enforce (routers do)",
+      "missing_checks": "increment_counter validates counter name on the base-class guard but the Dynamo/Sqlite overrides do NOT re-check _ALLOWED_COUNTERS (base method's ValueError guard is bypassed by the subclass overrides) — counter name is interpolated into the SQL/UpdateExpression. Callers only pass literals today, so not currently exploitable, but the guard is ineffective."
+    },
+    "deployability": {
+      "env_vars": "STORE_BACKEND=dynamo on both Lambdas; SQLite transfer fields not persisted (scan_by_transfer_status returns [])",
+      "iac": "SubmissionsTable PAY_PER_REQUEST, Retain on delete/replace; 3 GSIs",
+      "parity": "SQLite schema lacks several Dynamo fields (no organization GSI semantics, no transfer_* columns, no versioned_source_id read in some paths), so dev behavior diverges from prod for transfer/org-scan features.",
+      "drift": "GSI_USER_INDEX/GSI_ORG_INDEX/GSI_STATUS_INDEX default strings must equal template IndexNames (coupling, see SUB-12)."
+    },
+    "sync_parity": "Dynamo record schema IS the v2 contract that must stay v1-compatible for re-sync. dataset_mdata stored as JSON string (put paths) OR native Map (some upsert paths) — inconsistent representation across writers (see CUR-03 issue). v1-migration ingest writes the same record shape.",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "dataset_mdata is persisted inconsistently: submit/edit/flip paths json.dumps() it (stored as String in Dynamo), while curation approve's metadata_updates path stores it as a native dict (Dynamo Map). Readers must defensively handle both (str and dict), and any reader that assumes one form will break. This representational drift is a latent correctness/sync hazard.", "evidence": "aws/v2/app/routers/submissions.py:669 (str) vs aws/v2/app/routers/curation.py:161 (dict); readers at submissions.py:166-181"},
+      {"severity": "low", "dimension": "security", "desc": "increment_counter SQL/UpdateExpression interpolates the counter name; the _ALLOWED_COUNTERS allow-list guard lives only on the abstract base method and is overridden (not called) by both concrete stores, so the validation is dead code. Safe today (literal callers) but fragile.", "evidence": "aws/v2/store.py:78-84 (guard) vs 271-277,545-551 (overrides without guard)"},
+      {"severity": "low", "dimension": "deployability", "desc": "SqliteSubmissionStore does not persist transfer_* fields and scan_by_transfer_status returns []; transfer/cleanup features are silently no-ops in any SQLite-backed (dev/local) environment, so they cannot be tested without Dynamo.", "evidence": "aws/v2/store.py:509-512"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-04",
+    "area": "Submissions",
+    "name": "DataCite DOI minting (datacite.py, doi_utils.py, curation._mint_doi_for_submission)",
+    "files": ["aws/v2/datacite.py:1-375", "aws/v2/curation.py:116-214", "aws/v2/doi_utils.py:1-39", "aws/v2/metadata.py:236-376"],
+    "user_story": "As the platform, I want to mint/version DataCite DOIs for published datasets so that they are citable with correct concept/version relations.",
+    "expected_behavior": "get_datacite_client returns MockDataCiteClient when no creds or USE_MOCK_DATACITE=true, else real DataCiteClient (test/prod API per DATACITE_TEST_MODE / DATACITE_API_URL). _mint_doi_for_submission: first version mints dataset DOI (doi==dataset_doi); subsequent + mint_doi mints a -v<version> DOI with IsVersionOf and updates the concept DOI with HasVersion; subsequent + !mint_doi only updates concept DOI metadata. Suffix derived from source_id via _generate_suffix (lowercased, non-DOI chars -> '-'). DataCite payload built from to_datacite (kernel-4).",
+    "inputs": {"args": "submission record, all_versions, mint_doi flag"},
+    "outputs": {"result": "{success, doi, dataset_doi, [updated|metadata_updated], [error]}"},
+    "side_effects": ["DataCite POST/PUT /dois (real) or in-memory (mock)"],
+    "error_paths": ["{success:false, error} on any exception or non-2xx (response.text surfaced)", "Mock used when creds absent"],
+    "security": {
+      "authN": "DataCite basic auth (username/password)",
+      "secrets": "DATACITE_USERNAME/PASSWORD (NoEcho param)",
+      "missing_checks": "If credentials are accidentally unset in prod, get_datacite_client silently returns the MOCK client and reports success with a fake 10.99999 DOI — a published dataset would get a non-resolvable mock DOI with NO error surfaced (see issue)."
+    },
+    "deployability": {
+      "env_vars": "USE_MOCK_DATACITE(auto=false prod), DATACITE_USERNAME/PASSWORD/API_URL/PREFIX, DATACITE_TEST_MODE",
+      "iac": "DataCite* SAM params; DataCiteApiUrl default test API; prefix default 10.23677",
+      "parity": "Template default DataCiteApiUrl is the TEST API and DataCitePrefix 10.23677; prod must override both to the production DataCite endpoint/prefix or DOIs are minted in the test system. No guard ties USE_MOCK_DATACITE=false to having real creds.",
+      "idempotency": "mint_doi checks get_doi first and routes to update vs create -> idempotent for same suffix. Version suffix appends -v<version> deterministically."
+    },
+    "sync_parity": "DOI suffix is derived from source_id; for v2 'mdf-<uuid>' ids the DOI suffix is the full uuid-based id, diverging from any v1 DOI scheme. dataset_doi/doi stored on record and surfaced in search doc dc.doi (must match what v1 expected for citation).",
+    "issues": [
+      {"severity": "high", "dimension": "deployability", "desc": "get_datacite_client silently falls back to MockDataCiteClient when DATACITE_USERNAME/PASSWORD are missing, returning success with a fake '10.99999/...' DOI. If prod creds are misconfigured, approve/publish reports success and marks the dataset published with a non-resolvable mock DOI and no error — a silent data-integrity failure. USE_MOCK_DATACITE=false does not enforce that real creds exist.", "evidence": "aws/v2/datacite.py:358-374"},
+      {"severity": "med", "dimension": "functionality", "desc": "_mint_doi_for_submission constructs the version DOI suffix as client._generate_suffix(source_id)+'-v<version>' (using a private method); for the MockDataCiteClient this still works, but any client without _generate_suffix would crash. Also the concept-DOI HasVersion update is fire-and-forget — its failure is not propagated to result['success'].", "evidence": "aws/v2/curation.py:160,181-195"},
+      {"severity": "med", "dimension": "deployability", "desc": "Template DataCiteApiUrl defaults to https://api.test.datacite.org and DataCitePrefix to 10.23677. A prod deploy that forgets to override mints test-system DOIs (or mismatched prefix) while reporting success. No environment-conditioned default ties prod to the production DataCite endpoint.", "evidence": "template.yaml:34-41; datacite.py:45-55"},
+      {"severity": "low", "dimension": "functionality", "desc": "doi_utils.mint_doi_for_stream builds DOI suffix from stream_id.replace('stream-','') and mints with publish=True unconditionally; unrelated to submissions but shares the same silent-mock fallback risk.", "evidence": "aws/v2/doi_utils.py:32-34"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-05",
+    "area": "Submissions",
+    "name": "Metadata model, validation, v1 migration, source_id (metadata.py)",
+    "files": ["aws/v2/metadata.py:26-186,383-661", "aws/v2/submission_utils.py:46-47"],
+    "user_story": "As the platform, I want one canonical flat metadata schema with v1 back-compat so that both new submissions and migrated v1 datasets validate and round-trip.",
+    "expected_behavior": "DatasetMetadata (flat) with required title+authors and many optional fields. _migrate_external_fields pre-validator folds external_doi/url/source into external. migrate_v1_payload converts dc/mdf/custom/projects.foundry to flat (title, authors with ORCID parsing, keywords, license, related_works, organization, methods, ml, extensions). parse_metadata handles both schemas and backfills title/authors. generate_source_id = mdf-<uuid4hex>.",
+    "inputs": {"data": "v1 or v2 metadata dict / DB record"},
+    "outputs": {"result": "DatasetMetadata instance / flat dict"},
+    "side_effects": [],
+    "error_paths": ["Pydantic ValidationError surfaced to callers (400 in submit/edit)"],
+    "security": {
+      "authN": "n/a",
+      "authZ": "n/a",
+      "missing_checks": "extensions and acl are free-form; acl values are later mapped into Globus Search visible_to (urn:globus:auth:identity:<acl>) — a submitter-controlled acl could set visibility, but search ingest only runs after curator approval so it is mediated. acl is NOT validated as UUIDs."
+    },
+    "deployability": {"env_vars": "none", "iac": "n/a", "idempotency": "pure functions"},
+    "sync_parity": "migrate_v1_payload is THE shared contract function used by both /submit (live) and the sync scripts (convert_production_datasets.py). Any change to its output shape must stay consistent across both or live submissions and re-synced v1 data will diverge. to_datacite/build_gmeta_entry consume this flat shape.",
+    "issues": [
+      {"severity": "med", "dimension": "sync", "desc": "migrate_v1_payload stores mdf.source_id into extensions.mdf_source_id but /submit then re-reads extensions.mdf_source_id as the source_id for the new submission. A v1 payload POSTed live would reuse the v1 source_id verbatim, while the offline sync (convert script) promotes source_NAME to source_id. So the SAME v1 dataset gets different source_ids depending on whether it arrives via live /submit vs the batch sync — breaking the re-sync/cutover identity mapping.", "evidence": "aws/v2/metadata.py:519-522; aws/v2/app/routers/submissions.py:86-95; aws/v2/scripts/convert_production_datasets.py:184-189"},
+      {"severity": "low", "dimension": "functionality", "desc": "DatasetMetadata permits acl as arbitrary strings; build_gmeta_entry maps non-'public' acl entries directly into visible_to as urn:globus:auth:identity:<value> with no UUID validation, so a malformed acl yields an invalid/over-broad visible_to in the search index.", "evidence": "aws/v2/metadata.py:154; aws/v2/search_client.py:74-75"},
+      {"severity": "low", "dimension": "functionality", "desc": "migrate_v1_payload defaults missing title to 'Untitled' and missing authors to [{'name':'Unknown'}], so malformed v1 records pass validation with placeholder data rather than being rejected (acceptable for migration, but live /submit relies on the post-validate title/author checks which run on flat output and would still reject empty-but-not-placeholder cases inconsistently).", "evidence": "aws/v2/metadata.py:417,444"}
+    ]
+  },
+  {
+    "feature_id": "INFRA-06",
+    "area": "Submissions",
+    "name": "Globus Search document schema (search_client.build_gmeta_entry) — sync contract",
+    "files": ["aws/v2/search_client.py:62-145,479-526", "aws/v2/async_jobs.py:454-535"],
+    "user_story": "As the platform, I want published datasets indexed in Globus Search with a v1-compatible document so that the frontend and a v1->v2 re-sync stay compatible.",
+    "expected_behavior": "build_gmeta_entry builds subject=https://materialsdatafacility.org/detail/<source_id>, visible_to from acl, and content with mdf{source_id,source_name,version,organization,acl,ingest_date,domains,latest,root_version,previous_version,version_count,dataset_doi,download_url,external_*}, dc{title,creators[].name,publisher,year,description,subjects,license,doi}, data{location,size_bytes,file_count}. Prior versions re-ingested with latest=false on new-version publish.",
+    "inputs": {"args": "submission record, version_count"},
+    "outputs": {"result": "GMetaEntry {subject, visible_to, content}"},
+    "side_effects": ["Globus Search ingest (real index per SEARCH_INDEX_UUID / TEST_SEARCH_INDEX_UUID)"],
+    "error_paths": ["ingest returns {success:false,error} on exception (warned, not fatal to publish — see CUR-03 issue)"],
+    "security": {
+      "authN": "client-credentials token (search.api scope) via GLOBUS_CLIENT_ID/SECRET",
+      "authZ": "visible_to derived from acl",
+      "missing_checks": "Index is read with an UNAUTHENTICATED SearchClient for queries (_get_read_client) — relies on the index being public; visible_to=['public'] for public datasets."
+    },
+    "deployability": {
+      "env_vars": "USE_MOCK_SEARCH(auto=false prod), SEARCH_INDEX_UUID(prod), TEST_SEARCH_INDEX_UUID(staging/test)",
+      "iac": "SAM params SearchIndexUUID/TestSearchIndexUUID (default 'not-configured' -> falls back to mock with a warning)",
+      "parity": "If SEARCH_INDEX_UUID left 'not-configured' in prod, get_search_client silently returns the in-memory mock and 'publishes' to nothing (warning only). USE_MOCK_SEARCH=false does not guarantee a real index id is set."
+    },
+    "sync_parity": "This is the canonical v1-compatibility surface. dc/mdf/data block structure must match the v1 index (1a57bbe5...) for fast cutover. Notable drift: (1) mdf.source_name = source_id.rsplit('-',1)[0] is wrong for 'mdf-<uuid>' ids; (2) dc.creators only carries {name} (no givenName/familyName/affiliation/ORCID that v1 had); (3) new v2-only fields (version_count, root_version, download_url, external_*, domains) added to mdf block; (4) subject uses materialsdatafacility.org/detail/<source_id> base.",
+    "issues": [
+      {"severity": "high", "dimension": "sync", "desc": "mdf.source_name is computed as source_id.rsplit('-',1)[0]. For v2 generated ids 'mdf-<uuid>' this yields 'mdf'; for collision-suffixed ids it truncates the suffix. v1 search docs used source_name as the dataset-family grouping key. This breaks v1 schema parity and any faceting/version-grouping that keys on mdf.source_name after cutover.", "evidence": "aws/v2/search_client.py:83"},
+      {"severity": "med", "dimension": "sync", "desc": "dc.creators in the v2 search doc only includes {'name': a.name}, dropping givenName/familyName/affiliation/ORCID that the v1 index carried under dc.creators. Author faceting (DEFAULT_FACETS uses dc.creators.name) still works, but the richer creator data present in v1 is lost, so a v2-ingested doc is not field-equivalent to the v1 doc.", "evidence": "aws/v2/search_client.py:122; contrast metadata._parse_author_name:192-233"},
+      {"severity": "low", "dimension": "sync", "desc": "build_gmeta_entry pulls data.size_bytes/file_count from submission.get('total_bytes')/('file_count'), which are not set by the /submit flow (only stream/profile paths set them), so most submitted datasets index with null size/file_count even when data_sources exist.", "evidence": "aws/v2/search_client.py:131-133"}
+    ]
+  }
+]

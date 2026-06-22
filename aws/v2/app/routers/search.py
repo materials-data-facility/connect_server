@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-from v2.app.auth import get_optional_auth
+from v2.app.auth import get_auth, get_optional_auth
 from v2.app.models import AuthContext
 from v2.search import (
     find_related_by_author,
@@ -119,10 +119,14 @@ async def search_endpoint(
 async def semantic_search_endpoint(
     q: str = Query(..., description="Free-text query. Will be embedded server-side."),
     limit: int = Query(20),
+    auth: AuthContext = Depends(get_auth),
 ):
     """Top-k semantic search over the embedding snapshot.
 
-    Falls back to {"available": false, ...} when no snapshot is available yet.
+    Requires authentication: each query is embedded server-side via the paid
+    OpenAI API, so this endpoint is not exposed anonymously (anonymous keyword
+    search remains available at GET /search). Falls back to
+    {"available": false, ...} when no snapshot is available yet.
     """
     limit_val = max(1, min(int(limit), MAX_SEARCH_RESULTS))
     return search_semantic(q, limit=limit_val)
@@ -133,11 +137,16 @@ class EmbedRequest(BaseModel):
 
 
 @router.post("/embed")
-async def embed_query_endpoint(body: EmbedRequest):
+async def embed_query_endpoint(
+    body: EmbedRequest,
+    auth: AuthContext = Depends(get_auth),
+):
     """Return an embedding vector for arbitrary text.
 
-    Exposed so the frontend can do client-side cosine scanning against the
-    public snapshot blob without ever seeing the OpenAI key.
+    Lets the frontend do client-side cosine scanning against the public snapshot
+    blob without ever seeing the OpenAI key. Requires authentication: this is a
+    direct proxy to the paid OpenAI embeddings API, so it must not be callable
+    anonymously (which would let anyone run up unbounded OpenAI spend).
     """
     from v2.embeddings import EMBEDDING_MODEL, EmbeddingError, embed_text
 
