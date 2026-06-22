@@ -1,0 +1,404 @@
+[
+  {
+    "feature_id": "AUTH-01",
+    "area": "auth-middleware",
+    "name": "Identity resolution: dev X-User-Id headers vs production Globus userinfo",
+    "files": ["aws/v2/app/auth.py:12-124", "aws/v2/app/models.py:6-12"],
+    "user_story": "As the platform operator, I want production requests authenticated against Globus and dev-header auth gated to local runtimes, so that nobody can spoof identity in production by sending an X-User-Id header.",
+    "expected_behavior": "AUTH_MODE=dev only honored when LOCAL_DEV_AUTH or AWS_SAM_LOCAL truthy (get_auth_mode forces 'production' otherwise). In dev mode, identity is taken from X-User-Id / X-User-Email / X-User-Name headers or LOCAL_* env defaults. In production, the Bearer token is validated by calling Globus AuthClient.userinfo() (not introspect), 'sub' becomes user_id; missing 'sub' or AuthAPIError -> 401.",
+    "inputs": "Headers: Authorization: Bearer <token>, X-User-Id/X-User-Email/X-User-Name (dev), X-MDF-Token, X-Groups-Token; env AUTH_MODE, LOCAL_DEV_AUTH, AWS_SAM_LOCAL, GLOBUS_CLIENT_ID/SECRET.",
+    "outputs": "AuthContext{user_id, name, user_email, identities, group_info, dependent_token}.",
+    "side_effects": "Network calls to Globus Auth userinfo on EVERY request; optional dependent-token exchange (ConfidentialAppAuthClient) and GroupsClient.get_my_groups call.",
+    "error_paths": "Missing Authorization -> 401 (L52-53); empty bearer -> 401 (L56-57); AuthAPIError -> 401 (L72-73); missing sub -> 401 (L76-77); any other Exception -> 401 with message echoing exception 'Authentication failed: {e}' (L123-124).",
+    "security": "CONTROL: server-side Globus token validation via userinfo; dev-header bypass guarded by get_auth_mode (L23-25). POSTURE: mostly sound. GAPS: (1) No introspection/userinfo result caching -> every authenticated request makes 1-3 synchronous Globus API calls (DoS / latency amplification, and a Globus outage hard-fails all auth). (2) Group-fetch failures are swallowed (L97-98, L110-111) so group_info silently empties -> a transient Groups API error downgrades a curator/submitter to no-groups, which combined with ALLOW_ALL_CURATORS=true (see SEC-02) is masked but with strict groups would deny legitimate users. (3) Exception detail leaks raw exception text to the client (L124). (4) userinfo() accepts ANY valid Globus token for ANY resource server (comment L62-66 acknowledges this) — there is no audience/scope check, so a token minted for an unrelated Globus app is accepted as a valid MDF identity.",
+    "deployability": "AUTH_MODE wired from template param (template.yaml:212), forced to dev only for IsDevAuth stacks. Dev/prod parity: dev uses header identity, prod uses Globus. No rollback concern.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Production token validation uses userinfo() which accepts any valid Globus access token regardless of audience/scope; no audience or resource-server check binds the token to the MDF app.", "evidence": "aws/v2/app/auth.py:62-77"},
+      {"severity": "med", "dimension": "security", "desc": "No caching of userinfo/group lookups: each request triggers synchronous Globus calls; a Globus outage hard-fails all auth and adds latency / cost.", "evidence": "aws/v2/app/auth.py:68-105"},
+      {"severity": "low", "dimension": "security", "desc": "Exception text echoed to client in 401 detail (information disclosure).", "evidence": "aws/v2/app/auth.py:123-124"},
+      {"severity": "low", "dimension": "functionality", "desc": "Group-fetch failures are swallowed, silently emptying group_info and thus revoking group-based permissions on transient errors.", "evidence": "aws/v2/app/auth.py:97-98, aws/v2/app/auth.py:110-111"}
+    ]
+  },
+  {
+    "feature_id": "AUTH-02",
+    "area": "auth-middleware",
+    "name": "Curator authorization (is_curator / require_curator) and ALLOW_ALL_CURATORS bypass",
+    "files": ["aws/v2/app/auth.py:144-191", "aws/template.yaml:235-239", "aws/samconfig.toml:50", "aws/samconfig.toml:64"],
+    "user_story": "As the platform operator, I want curator powers restricted to members of a known Globus group so that only trusted staff can approve/publish/delete datasets and mint production DOIs.",
+    "expected_behavior": "is_curator returns true if user_id in CURATOR_USER_IDS, or user groups intersect CURATOR_GROUP_IDS, or ALLOW_ALL_CURATORS truthy. require_curator raises 403 otherwise. CuratorGroupIds default 3ce2c53e-3752-11e8-891c-0e00fd09bf20 (template.yaml:132).",
+    "inputs": "AuthContext.group_info; env CURATOR_USER_IDS, CURATOR_GROUP_IDS, ALLOW_ALL_CURATORS.",
+    "outputs": "bool / 403.",
+    "side_effects": "Gates approve, reject, delete, admin/stats, cross-org listing.",
+    "error_paths": "403 'You do not have curator permissions'.",
+    "security": "CONTROL: group-membership-based curator gate. POSTURE: BROKEN in deployed config. ALLOW_ALL_CURATORS=true is set in BOTH staging AND prod samconfig overrides (samconfig.toml:50,64). With that flag, is_curator returns true for ANY authenticated Globus user (L155-156), so any logged-in user can approve/publish datasets, mint REAL production DataCite DOIs (prefix 10.18126), soft-delete any submission, and read cross-org/admin data. This is a high-severity privilege-escalation: the CuratorGroupIds restriction is entirely bypassed in production. The template 'auto' default would set false in prod, but the explicit samconfig override re-enables it.",
+    "deployability": "Flag plumbed via template (template.yaml:235-239) with 'auto' default, but samconfig hard-overrides to true for staging and prod. Drift risk: prod security depends on a value buried in samconfig, not the template default.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "ALLOW_ALL_CURATORS=true is set for BOTH staging and production, so every authenticated Globus user is a curator: can approve/publish, mint real prod DOIs, and soft-delete any dataset. Curator group restriction is fully bypassed in prod.", "evidence": "aws/samconfig.toml:64 (prod), aws/samconfig.toml:50 (staging), aws/v2/app/auth.py:155-156"}
+    ]
+  },
+  {
+    "feature_id": "AUTH-03",
+    "area": "auth-middleware",
+    "name": "Submitter authorization (is_submitter / require_submitter) via REQUIRED_GROUP_MEMBERSHIP",
+    "files": ["aws/v2/app/auth.py:194-219", "aws/template.yaml:240", "aws/template.yaml:134-137"],
+    "user_story": "As the platform operator, I want only members of the MDF submitters group to create datasets so that the public ingest endpoint is not abused.",
+    "expected_behavior": "Dev mode -> always allowed. If REQUIRED_GROUP_MEMBERSHIP empty -> allowed. Else user must have that group UUID in group_info. RequiredGroupMembership default cc192dca-3751-11e8-90c1-0a7c735d220a (template.yaml:136).",
+    "inputs": "AuthContext.group_info; env REQUIRED_GROUP_MEMBERSHIP, AUTH_MODE.",
+    "outputs": "bool / 403.",
+    "side_effects": "Gates POST /submit.",
+    "error_paths": "403 'You must be a member of the MDF submitters group'.",
+    "security": "CONTROL: submitter group gate. POSTURE: enforced in prod (REQUIRED_GROUP_MEMBERSHIP set from template default when not IsDevAuth, template.yaml:240). However, enforcement depends entirely on group_info being populated; per AUTH-01, a swallowed Groups API error empties group_info and would DENY a legitimate submitter (fail-closed for submit — acceptable) but the same mechanism fail-OPENs curators because of ALLOW_ALL_CURATORS (AUTH-02).",
+    "deployability": "Param plumbed; dev sets empty (open), prod sets group UUID. Parity OK.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Submitter check depends on group_info, which AUTH-01 silently empties on transient Groups API errors, causing intermittent false 403s for valid submitters.", "evidence": "aws/v2/app/auth.py:203-208, aws/v2/app/auth.py:110-111"}
+    ]
+  },
+  {
+    "feature_id": "AUTH-04",
+    "area": "auth-middleware",
+    "name": "Top-level Lambda authorizer (aws/auth.py) — legacy v1 authorizer, NOT used by v2",
+    "files": ["aws/auth.py:8-87", "aws/template.yaml:382-409"],
+    "user_story": "As an auditor, I want to know whether the legacy Globus Lambda authorizer is wired into the v2 stack so that I can assess its weaknesses or confirm it is dead code.",
+    "expected_behavior": "Builds an API Gateway IAM policy from Globus oauth2_token_introspect(include='identities_set'); on any exception returns Deny. Reads secrets from Secrets Manager via get_secret(MDF_SECRETS_NAME). This is the v1 REST-API authorizer.",
+    "inputs": "event.headers.authorization, env MDF_SECRETS_NAME / MDF_AWS_REGION, Secrets Manager.",
+    "outputs": "API Gateway authorizer policy {principalId, policyDocument, context}.",
+    "side_effects": "Logs the FULL event (json.dumps(event)) and prints AuthResponse including stringified dependent tokens (L31, L42, L55).",
+    "error_paths": "Bare except -> Deny 'Invalid auth token' (L84-86). Note generate_policy crashes if effect/resource falsy because policyDocument referenced before assignment (L21 outside the if).",
+    "security": "CONTROL: introspection-based authorizer. POSTURE: This file is the v1 REST-API authorizer and is NOT referenced by the v2 SAM template (HttpApi at template.yaml:382-409 has no Authorizer; auth is done in-process by app/auth.py). It is effectively dead code for v2 but ships in the repo. GAPS if ever used: (1) logs entire event and prints dependent tokens / group info to CloudWatch (token/secret leakage in logs, L31,42,55); (2) introspect-only validation has the resource-server active=True caveat the v2 code explicitly avoided; (3) NameError risk in generate_policy when denying with no resource.",
+    "deployability": "Not wired into template.yaml. Confirm it is not deployed by any other stack. Carrying dead auth code is a maintenance/foot-gun risk.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "Legacy authorizer logs the full request event and prints Globus dependent tokens + group info to stdout/CloudWatch (token leakage) if ever deployed.", "evidence": "aws/auth.py:31, aws/auth.py:42, aws/auth.py:55"},
+      {"severity": "low", "dimension": "deployability", "desc": "Dead/legacy auth code (v1 authorizer) retained in repo and not used by v2 HttpApi; risk of accidental reuse.", "evidence": "aws/auth.py:35-87, aws/template.yaml:382-409"}
+    ]
+  },
+  {
+    "feature_id": "MW-01",
+    "area": "auth-middleware",
+    "name": "configure_app_middleware: request-id, body-size cap, in-memory rate limiting, request logging",
+    "files": ["aws/v2/app/middleware.py:88-175", "aws/v2/app/middleware.py:16-85"],
+    "user_story": "As the platform operator, I want per-actor rate limiting, request-size caps, and request IDs so that abusive or oversized requests are bounded and every request is traceable.",
+    "expected_behavior": "Middleware assigns request_id (from X-Request-Id or uuid4), enforces MAX_REQUEST_BYTES (default 1MiB) on POST/PUT/PATCH via Content-Length and actual body read, applies per-path per-actor rate limits (submit 20/min, stream-create 30, stream-upload 60, stream-mutation 90, default 120) in a sliding window, returns 413/429 JSON, logs structured JSON per request, and echoes X-Request-Id on responses.",
+    "inputs": "Request headers (x-request-id, content-length, x-user-id, authorization), env RATE_LIMIT_* / MAX_REQUEST_BYTES / RATE_LIMIT_WINDOW_SECONDS.",
+    "outputs": "413/429 JSON responses; X-Request-Id header; structured logs.",
+    "side_effects": "Mutates module-global _RATE_LIMIT_STATE (in-memory deque per actor key); reads full request body into memory for size check.",
+    "error_paths": "413 on oversized body; 429 with Retry-After on rate-limit; re-raises on downstream exception (logged).",
+    "security": "CONTROL: app-level rate limit + size cap + request id. POSTURE: useful defense-in-depth but FUNDAMENTALLY INEFFECTIVE on Lambda. The rate-limit state is process-memory only; with reserved concurrency 10 (API) each cold/warm container has its own counter and Lambda recycles containers, so effective limits are ~N*configured and reset frequently — not a real global limiter. No security HEADERS are added (no Strict-Transport-Security, X-Content-Type-Options, X-Frame-Options, Content-Security-Policy, Referrer-Policy) despite the function name 'security_and_logging_middleware'. Actor key falls back to client IP which behind API Gateway/Mangum may be unreliable. The full-body read for size enforcement happens AFTER Content-Length check but still buffers up to the cap.",
+    "deployability": "Pure code; tunable via env. No IaC drift. Real throttling is delegated to HttpApi DefaultRouteSettings (IAC-04).",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "No HTTP security headers set (HSTS, X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy) despite middleware named 'security_and_logging_middleware'.", "evidence": "aws/v2/app/middleware.py:88-175"},
+      {"severity": "low", "dimension": "functionality", "desc": "Rate limiter uses per-container in-memory state on Lambda; effective limit scales with concurrency and resets on container recycle — not a reliable global limit.", "evidence": "aws/v2/app/middleware.py:16-17, aws/v2/app/middleware.py:72-85"}
+    ]
+  },
+  {
+    "feature_id": "SEC-01",
+    "area": "security-core",
+    "name": "CORS configuration (app-level CORSMiddleware + HttpApi CorsConfiguration) and AllowCredentials",
+    "files": ["aws/v2/app/__init__.py:18-28", "aws/template.yaml:390-409", "aws/template.yaml:241-244"],
+    "user_story": "As the platform operator, I want CORS locked to known origins in production with credentials only allowed for those origins, so that browsers cannot make credentialed cross-origin calls from arbitrary sites.",
+    "expected_behavior": "App reads CORS_ALLOWED_ORIGINS (default '*'); allow_credentials is true ONLY when the value is not '*' (L20). Methods GET/POST/OPTIONS. In prod the template sets CORS_ALLOWED_ORIGINS to the two MDF origins (template.yaml:241-244) and HttpApi AllowCredentials true (template.yaml:409); non-prod uses '*' with AllowCredentials false.",
+    "inputs": "env CORS_ALLOWED_ORIGINS; template Environment.",
+    "outputs": "CORS headers.",
+    "side_effects": "Both FastAPI CORSMiddleware AND API Gateway CORS are configured (double CORS layer).",
+    "error_paths": "n/a",
+    "security": "CONTROL: origin allow-list with the wildcard+credentials anti-pattern correctly avoided (allow_credentials false when '*'). POSTURE: app layer is correct. RESIDUAL: (1) Two independent CORS stacks (FastAPI + HttpApi) can disagree; the HttpApi may answer OPTIONS preflight before Lambda, so the app-level config is partially shadowed. (2) Allowed headers include X-User-Id/X-User-Email/X-User-Name in PRODUCTION CORS (template.yaml:403-405, __init__.py:26) — harmless because prod ignores dev headers, but it advertises the dev-auth surface. (3) staging/dev use '*' which is acceptable only because credentials are disabled there.",
+    "deployability": "Origins differ by env via !If IsProd. Parity intentional. No drift beyond the two-layer duplication.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "Two independent CORS configurations (FastAPI CORSMiddleware and API Gateway CorsConfiguration) can diverge; gateway may shadow app-level preflight handling.", "evidence": "aws/v2/app/__init__.py:22-28, aws/template.yaml:390-409"},
+      {"severity": "low", "dimension": "security", "desc": "Production CORS allow-list advertises dev-auth headers (X-User-Id/X-User-Email/X-User-Name).", "evidence": "aws/template.yaml:403-405"}
+    ]
+  },
+  {
+    "feature_id": "SEC-02",
+    "area": "security-core",
+    "name": "Global exception handler, /health, /auth/check identity-preflight",
+    "files": ["aws/v2/app/__init__.py:32-63"],
+    "user_story": "As the platform operator, I want unhandled errors to return a generic message with a correlation id (no stack traces to clients) and a cheap auth-preflight endpoint so the CLI catches auth problems early.",
+    "expected_behavior": "global_exception_handler logs the exception with a request_id and returns 500 {detail:'Internal server error', request_id}. /health returns {status:ok}. /auth/check requires get_auth and returns identity + is_submitter + is_curator + group list.",
+    "inputs": "Any unhandled exception; Authorization for /auth/check.",
+    "outputs": "500 generic JSON; health JSON; auth-check JSON.",
+    "side_effects": "/auth/check triggers full Globus userinfo+groups resolution (cost per call).",
+    "error_paths": "/auth/check returns 401 if get_auth fails.",
+    "security": "CONTROL: generic 500 (no stack trace leak) + correlation id. POSTURE: good. Note the error shape here is {detail, request_id} which matches FRONTEND_API.md (L68-71) but the MIDDLEWARE 413/429 responses use {success:false, error, request_id} (middleware.py:106-109,137-142) — inconsistent error envelopes across the same API (contract drift, see SYNC-05).",
+    "deployability": "Pure code.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "low", "dimension": "functionality", "desc": "Inconsistent error envelopes: exception handler returns {detail, request_id} while middleware 413/429 return {success:false, error, request_id}; clients must handle two shapes.", "evidence": "aws/v2/app/__init__.py:36-39, aws/v2/app/middleware.py:106-109"}
+    ]
+  },
+  {
+    "feature_id": "SEC-03",
+    "area": "security-core",
+    "name": "Email notifications (SES) — HTML/link injection hardening",
+    "files": ["aws/v2/email_utils.py:52-78", "aws/v2/email_utils.py:211-341", "aws/v2/email_utils.py:154-204"],
+    "user_story": "As the platform operator, I want all user-controlled text in transactional emails escaped so that a malicious title/description/author cannot inject HTML or hijack the CTA link.",
+    "expected_behavior": "_send dispatches via SES (Source=SES_FROM_EMAIL). All interpolated user content (title, authors, description, keywords, org, DOI, reason, suggestions, URLs) is passed through _escape() which encodes & < > and \" (L211-213). CTA links and DOI links escape the URL.",
+    "inputs": "submission record fields (title, authors, description, keywords, organization, dataset_doi), curator reason/suggestions, env PORTAL_URL/CURATION_PORTAL_URL/SES_FROM_EMAIL/CURATOR_EMAILS.",
+    "outputs": "SES send_email call; bool.",
+    "side_effects": "Sends email to curators/submitter; failures swallowed (returns False, logs warning).",
+    "error_paths": "No SES_FROM_EMAIL -> skipped (returns True). Send exception -> logged, returns False (fire-and-forget).",
+    "security": "CONTROL: consistent _escape() on all user-derived strings, including DOI in href (L297) and reason/suggestions (L171,174) — the recent hardening commit. POSTURE: good for HTML-context injection. RESIDUAL: (1) _escape does NOT validate that DOI/URL values are http(s) — a record DOI of 'javascript:...' would be escaped textually but placed in an href ('https://doi.org/' + escaped doi, L297, and CTA uses raw url L332); since CTA urls come from PORTAL_URL env (trusted) and doi is prefixed with https://doi.org/ this is low-risk, but external_url/download_url are not used in email. (2) Header values (subject) include unescaped meta.title (L96,128,180) — SES treats Subject.Data as text so no header-injection, acceptable. (3) ses:SendEmail IAM is Resource:'*' (see IAC-06).",
+    "deployability": "EnableEmails param gates SES; default false (template.yaml:154-158); SES_FROM_EMAIL only injected when EmailsEnabled (template.yaml:249-250). Requires SES domain verification + sandbox lift (out-of-band manual step) before prod.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "low", "dimension": "security", "desc": "DOI value is placed inside an href ('https://doi.org/'+doi) without scheme/format validation; relies on DataCite-shaped DOIs. Low risk but unvalidated.", "evidence": "aws/v2/email_utils.py:295-297"}
+    ]
+  },
+  {
+    "feature_id": "IAC-01",
+    "area": "infrastructure",
+    "name": "Secrets passed as plaintext Lambda environment variables (Globus secret, DataCite password, OpenAI key)",
+    "files": ["aws/template.yaml:222-231", "aws/template.yaml:254", "aws/template.yaml:317-326", "aws/template.yaml:342", "aws/deploy.sh:163-236"],
+    "user_story": "As the platform operator, I want secrets stored in SSM/Secrets Manager and referenced (not baked into Lambda env), so that a console viewer / GetFunctionConfiguration caller / CloudFormation reader cannot read live credentials in plaintext.",
+    "expected_behavior": "GlobusClientSecret, DataCitePassword, OpenAIApiKey are NoEcho CFN params (template.yaml:23,32,162) but are injected directly into the Lambda Environment.Variables (GLOBUS_CLIENT_SECRET L223/L318, DATACITE_PASSWORD L229/L324, OPENAI_API_KEY L254/L342). deploy.sh resolves Globus + DataCite from SSM at deploy time and passes them as --parameter-overrides.",
+    "inputs": "CFN params from SSM (prod via deploy.sh) or samconfig (staging).",
+    "outputs": "Lambda env vars containing live secrets.",
+    "side_effects": "Secrets are readable via lambda:GetFunctionConfiguration, CloudFormation describe (NoEcho hides in console but value is in the resolved template/changeset), and are visible to anyone with Lambda console access. ingest script even reads them back out of the Lambda config (ingest_converted_datasets.py:88-96).",
+    "error_paths": "n/a",
+    "security": "CONTROL: NoEcho on params + SSM SecureString resolution in deploy.sh (good intent). POSTURE: WEAK at rest. Secrets land in Lambda env in plaintext; NoEcho only hides them from the CFN console outputs, not from GetFunctionConfiguration, the SAM changeset, or process env. There is no Secrets Manager / SSM dynamic reference ({{resolve:ssm-secure:...}}) and no encryption of env vars with a customer KMS key (default Lambda env encryption is AWS-managed only). Anyone with lambda:GetFunctionConfiguration on the function can read GLOBUS_CLIENT_SECRET, DATACITE_PASSWORD, OPENAI_API_KEY.",
+    "deployability": "Prod resolves from /mdf/globus-client-secret and /mdf/{env}/datacite-* SSM params (deploy.sh:171-199) — these SSM params are created OUT OF BAND (manual drift; deploy.sh errors if missing). Staging hardcodes DataCite creds in samconfig (IAC-02). OpenAIApiKey has no SSM resolution path at all — must be passed manually.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "Live secrets (GLOBUS_CLIENT_SECRET, DATACITE_PASSWORD, OPENAI_API_KEY) are injected as plaintext Lambda environment variables rather than Secrets Manager / ssm-secure dynamic references; readable via lambda:GetFunctionConfiguration and present in the CloudFormation changeset.", "evidence": "aws/template.yaml:223, aws/template.yaml:229, aws/template.yaml:254"},
+      {"severity": "med", "dimension": "deployability", "desc": "OpenAIApiKey has no SSM resolution in deploy.sh; only Globus and DataCite are pulled from SSM, so the OpenAI key must be supplied manually each deploy (drift / accidental 'not-configured').", "evidence": "aws/deploy.sh:163-236, aws/template.yaml:159-163"},
+      {"severity": "med", "dimension": "deployability", "desc": "Prod SSM parameters (/mdf/globus-client-id|secret, /mdf/{env}/datacite-*) are created out-of-band; not defined in IaC, so a fresh-account deploy requires undocumented manual setup and is not reproducible from the template alone.", "evidence": "aws/deploy.sh:166-199"}
+    ]
+  },
+  {
+    "feature_id": "IAC-02",
+    "area": "infrastructure",
+    "name": "Hardcoded DataCite staging password in samconfig.toml (secret in source control)",
+    "files": ["aws/samconfig.toml:50"],
+    "user_story": "As the platform operator, I want no live credentials committed to the repository so that a repo leak does not expose DataCite (or any) credentials.",
+    "expected_behavior": "Staging DataCite credentials should come from SSM like prod; instead samconfig.toml line 50 contains DataCiteUsername=Globus.TEST and DataCitePassword=NTroFAzElE in plaintext, committed to git.",
+    "inputs": "n/a (static file).",
+    "outputs": "n/a.",
+    "side_effects": "Credential is in git history and on every developer machine.",
+    "error_paths": "n/a",
+    "security": "CONTROL: none. POSTURE: plaintext secret leak. The DataCite TEST repository password 'NTroFAzElE' for account 'Globus.TEST' is committed in cleartext. Even though it is the test/staging DataCite environment (api.test.datacite.org, prefix 10.23677), it is still a live credential that should be rotated and moved to SSM. Confirms a pattern (staging uses inline creds, prod uses SSM) that is inconsistent and leaks secrets.",
+    "deployability": "Staging deploy works without SSM because creds are inline — but at the cost of committing them. Inconsistent with prod's SSM approach.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "high", "dimension": "security", "desc": "DataCite staging credential committed in plaintext (DataCiteUsername=Globus.TEST, DataCitePassword=NTroFAzElE) in version control.", "evidence": "aws/samconfig.toml:50"}
+    ]
+  },
+  {
+    "feature_id": "IAC-03",
+    "area": "infrastructure",
+    "name": "IAM policies on ApiFunction and AsyncWorkerFunction (least-privilege assessment)",
+    "files": ["aws/template.yaml:273-291", "aws/template.yaml:361-376"],
+    "user_story": "As the platform operator, I want each Lambda scoped to only the resources and actions it needs so that a compromise of one function cannot read/write unrelated data or send arbitrary email.",
+    "expected_behavior": "ApiFunction: DynamoDBCrudPolicy on Submissions+Streams tables, S3CrudPolicy on stream-files and embeddings buckets, sqs:SendMessage to AsyncJobsQueue, ses:SendEmail Resource:'*'. AsyncWorkerFunction: same Dynamo+S3, SQSPollerPolicy, ses:SendEmail Resource:'*'.",
+    "inputs": "n/a.",
+    "outputs": "IAM roles.",
+    "side_effects": "n/a.",
+    "error_paths": "n/a.",
+    "security": "CONTROL: SAM canned policies (table/bucket-scoped). POSTURE: mostly reasonable but several over-broad grants. (1) S3CrudPolicy grants s3:GetObject/PutObject/DeleteObject/ListBucket on the WHOLE bucket (every object) for both functions and both buckets — acceptable for single-purpose buckets but is bucket-wide DELETE on all stream files and all embeddings. (2) ses:SendEmail Resource:'*' (template.yaml:282-291, 372-376) — allows sending FROM ANY verified identity in the account and TO any address; should be constrained with a Condition on ses:FromAddress to SES_FROM_EMAIL. (3) DynamoDBCrudPolicy includes DeleteItem on the tables (whole-table) — though tables have DeletionPolicy Retain, item-level delete is allowed for both functions including the public-facing API. (4) ApiFunction (internet-facing) carries the same broad data-plane rights as the worker; a single ApiFunction RCE/SSRF could exfiltrate/delete all submissions and all stream files and send spoofed email.",
+    "deployability": "Canned policies are reproducible. No per-prefix scoping. No drift.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "ses:SendEmail granted with Resource:'*' (and no ses:FromAddress condition) on both functions; allows sending from any verified identity to any recipient.", "evidence": "aws/template.yaml:282-291, aws/template.yaml:372-376"},
+      {"severity": "med", "dimension": "security", "desc": "S3CrudPolicy grants bucket-wide Get/Put/Delete/List on entire stream-files and embeddings buckets to both functions; no prefix scoping, so a compromise can delete/exfiltrate all objects.", "evidence": "aws/template.yaml:278-281, aws/template.yaml:366-369"},
+      {"severity": "low", "dimension": "security", "desc": "Internet-facing ApiFunction holds full DynamoDB CRUD (incl. DeleteItem) on both tables, identical to the worker; no read-only separation for the API tier.", "evidence": "aws/template.yaml:274-277"}
+    ]
+  },
+  {
+    "feature_id": "IAC-04",
+    "area": "infrastructure",
+    "name": "HttpApi: throttling, CORS, AllowCredentials, no WAF/authorizer",
+    "files": ["aws/template.yaml:382-409", "aws/template.yaml:50-57"],
+    "user_story": "As the platform operator, I want gateway-level throttling and restricted CORS so that the API is protected before requests reach Lambda, and I want to know if a WAF is present.",
+    "expected_behavior": "HttpApi DefaultRouteSettings ThrottlingRateLimit 100/s, BurstLimit 200. CORS AllowOrigins prod-restricted, AllowMethods GET/POST/OPTIONS, AllowCredentials true only in prod. No Lambda authorizer (auth is in-app). No WAF association.",
+    "inputs": "params HttpApiThrottleRate/Burst.",
+    "outputs": "API Gateway HTTP API.",
+    "side_effects": "n/a.",
+    "error_paths": "429 from gateway on throttle.",
+    "security": "CONTROL: account/route-level throttle is the real (global) rate limit (vs the ineffective in-memory one in MW-01). POSTURE: reasonable. GAPS: (1) No AWS WAF associated with the HTTP API — no IP reputation, SQLi/XSS managed rules, or per-IP rate-based rules (note: HTTP APIs cannot attach WAF directly; a CloudFront+WAF front would be needed — currently absent). (2) Throttle is global (default route), not per-route or per-key; the expensive /submit and /search endpoints share the 100/s budget with everything. (3) No usage plans / API keys for the CLI. (4) Auth entirely in-app means every request (including invalid tokens) reaches and pays for Lambda.",
+    "deployability": "Throttle and CORS parameterized; prod vs non-prod via !If IsProd. Reproducible.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "No AWS WAF in front of the API (HTTP API has no WAF and no CloudFront+WAF layer); no managed rule sets or IP rate-based protection.", "evidence": "aws/template.yaml:382-409"},
+      {"severity": "low", "dimension": "security", "desc": "Throttling is global on the default route only; no per-route limits protecting expensive /submit and /search paths.", "evidence": "aws/template.yaml:387-389"}
+    ]
+  },
+  {
+    "feature_id": "IAC-05",
+    "area": "infrastructure",
+    "name": "S3 buckets: public access block, encryption-at-rest, CORS",
+    "files": ["aws/template.yaml:415-444", "aws/v2/storage/s3.py:42-101", "aws/v2/embedding_snapshot.py:59-80"],
+    "user_story": "As the platform operator, I want all S3 buckets to block public access and enforce encryption at rest so that data files and embeddings cannot be exposed or read unencrypted on disk.",
+    "expected_behavior": "StreamFilesBucket (created only when AuthMode!=dev) and EmbeddingsSnapshotBucket both set PublicAccessBlockConfiguration all-true. EmbeddingsSnapshotBucket additionally allows GET/HEAD CORS from '*'. No BucketEncryption block on either bucket. No DeletionPolicy on the buckets. PUTs in s3.py and embedding_snapshot.py do not set ServerSideEncryption.",
+    "inputs": "n/a.",
+    "outputs": "S3 buckets.",
+    "side_effects": "Embeddings bucket is intended to be fronted by CloudFront for public read (template.yaml:426-429); its CORS allows any origin to GET.",
+    "error_paths": "n/a.",
+    "security": "CONTROL: public-access-block on both buckets (good). POSTURE: GAPS: (1) No explicit BucketEncryption (SSE-S3/SSE-KMS) on either bucket and no ServerSideEncryption on PutObject/upload_fileobj (s3.py:59-65,93-100; embedding_snapshot.py:67-68). AWS now defaults to SSE-S3, but there is no enforced KMS encryption and no aws:SecureTransport deny policy requiring TLS. (2) No bucket policy denying non-TLS access. (3) EmbeddingsSnapshotBucket CORS AllowedOrigins '*' — fine for intended-public embeddings, but combine with the public-read CloudFront intent and ensure no sensitive data is embedded. (4) No DeletionPolicy:Retain on the buckets (unlike the Dynamo tables) — a stack delete would attempt to remove the stream-files bucket (data loss risk; though delete fails if non-empty).",
+    "deployability": "StreamFilesBucket is conditionally created (CreateStreamFilesBucket = AuthMode != dev). Reproducible. teardown empties only the SAM-deploy bucket, not data buckets.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "No explicit BucketEncryption (SSE-KMS) and no ServerSideEncryption set on S3 PutObject/upload calls; encryption relies on the AWS default SSE-S3 only, with no customer-managed key or TLS-enforcing bucket policy.", "evidence": "aws/template.yaml:415-444, aws/v2/storage/s3.py:59-65"},
+      {"severity": "low", "dimension": "deployability", "desc": "Data buckets (StreamFilesBucket, EmbeddingsSnapshotBucket) have no DeletionPolicy:Retain, unlike the DynamoDB tables; a stack delete targets them for removal (data-loss path).", "evidence": "aws/template.yaml:415-438"}
+    ]
+  },
+  {
+    "feature_id": "IAC-06",
+    "area": "infrastructure",
+    "name": "DynamoDB tables: encryption-at-rest, PITR, DeletionPolicy, GSIs",
+    "files": ["aws/template.yaml:478-555"],
+    "user_story": "As the platform operator, I want the submissions/streams tables encrypted at rest with point-in-time recovery and retained on stack delete, so that dataset metadata is durable, recoverable, and protected.",
+    "expected_behavior": "SubmissionsTable (PK source_id + RANGE version) and StreamsTable (PK stream_id), PAY_PER_REQUEST, DeletionPolicy/UpdateReplacePolicy Retain. SubmissionsTable GSIs: user-submissions, org-submissions, status-submissions. StreamsTable GSI user-streams. No SSESpecification. No PointInTimeRecoverySpecification.",
+    "inputs": "n/a.",
+    "outputs": "DynamoDB tables.",
+    "side_effects": "n/a.",
+    "error_paths": "n/a.",
+    "security": "CONTROL: DeletionPolicy Retain (good — protects the system of record). POSTURE: GAPS: (1) No SSESpecification — tables use AWS-owned-key default encryption, not a customer/AWS-managed KMS key; no key isolation or key-access auditing. (2) No PointInTimeRecoverySpecification (PITR disabled) — there is NO continuous backup; an accidental or malicious bulk delete/overwrite (recall both Lambdas have DeleteItem, IAC-03, and ALLOW_ALL_CURATORS lets any user soft-delete, AUTH-02) is unrecoverable beyond the soft-delete tombstone. This is significant for the system of record. (3) No on-demand backup schedule.",
+    "deployability": "Tables retained on delete; teardown explicitly notes manual deletion (deploy.sh:260-263, 284-286). Reproducible. PAY_PER_REQUEST is fine.",
+    "sync_parity": "Schema (source_id HASH + version RANGE, status/user/org GSIs) is what the migration/ingest pipeline writes into; the status-submissions GSI (template.yaml:520-527) backs curation pending lists. Re-sync depends on org being non-empty for the org GSI (ingest omits empty org, ingest_converted_datasets.py:153-157).",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "DynamoDB tables have no SSESpecification (no customer/AWS-managed KMS CMK) — only default AWS-owned-key encryption; no PointInTimeRecoverySpecification, so no continuous backup of the system-of-record metadata.", "evidence": "aws/template.yaml:478-484, aws/template.yaml:529-535"},
+      {"severity": "high", "dimension": "security", "desc": "No PITR/backup combined with both Lambdas holding DeleteItem and ALLOW_ALL_CURATORS=true (any user can soft-delete) means accidental/malicious data loss on the submissions table is unrecoverable.", "evidence": "aws/template.yaml:478-481, aws/v2/app/auth.py:155-156"}
+    ]
+  },
+  {
+    "feature_id": "IAC-07",
+    "area": "infrastructure",
+    "name": "SQS async queue + DLQ: encryption, redrive, retention; reserved concurrency; log retention",
+    "files": ["aws/template.yaml:450-476", "aws/template.yaml:82-114", "aws/template.yaml:205", "aws/template.yaml:301"],
+    "user_story": "As the platform operator, I want the async job queue encrypted, with a dead-letter queue and bounded concurrency, so that job payloads are protected, poison messages are isolated, and runaway invocations are capped.",
+    "expected_behavior": "AsyncJobsQueue (visibility 180s, retention param default 4d) with RedrivePolicy to AsyncJobsDLQ (maxReceiveCount 3); DLQ retention 14d. No KmsMasterKeyId / SqsManagedSseEnabled on either queue. ApiFunction reserved concurrency 10, AsyncWorker 3. Log groups with RetentionInDays param (default 14).",
+    "inputs": "params for retention, batch size/window, concurrency.",
+    "outputs": "SQS queues, log groups.",
+    "side_effects": "n/a.",
+    "error_paths": "DLQ after 3 receives.",
+    "security": "CONTROL: DLQ + redrive (good); reserved concurrency caps spend; explicit log retention (good, 14d). POSTURE: GAP: neither AsyncJobsQueue nor AsyncJobsDLQ enables SQS encryption (no SqsManagedSseEnabled:true and no KmsMasterKeyId) — message payloads (which carry submission/job context, potentially metadata and identifiers) are not encrypted at rest in SQS. SSE-SQS is a one-line property and should be set on both queues.",
+    "deployability": "Fully parameterized and reproducible. Reserved concurrency on both functions prevents runaway. Log retention explicit (avoids never-expire default). Good.",
+    "sync_parity": "n/a",
+    "issues": [
+      {"severity": "med", "dimension": "security", "desc": "AsyncJobsQueue and AsyncJobsDLQ have no SSE enabled (no SqsManagedSseEnabled / KmsMasterKeyId); job message payloads are not encrypted at rest.", "evidence": "aws/template.yaml:450-464"}
+    ]
+  },
+  {
+    "feature_id": "IAC-08",
+    "area": "infrastructure",
+    "name": "Environment parity & 'auto' switches (dev/staging/prod); quick_deploy code-path drift",
+    "files": ["aws/template.yaml:177-184", "aws/template.yaml:215-247", "aws/samconfig.toml:28-65", "aws/deploy.sh:292-325"],
+    "user_story": "As the platform operator, I want dev/staging/prod to differ only in intended ways and to be reproducible from IaC, so that staging is a faithful prod rehearsal and prod has no surprise drift.",
+    "expected_behavior": "Conditions IsProd/IsDevAuth/UseAuto* drive storage backend, mock datacite, curator bypass, CORS, log level. Staging mirrors prod (AuthMode=production) but uses test DataCite + test search index + ALLOW_ALL_CURATORS=true; prod uses real DataCite + prod index but ALSO ALLOW_ALL_CURATORS=true. quick_deploy pushes Lambda code directly via update-function-code, bypassing CloudFormation.",
+    "inputs": "samconfig per-env parameter_overrides; deploy.sh.",
+    "outputs": "Per-env stacks.",
+    "side_effects": "quick_deploy mutates the deployed Lambda outside CloudFormation (template drift).",
+    "error_paths": "n/a.",
+    "security": "Staging vs prod parity is GOOD for index/datacite, but BAD for authorization: both enable ALLOW_ALL_CURATORS (SEC/AUTH-02). Staging uses USE_MOCK_DATACITE=false against test DataCite (real test API). USE_MOCK_SEARCH is false whenever AuthMode!=dev, so staging/prod write to live Globus Search indexes.",
+    "deployability": "GAPS: (1) quick_deploy (deploy.sh:292-325) updates function code via aws lambda update-function-code, which drifts the deployed artifact from the CloudFormation-managed package; a subsequent sam deploy may revert it or conflict. (2) Prod parameter_overrides on the CLI fully REPLACE samconfig values (deploy.sh:209-236 reconstructs the full set) — a maintenance footgun: forgetting a param silently reverts it to template default (e.g., dropping SearchIndexUUID would point prod at 'not-configured'). (3) SSM params and SES verification are out-of-band manual prerequisites.",
+    "sync_parity": "Staging and prod both write to live indexes (USE_MOCK_SEARCH false), so staging can pollute/observe real test index ab19b80b.",
+    "issues": [
+      {"severity": "med", "dimension": "deployability", "desc": "quick_deploy bypasses CloudFormation (aws lambda update-function-code), creating drift between deployed code and the IaC-managed stack.", "evidence": "aws/deploy.sh:292-325"},
+      {"severity": "low", "dimension": "deployability", "desc": "Prod deploy reconstructs the full parameter_overrides set on the CLI which fully replaces samconfig values; an omitted param silently reverts to a template default (e.g. SearchIndexUUID -> 'not-configured').", "evidence": "aws/deploy.sh:209-236"},
+      {"severity": "low", "dimension": "deployability", "desc": "Both staging and prod set USE_MOCK_SEARCH=false and write to live Globus Search indexes; staging shares index family with prod-test (ab19b80b), risking cross-environment pollution.", "evidence": "aws/template.yaml:234, aws/samconfig.toml:50,64"}
+    ]
+  },
+  {
+    "feature_id": "SYNC-01",
+    "area": "sync-parity",
+    "name": "v1->v2 metadata field mapping (migrate_v1_payload): lossy conversions",
+    "files": ["aws/v2/metadata.py:383-611", "aws/v2/scripts/convert_production_datasets.py:149-195"],
+    "user_story": "As the platform operator, I want the v1 dc/mdf/custom/projects.foundry metadata mapped to the flat v2 schema without losing fields, so that a re-sync from the v1 index reproduces the catalog faithfully and a cutover does not silently drop data.",
+    "expected_behavior": "migrate_v1_payload maps: dc.titles[0].title->title; dc.creators->authors (creatorName or given+family, ORCID from nameIdentifiers, affiliation); dc.descriptions[0]->description; dc.subjects->keywords; dc.publisher->publisher; dc.publicationYear->publication_year; dc.resourceType->resource_type; dc.relatedIdentifiers->related_works; dc.rights/rightsList[0]->license; mdf.organization(s)[0]->organization; mdf.instruments->methods; mdf.facility->facility; mdf.acl->acl; mdf.source_id/source_name->extensions.mdf_*; projects.foundry->ml (via _migrate_foundry); custom->extensions; other projects->extensions.",
+    "inputs": "v1 GMeta content dict.",
+    "outputs": "flat v2 metadata dict.",
+    "side_effects": "None (pure transform).",
+    "error_paths": "convert_entry wraps per-entry exceptions and records them (convert script L227-234).",
+    "security": "n/a.",
+    "deployability": "Pure transform run offline by scripts.",
+    "sync_parity": "LOSSY / DIVERGENT mappings: (1) ONLY descriptions[0] and titles[0] are kept; multi-title (e.g. translated/alternative titles) and multi-description (Methods/SeriesInformation description types) are DROPPED (metadata.py:412-417,447-450). (2) dc.dates, dc.geoLocations, dc.fundingReferences, dc.sizes, dc.formats, dc.language, dc.version are NOT mapped from v1 dc (no handling in migrate_v1_payload) — funding/geo/formats/language present in v1 DataCite blocks are lost unless they were in custom. (3) license only takes rights[0]; multiple rights dropped (metadata.py:496-503). (4) mdf.organizations collapsed to first only (metadata.py:508-511) — multi-org membership lost. (5) author affiliation handling: if both 'affiliation' and 'affiliations' present, 'affiliations' wins, possibly dropping the other (metadata.py:429-433). (6) mdf.scroll_id, mdf.ingest_date(kept on record not metadata), mdf.repositories, mdf.links, services/mrr/jarvis/oqmd blocks are intentionally skipped (convert docstring L11). (7) _migrate_foundry: foundry 'splits' label/n_items kept but type/path may be empty strings; foundry 'classes', 'units' partially mapped; data_format falls back to 'unknown' (metadata.py:558) — a foundry dataset with no data_type yields ml.data_format='unknown', altering ML-readiness semantics. The v2.md design doc states NO lossy conversions, which is INACCURATE.",
+    "issues": [
+      {"severity": "med", "dimension": "sync", "desc": "Multi-valued v1 fields are collapsed to first element and several v1 DataCite fields are not mapped at all (dc.fundingReferences, dc.geoLocations, dc.dates, dc.formats, dc.language, dc.version, extra titles/descriptions/rights), so re-sync from v1 silently drops this metadata.", "evidence": "aws/v2/metadata.py:412-417, aws/v2/metadata.py:447-450, aws/v2/metadata.py:496-511"},
+      {"severity": "low", "dimension": "sync", "desc": "_migrate_foundry defaults data_format to 'unknown' when foundry has no data_type, changing ML-readiness semantics on migrated datasets.", "evidence": "aws/v2/metadata.py:558"},
+      {"severity": "low", "dimension": "deployability", "desc": "Design doc claims no lossy conversion in v1->v2 migration, contradicting the actual field-collapsing behavior (documentation drift).", "evidence": "aws/v2/v2.md:127-135"}
+    ]
+  },
+  {
+    "feature_id": "SYNC-02",
+    "area": "sync-parity",
+    "name": "Search index GMeta divergence: v2 entries omit mdf.resource_type (re-extract/parity break)",
+    "files": ["aws/v2/search_client.py:62-145", "aws/v2/scripts/extract_mdf_production_datasets.py:67-73", "aws/v2/search_client.py:246-296"],
+    "user_story": "As the platform operator, I want v2-written search entries to carry the same discriminating fields as v1 so that the same queries used to extract/identify datasets still work and a re-extract/round-trip is clean.",
+    "expected_behavior": "v1 entries are identified by query mdf.resource_type:\"dataset\" (extract script L73). v2 build_gmeta_entry writes content.mdf and content.dc blocks but does NOT include mdf.resource_type (search_client.py:81-134). v2 query/faceted_search search the entire index with the raw user query and do not filter to resource_type=dataset.",
+    "inputs": "submission record.",
+    "outputs": "GMetaEntry {subject, visible_to, content{mdf,dc,data}}.",
+    "side_effects": "Writes to live index via ingest/batch_ingest.",
+    "error_paths": "ingest failure logged, returns success:false.",
+    "security": "visible_to is set from meta.acl (public -> ['public']) (search_client.py:74-75); non-public datasets get urn:globus identity ACLs — relies on the index honoring visible_to for read auth, but v2 reads with an UNAUTHENTICATED client (search_client.py:237-244), so any visible_to restriction is enforced only at the index/Globus layer, not in v2. Public-only gating is therefore an index-config assumption.",
+    "deployability": "n/a.",
+    "sync_parity": "CONCRETE DIVERGENCES vs v1 index schema: (1) mdf.resource_type ABSENT in v2 entries — a re-run of extract_mdf_production_datasets.py (which filters mdf.resource_type:\"dataset\") against the v2 prod index fed3e94e would return ZERO v2-native datasets; round-trip/parity tooling breaks. (2) Subject scheme: v2 subject = https://materialsdatafacility.org/detail/{source_id} (search_client.py:72), which differs from v1 GMeta subjects (v1 used globus-style/landing subjects); mixing v1 and v2 entries in one index would not collide but also would not dedupe by subject. (3) v2 collapses dc.creators to {name} only (search_client.py:122) — drops givenName/familyName/ORCID/affiliation that v1 entries carried, degrading the dc.creators.name author facet fidelity. (4) v2 omits mdf.scroll_id, mdf.links, mdf.repositories, services/mrr/jarvis/oqmd that v1 entries had. (5) data block reduced to location/size_bytes/file_count vs v1 richer data block. NET: v2 cannot cleanly re-sync FROM its own index using v1 tooling, and the v2 index is NOT field-compatible with consumers expecting the full v1 GMeta schema.",
+    "issues": [
+      {"severity": "high", "dimension": "sync", "desc": "v2 build_gmeta_entry does not write mdf.resource_type, so the v1 extraction query mdf.resource_type:\"dataset\" returns no v2-native entries; any re-extract / dataset-enumeration tooling that filters on resource_type breaks against the v2 index.", "evidence": "aws/v2/search_client.py:81-134, aws/v2/scripts/extract_mdf_production_datasets.py:73"},
+      {"severity": "med", "dimension": "sync", "desc": "v2 search GMeta drops author detail (only dc.creators[].name) and several mdf.* fields v1 carried (scroll_id, links, repositories, services blocks), so the v2 index is not field-compatible with v1 consumers/facets.", "evidence": "aws/v2/search_client.py:120-134"},
+      {"severity": "low", "dimension": "sync", "desc": "Subject scheme differs from v1 (materialsdatafacility.org/detail/{source_id}); a blended v1+v2 index would not dedupe by subject across the two generations.", "evidence": "aws/v2/search_client.py:72"}
+    ]
+  },
+  {
+    "feature_id": "SYNC-03",
+    "area": "sync-parity",
+    "name": "source_id remapping (source_name promoted to source_id) and redirect map",
+    "files": ["aws/v2/scripts/convert_production_datasets.py:149-195", "aws/v2/scripts/convert_production_datasets.py:304-314", "aws/v2/scripts/ingest_converted_datasets.py:110-163"],
+    "user_story": "As the platform operator, I want stable identifiers across the cutover and a redirect map for changed IDs so that old links and DOIs continue to resolve after migration.",
+    "expected_behavior": "convert_entry promotes mdf.source_name to the v2 source_id (version-independent identity) and preserves the original mdf.source_id as legacy_source_id (convert script L182-193). A redirect map old source_id -> new source_id is emitted only with --redirect-map (L304-314). ingest builds versioned_source_id = {source_id}-{version}, sets user_id='v1-migration', status='published', stores legacy_source_id in extensions.",
+    "inputs": "converted_datasets.json.",
+    "outputs": "DynamoDB submission records + search entries.",
+    "side_effects": "Writes published records owned by synthetic user 'v1-migration'.",
+    "error_paths": "validation errors collected; store skip-if-exists (resume).",
+    "security": "All migrated datasets get user_id='v1-migration' (ingest L144) — no real owner, so the original submitter cannot edit/own their migrated dataset post-cutover (ownership parity lost); only curators (i.e., everyone, given ALLOW_ALL_CURATORS) can mutate them.",
+    "deployability": "Idempotent resume via get_submission skip (ingest L240-245). Config auto-resolved from the deployed stack's Lambda env (ingest L58-100) — clean. GMetaList batching for speed (ingest L253-265).",
+    "sync_parity": "DIVERGENCE/RISK: (1) Identity CHANGE: source_id becomes source_name. Any external link/DOI alternateIdentifier referencing the old mdf.source_id no longer matches the v2 source_id unless the redirect map is built (--redirect-map is OPTIONAL and off by default) and actually wired into a redirect at the portal — no redirect enforcement exists in code. (2) version chains (previous_version/root_version) are RECONSTRUCTED heuristically from source_name groups (convert L59-131); single-entry datasets with version>1 use source_name as root (implicit), which may not equal any real prior record. (3) DOI preserved from dc.identifier but version-specific DOIs vs dataset_doi distinction is flattened (ingest sets both doi and dataset_doi to the same value, L159-162). (4) organization omitted when empty to satisfy the org GSI (ingest L153-157) -> those datasets are absent from org-submissions GSI / org browse. Re-sync is reasonably fast (batched, resumable) but NOT clean on identity: the source_id remap requires an external redirect layer that is not implemented.",
+    "issues": [
+      {"severity": "med", "dimension": "sync", "desc": "Migration changes the dataset identity (source_id := source_name) but the old->new redirect map is optional (--redirect-map) and no redirect mechanism exists in the backend, so legacy source_id links/references break after cutover.", "evidence": "aws/v2/scripts/convert_production_datasets.py:182-193, aws/v2/scripts/convert_production_datasets.py:304-314"},
+      {"severity": "med", "dimension": "sync", "desc": "All migrated datasets are owned by synthetic user_id 'v1-migration', so original submitters lose ownership/edit rights to their datasets after cutover.", "evidence": "aws/v2/scripts/ingest_converted_datasets.py:144"},
+      {"severity": "low", "dimension": "sync", "desc": "Datasets with empty organization are omitted from the org-submissions GSI to satisfy DynamoDB key constraints, so they do not appear in org-scoped browse/list.", "evidence": "aws/v2/scripts/ingest_converted_datasets.py:153-157"}
+    ]
+  },
+  {
+    "feature_id": "SYNC-04",
+    "area": "sync-parity",
+    "name": "Cutover/failover/rollback plan completeness",
+    "files": ["aws/v2/v2.md:427-468", "aws/v2/scripts/extract_mdf_production_datasets.py:29", "aws/samconfig.toml:64", "aws/v2/scripts/ingest_converted_datasets.py:271-394"],
+    "user_story": "As the platform operator, I want a documented, repeatable cutover with rollback/dual-write so that switching the public catalog from the v1 index to v2 is reversible and zero-data-loss.",
+    "expected_behavior": "A clean cutover would: extract from v1 (1a57bbe5) read-only, convert, ingest into v2 prod index (fed3e94e), verify parity, flip the portal to v2, with a rollback path back to v1.",
+    "inputs": "v1 index, scripts, deployed v2 stack.",
+    "outputs": "Populated v2 index + Dynamo.",
+    "side_effects": "Ingest writes to live prod index + Dynamo.",
+    "error_paths": "ingest exits non-zero on any validation/store/search error (ingest L386-393).",
+    "security": "n/a beyond AUTH/IAC findings.",
+    "deployability": "The extract is explicitly read-only against v1 (extract docstring L7-8) — good, no risk to v1. Ingest is resumable.",
+    "sync_parity": "GAPS for a fast/clean cutover: (1) NO dual-write: v2 does not write back to the v1 index, and v1 does not write to v2, so during cutover new submissions land in only one system; no consistency bridge. (2) NO rollback plan documented (v2.md has none — confirmed); reverting to v1 after flipping the portal is undefined. (3) NO parity-verification step in the pipeline beyond per-record validate (ingest validates DatasetMetadata parse only, not field-level equality to v1). (4) resource_type omission (SYNC-02) means a post-ingest verification using v1-style queries would under-count. (5) The v2 index for prod (fed3e94e) and the test/staging index (ab19b80b) are wired (samconfig:64) but v2.md still lists 'Confirm the index is publicly readable' as an open checklist item, implying prod index config is not finalized. NET: the pipeline can populate v2 quickly (batched/resumable) but a SAFE cutover (dual-write + verify + rollback) is NOT implemented; a fast failover BACK to v1 is impossible once new data accrues only in v2.",
+    "issues": [
+      {"severity": "high", "dimension": "sync", "desc": "No dual-write, no rollback plan, and no field-level parity verification exist; once the portal cuts over to v2 and new submissions accrue only in v2, failing back to the v1 index would lose post-cutover data.", "evidence": "aws/v2/v2.md:427-468 (no rollback/dual-write section), aws/v2/scripts/ingest_converted_datasets.py:271-394"},
+      {"severity": "low", "dimension": "deployability", "desc": "Design checklist still lists 'set SearchIndexUUID' / 'confirm index publicly readable' as open items, implying prod search index config is not finalized.", "evidence": "aws/v2/v2.md:462-464"}
+    ]
+  },
+  {
+    "feature_id": "SYNC-05",
+    "area": "sync-parity",
+    "name": "API contract drift: FRONTEND_API.md vs code (auth headers, error envelope, fields)",
+    "files": ["aws/v2/FRONTEND_API.md:9-43", "aws/v2/FRONTEND_API.md:61-71", "aws/v2/app/auth.py:29-37", "aws/v2/app/middleware.py:104-147", "aws/v2/app/__init__.py:26"],
+    "user_story": "As a frontend/CLI integrator, I want the documented contract to match the implementation so that clients authenticate, parse errors, and read fields correctly.",
+    "expected_behavior": "FRONTEND_API.md describes the auth headers, error envelope, fields, and versioning the code actually implements.",
+    "inputs": "n/a.",
+    "outputs": "n/a.",
+    "side_effects": "n/a.",
+    "error_paths": "n/a.",
+    "security": "n/a.",
+    "deployability": "Doc-vs-code drift increases integration risk and obscures auth surface.",
+    "sync_parity": "CONTRACT DIVERGENCES: (1) Auth headers: code accepts X-MDF-Token and X-Groups-Token (auth.py:35-36) and the CORS/code list includes X-Globus-Token (__init__.py:26), but FRONTEND_API.md documents only Authorization + X-User-Id/Email/Name; X-MDF-Token/X-Groups-Token are undocumented (the actual group-resolution mechanism is hidden from integrators). (2) Error envelope: doc says 'All responses include success:true|false' (FRONTEND_API.md:63) but the global 500 handler returns {detail, request_id} with NO success key (__init__.py:36-39), and middleware 413/429 return {success, error, request_id} (middleware.py:106-109) — three shapes, partially contradicting the doc. (3) Versioning: doc documents root_version/latest but not previous_version; code/search write previous_version (search_client.py:109-110, metadata.py:147) — undocumented field. (4) ml schema: submit uses ml.keys[{role}] while card response uses input_keys/target_keys/short_name (per FRONTEND_API.md analysis) — asymmetric field naming between write and read. (5) Doc references POST /stream/{id}/download-url (FRONTEND_API.md:330) and snapshot endpoints that are DISABLED in code (__init__.py:67,70; streams router commented out).",
+    "issues": [
+      {"severity": "med", "dimension": "functionality", "desc": "Inconsistent/undocumented error envelopes across handlers (500 -> {detail,request_id}; 413/429 -> {success,error,request_id}) contradicting the doc's 'all responses include success'.", "evidence": "aws/v2/app/__init__.py:36-39, aws/v2/app/middleware.py:106-109, aws/v2/FRONTEND_API.md:63"},
+      {"severity": "low", "dimension": "functionality", "desc": "Auth headers X-MDF-Token / X-Groups-Token (the real group-resolution path) and field previous_version are implemented but undocumented in the API contract.", "evidence": "aws/v2/app/auth.py:35-36, aws/v2/search_client.py:109-110, aws/v2/FRONTEND_API.md:9-43"},
+      {"severity": "low", "dimension": "functionality", "desc": "Doc references endpoints (POST /stream/{id}/download-url, snapshot) that are disabled in code (streams router commented out).", "evidence": "aws/v2/app/__init__.py:67, aws/v2/FRONTEND_API.md:330"}
+    ]
+  }
+]

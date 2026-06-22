@@ -1,0 +1,37 @@
+name: V2 Backend Tests
+
+on:
+  pull_request:
+    branches:
+      - prod
+      - v2-backend-curation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      STORE_BACKEND: sqlite
+      AUTH_MODE: dev
+      USE_MOCK_DATACITE: "true"
+      USE_MOCK_SEARCH: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: aws
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt 2>/dev/null || true
+          pip install fastapi uvicorn mangum pydantic httpx globus-sdk pytest boto3
+
+      - name: Run tests
+        working-directory: aws
+        run: |
+          PYTHONPATH=. pytest v2/test_v2_*.py -v

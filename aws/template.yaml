@@ -1,0 +1,603 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MDF Connect v2 Backend - Single FastAPI Lambda via Mangum
+
+Parameters:
+  Environment:
+    Type: String
+    Default: staging
+    AllowedValues: [staging, prod]
+    Description: Deployment environment
+  AuthMode:
+    Type: String
+    Default: production
+    AllowedValues: [dev, production]
+    Description: "dev = X-User-Id headers (no Globus). production = Globus token introspection."
+  GlobusClientId:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus OAuth client ID. Only needed when AuthMode=production."
+  GlobusClientSecret:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "Globus OAuth client secret. Only needed when AuthMode=production."
+  DataCiteUsername:
+    Type: String
+    Default: "not-configured"
+    Description: "DataCite repository ID for DOI minting."
+  DataCitePassword:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "DataCite repository password."
+  DataCiteApiUrl:
+    Type: String
+    Default: "https://api.test.datacite.org"
+    Description: "DataCite API endpoint."
+  DataCitePrefix:
+    Type: String
+    Default: "10.23677"
+    Description: "DOI prefix for DataCite minting."
+  SearchIndexUUID:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus Search index UUID for v2 production."
+  TestSearchIndexUUID:
+    Type: String
+    Default: "not-configured"
+    Description: "Globus Search index UUID for v2 test/staging."
+  HttpApiThrottleRate:
+    Type: Number
+    Default: 100
+    Description: "API Gateway steady-state request rate per second."
+  HttpApiThrottleBurst:
+    Type: Number
+    Default: 200
+    Description: "API Gateway burst request limit."
+  ApiTimeoutSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 3
+    MaxValue: 30
+    Description: "API Lambda timeout in seconds (bounded to API Gateway integration timeout)."
+  ApiMemorySizeMb:
+    Type: Number
+    Default: 256
+    MinValue: 128
+    MaxValue: 10240
+    Description: "API Lambda memory size in MB."
+  AsyncWorkerTimeoutSeconds:
+    Type: Number
+    Default: 120
+    MinValue: 3
+    MaxValue: 900
+    Description: "Async worker Lambda timeout in seconds."
+  AsyncWorkerMemorySizeMb:
+    Type: Number
+    Default: 256
+    MinValue: 128
+    MaxValue: 10240
+    Description: "Async worker Lambda memory size in MB."
+  ApiReservedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: "Reserved concurrency cap for API Lambda to control runaway spend."
+  AsyncWorkerReservedConcurrency:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    Description: "Reserved concurrency cap for async worker Lambda."
+  AsyncWorkerBatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 10
+    Description: "SQS batch size for async worker event source."
+  AsyncWorkerBatchWindowSeconds:
+    Type: Number
+    Default: 5
+    MinValue: 0
+    MaxValue: 300
+    Description: "SQS maximum batching window to reduce Lambda invoke count."
+  AsyncQueueMessageRetentionSeconds:
+    Type: Number
+    Default: 345600
+    MinValue: 60
+    MaxValue: 1209600
+    Description: "SQS async queue message retention in seconds."
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: "CloudWatch Logs retention period for Lambda log groups."
+  StorageBackend:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "local", "s3", "globus"]
+    Description: "File storage backend. 'auto' selects local for dev, globus for prod."
+  UseMockDatacite:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "true", "false"]
+    Description: "Mock DataCite for DOI minting. 'auto' = true for dev, false for prod."
+  AllowAllCurators:
+    Type: String
+    Default: "auto"
+    AllowedValues: ["auto", "true", "false"]
+    Description: "Allow all users to curate. 'auto' = true for dev, false for prod."
+  CuratorGroupIds:
+    Type: String
+    Default: "3ce2c53e-3752-11e8-891c-0e00fd09bf20"
+    Description: "Comma-separated Globus group UUIDs whose members may curate."
+  RequiredGroupMembership:
+    Type: String
+    Default: "cc192dca-3751-11e8-90c1-0a7c735d220a"
+    Description: "Globus group UUID required to submit datasets."
+  SesFromEmail:
+    Type: String
+    Default: ""
+    Description: "SES-verified sender address for email notifications. Leave blank to disable emails."
+  CuratorEmails:
+    Type: String
+    Default: ""
+    Description: "Comma-separated curator email addresses for new-submission alerts."
+  PortalUrl:
+    Type: String
+    Default: "https://www.materialsdatafacility.org"
+    Description: "Public dataset portal base URL."
+  CurationPortalUrl:
+    Type: String
+    Default: "https://www.materialsdatafacility.org/curation"
+    Description: "Curation review page URL (curators are redirected here)."
+  EnableEmails:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "Set to 'true' to enable SES email notifications. Keep 'false' on staging until SES is configured in the production account."
+  OpenAIApiKey:
+    Type: String
+    Default: "not-configured"
+    NoEcho: true
+    Description: "OpenAI API key. Used for dataset text embeddings (semantic search)."
+  EmbeddingModel:
+    Type: String
+    Default: "text-embedding-3-small"
+    Description: "OpenAI embedding model name."
+  EmbeddingDims:
+    Type: String
+    Default: "1536"
+    Description: "Embedding dimensions. text-embedding-3-small supports 512 / 1024 / 1536."
+  EmbeddingSnapshotPublicUrl:
+    Type: String
+    Default: ""
+    Description: "Optional public HTTPS base URL (CloudFront) for the embeddings snapshot bucket. Leave blank to skip public URLs."
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+  IsDevAuth: !Equals [!Ref AuthMode, dev]
+  UseAutoStorage: !Equals [!Ref StorageBackend, "auto"]
+  UseAutoMockDatacite: !Equals [!Ref UseMockDatacite, "auto"]
+  UseAutoAllowCurators: !Equals [!Ref AllowAllCurators, "auto"]
+  CreateStreamFilesBucket: !Not [!Equals [!Ref AuthMode, dev]]
+  EmailsEnabled: !Equals [!Ref EnableEmails, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  # ===========================================================================
+  # Single Lambda Function (FastAPI + Mangum)
+  # ===========================================================================
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: v2.app.main.handler
+      CodeUri: .
+      Description: MDF Connect v2 API (FastAPI)
+      # Cap the auto-generated execution role to runtime-only permissions, so a
+      # deployer that can create roles can never mint an over-privileged one.
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/mdf-connect-v2-boundary"
+      Timeout: !Ref ApiTimeoutSeconds
+      MemorySize: !Ref ApiMemorySizeMb
+      ReservedConcurrentExecutions: !Ref ApiReservedConcurrency
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          STORE_BACKEND: dynamo
+          ASYNC_DISPATCH_MODE: !If [IsDevAuth, "inline", "sqs"]
+          ASYNC_QUEUE_URL: !Ref AsyncJobsQueue
+          AUTH_MODE: !Ref AuthMode
+          DYNAMO_SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          DYNAMO_STREAMS_TABLE: !Ref StreamsTable
+          STORAGE_BACKEND: !If
+            - UseAutoStorage
+            - !If [IsDevAuth, "local", "globus"]
+            - !Ref StorageBackend
+          GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
+          S3_PREFIX: "streams/"
+          GLOBUS_CLIENT_ID: !Ref GlobusClientId
+          GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
+          USE_MOCK_DATACITE: !If
+            - UseAutoMockDatacite
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref UseMockDatacite
+          DATACITE_USERNAME: !Ref DataCiteUsername
+          DATACITE_PASSWORD: !Ref DataCitePassword
+          DATACITE_API_URL: !Ref DataCiteApiUrl
+          DATACITE_PREFIX: !Ref DataCitePrefix
+          SEARCH_INDEX_UUID: !Ref SearchIndexUUID
+          TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
+          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          ALLOW_ALL_CURATORS: !If
+            - UseAutoAllowCurators
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref AllowAllCurators
+          CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
+          REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
+          CORS_ALLOWED_ORIGINS: !If
+            - IsProd
+            - "https://materialsdatafacility.org,https://app.materialsdatafacility.org"
+            - "*"
+          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          SEARCH_MAX_RESULTS: "50"
+          SEARCH_MAX_DATASET_SCAN: "1000"
+          SEARCH_MAX_STREAM_SCAN: "2000"
+          SES_FROM_EMAIL: !If [EmailsEnabled, !Ref SesFromEmail, ""]
+          CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
+          PORTAL_URL: !Ref PortalUrl
+          CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SES_REGION: !Ref AWS::Region
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          EMBEDDING_DIMS: !Ref EmbeddingDims
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+          EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
+          EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
+      Events:
+        CatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        Root:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubmissionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StreamsTable
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+        - Statement:
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt AsyncJobsQueue.Arn
+        - Statement:
+            Effect: Allow
+            Action:
+              - ses:SendEmail
+            Resource: "*"
+
+  AsyncWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: v2.async_worker.lambda_handler
+      CodeUri: .
+      Description: MDF Connect v2 async job worker
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/mdf-connect-v2-boundary"
+      Timeout: !Ref AsyncWorkerTimeoutSeconds
+      MemorySize: !Ref AsyncWorkerMemorySizeMb
+      ReservedConcurrentExecutions: !Ref AsyncWorkerReservedConcurrency
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          STORE_BACKEND: dynamo
+          ASYNC_DISPATCH_MODE: inline
+          AUTH_MODE: !Ref AuthMode
+          DYNAMO_SUBMISSIONS_TABLE: !Ref SubmissionsTable
+          DYNAMO_STREAMS_TABLE: !Ref StreamsTable
+          STORAGE_BACKEND: !If
+            - UseAutoStorage
+            - !If [IsDevAuth, "local", "globus"]
+            - !Ref StorageBackend
+          GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
+          S3_PREFIX: "streams/"
+          GLOBUS_CLIENT_ID: !Ref GlobusClientId
+          GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
+          USE_MOCK_DATACITE: !If
+            - UseAutoMockDatacite
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref UseMockDatacite
+          DATACITE_USERNAME: !Ref DataCiteUsername
+          DATACITE_PASSWORD: !Ref DataCitePassword
+          DATACITE_API_URL: !Ref DataCiteApiUrl
+          DATACITE_PREFIX: !Ref DataCitePrefix
+          SEARCH_INDEX_UUID: !Ref SearchIndexUUID
+          TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
+          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          ALLOW_ALL_CURATORS: !If
+            - UseAutoAllowCurators
+            - !If [IsDevAuth, "true", "false"]
+            - !Ref AllowAllCurators
+          CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
+          REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
+          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          SES_FROM_EMAIL: !If [EmailsEnabled, !Ref SesFromEmail, ""]
+          CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
+          PORTAL_URL: !Ref PortalUrl
+          CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SES_REGION: !Ref AWS::Region
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          EMBEDDING_DIMS: !Ref EmbeddingDims
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+          EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
+          EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
+      Events:
+        AsyncQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AsyncJobsQueue.Arn
+            BatchSize: !Ref AsyncWorkerBatchSize
+            MaximumBatchingWindowInSeconds: !Ref AsyncWorkerBatchWindowSeconds
+        TransferCleanupSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(6 hours)
+            Description: "Periodic cleanup of stale Globus transfers and ACL rules"
+            Enabled: true
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubmissionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StreamsTable
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
+        - S3CrudPolicy:
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+        - SQSPollerPolicy:
+            QueueName: !GetAtt AsyncJobsQueue.QueueName
+        - Statement:
+            Effect: Allow
+            Action:
+              - ses:SendEmail
+            Resource: "*"
+
+  # ===========================================================================
+  # HTTP API (v2 - cheaper than REST API v1)
+  # ===========================================================================
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Description: MDF Connect v2 API
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref HttpApiThrottleRate
+        ThrottlingBurstLimit: !Ref HttpApiThrottleBurst
+      CorsConfiguration:
+        AllowOrigins: !If
+          - IsProd
+          - - "https://materialsdatafacility.org"
+            - "https://app.materialsdatafacility.org"
+          - - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-User-Id
+          - X-User-Email
+          - X-User-Name
+          - X-Globus-Token
+          - X-MDF-Token
+          - X-Groups-Token
+        AllowCredentials: !If [IsProd, true, false]
+
+  # ===========================================================================
+  # S3 Bucket for Stream File Storage
+  # ===========================================================================
+
+  StreamFilesBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateStreamFilesBucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  # Snapshot of dataset embeddings (Float32 blob + sidecar JSON).
+  # Consumed by the semantic-search endpoint and, optionally, the frontend
+  # for client-side cosine scan. Front the bucket with CloudFront when you
+  # want browsers to read it — content-hashed keys make long cache TTLs safe.
+  EmbeddingsSnapshotBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            MaxAge: 3600
+
+  # ===========================================================================
+  # DynamoDB Tables
+  # ===========================================================================
+
+  AsyncJobsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "mdf-async-jobs-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  AsyncJobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "mdf-async-jobs-${Environment}"
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: !Ref AsyncQueueMessageRetentionSeconds
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AsyncJobsDLQ.Arn
+        maxReceiveCount: 3
+      SqsManagedSseEnabled: true
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApiFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  AsyncWorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AsyncWorkerFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  SubmissionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "mdf-submissions-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: source_id
+          AttributeType: S
+        - AttributeName: version
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: organization
+          AttributeType: S
+        - AttributeName: updated_at
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: source_id
+          KeyType: HASH
+        - AttributeName: version
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: user-submissions
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: updated_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: org-submissions
+          KeySchema:
+            - AttributeName: organization
+              KeyType: HASH
+            - AttributeName: source_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-submissions
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: updated_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  StreamsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "mdf-streams-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: stream_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: updated_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: stream_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user-streams
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: updated_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+# ===========================================================================
+# Outputs
+# ===========================================================================
+
+Outputs:
+  ApiUrl:
+    Description: HTTP API URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+
+  SubmissionsTableName:
+    Description: DynamoDB table for submissions
+    Value: !Ref SubmissionsTable
+
+  StreamsTableName:
+    Description: DynamoDB table for streams
+    Value: !Ref StreamsTable
+
+  AsyncJobsQueueUrl:
+    Description: SQS queue URL for async jobs
+    Value: !Ref AsyncJobsQueue

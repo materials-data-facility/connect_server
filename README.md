@@ -1,107 +1,386 @@
+Who is working on topics 11/12G
+
+
 # MDF Connect
-The Materials Data Facility Connect service is the ETL flow to deeply index datasets into MDF Search. It is not intended to be run by end-users. To submit data to the MDF, visit the [Materials Data Facility](https://materialsdatafacility.org).
 
-# Architecture
-The MDF Connect service is a serverless REST service that is deployed on AWS. 
-It consists of an AWS API Gateway that uses a lambda function to authenticate
-requests against GlobusAuth. If authorised, the endpoints trigger AWS lambda
-functions. Each endpoint is implemented as a lambda function contained in a 
-python file in the [aws/](aws/) directory. The lambda functions are deployed
-via GitHub actions as described in a later section.
+The Materials Data Facility Connect service is the backend for submitting, curating, and publishing datasets to MDF Search. For the Python client, see [connect_client](https://github.com/materials-data-facility/connect_client).
 
-The API Endpoints are:
-* [POST /submit](aws/submit.py): Submits a dataset to the MDF Connect service. This triggers a Globus Automate flow
-* [GET /status](aws/status.py): Returns the status of a dataset submission
-* [POST /submissions](aws/submissions.py): Forms a query and returns a list of submissions
+## v2 Backend
 
-# Globus Automate Flow
-The Globus Automate flow is a series of steps that are triggered by the POST 
-/submit endpoint. The flow is defined using a python dsl that can be found 
-in [automate/minimus_mdf_flow.py](automate/minimus_mdf_flow.py). At a high 
-level the flow:
-1. Notifies the admin that a dataset has been submitted
-2. Checks to see if the data files have been updated or if this is a metadata only submission
-3. If there is a dataset, it starts a globus transfer
-4. Once the transfer is complete it may trigger a curation step if the organization is configured to do so
-5. A DOI is minted if the organization is configured to do so
-6. The dataset is indexed in MDF Search
-7. The user is notified of the completion of the submission
+The v2 backend lives in `aws/v2/` and is a complete rewrite: a single FastAPI application deployed to AWS Lambda via Mangum + SAM. It replaces the old per-endpoint Lambda functions and Terraform deployment.
 
+**Stack**: Python 3.12, FastAPI, Pydantic v2, DynamoDB, Globus HTTPS storage, DataCite DOI minting, Globus Search, AWS SAM.
 
-# Development Workflow
-Changes should be made in a feature branch based off of the dev branch. Create 
-PR and get a friend to review your changes. Once the PR is approved, merge it
-into the dev branch. The dev branch is automatically deployed to the dev
-environment. Once the changes have been tested in the dev environment, create a
-PR from dev to main. Once the PR is approved, merge it into main. The main
-branch is automatically deployed to the prod environment.
+### What it does
 
-# Deployment
-The MDF Connect service is deployed on AWS into development and production
-environments. The automate flow is deployed into the Globus Automate service via
-a second GitHub action.
+- **Dataset submission**: submit → pending_curation → approved (DOI minted) → published (indexed to Globus Search)
+- **Versioning**: update existing datasets with automatic version incrementing, version history via `GET /versions/{source_id}`
+- **Streaming**: create stream → upload files to Globus HTTPS → snapshot to dataset → close with DOI
+- **Curation**: pending list, approve/reject, curator guards
+- **Discovery**: search, dataset cards, citations (BibTeX/APA/RIS), file preview
+- **Auth**: Globus token validation (prod) or `X-User-Id` headers (dev)
 
-## Deploy the Automate Flow
-Changes to the automate flow are deployed via a GitHub action, triggered by the
-push of a new GitHub release. If the release is tagged as "pre-release" it will
-be deployed to the dev environment, otherwise it will be deployed to the prod
-environment.
+### API endpoints (29 total)
 
-The flow IDs for dev and prod are stored in 
-[automate/mdf_dev_flow_info.json](automate/mdf_dev_flow_info.json) and 
-[automate/mdf_prod_flow_info.json](automate/mdf_prod_flow_info.json) 
-respectively. The flow ID is stored in the `flow_id` key.
+| Group | Endpoints |
+|-------|-----------|
+| **Submissions** | `POST /submit`, `GET /versions/{id}`, `GET /status/{id}`, `POST /status/update`, `GET /submissions` |
+| **Streams** | `POST /stream/create`, `POST ../append`, `GET /stream/{id}`, `POST ../close`, `POST ../snapshot` |
+| **Files** | `POST ../upload`, `POST ../upload-url`, `POST ../upload-confirm`, `POST ../download-url`, `GET ../files` |
+| **Curation** | `GET /curation/pending`, `GET /curation/{id}`, `POST ../approve`, `POST ../reject` |
+| **Search** | `GET /search` |
+| **Cards** | `GET /card/{id}`, `GET /citation/{id}` |
+| **Preview** | `GET /stream/../preview`, `GET /preview/{id}`, `GET ../files`, `GET ../files/{path}`, `GET ../sample` |
+| **Health** | `GET /health` |
 
-### Deploy a Dev Release of the Flow
-1. Merge your changes into the `dev` branch
-2. On the GitHub website, click on the _Release_ link on the repo home page.
-3. Click on the _Draft a new release_ button
-4. Fill in the tag version as `X.Y.Z-alpha.1` where X.Y.Z is the version number. You can use subsequent alpha tags if you need to make further changes.
-5. Fill in the release title and description
-6. Select `dev` as the Target branch
-7. Check the _Set as a pre-release_ checkbox
-8. Click the _Publish release_ button
+### Deployment architecture
 
-### Deploy a Prod Release of the Flow
-1. Merge your changes into the `main` branch
-2. On the GitHub website, click on the _Release_ link on the repo home page.
-3. Click on the _Draft a new release_ button
-4. Fill in the tag version as `X.Y.Z` where X.Y.Z is the version number. 
-5. Fill in the release title and description
-6. Select `main` as the Target branch
-7. Check the _Set as the latest release_ checkbox
-8. Click the _Publish release_ button
+```
+Client (mdf_agent CLI / SDK)              AWS us-east-1
+─────────────────────────────             ────────────────
+Bearer: auth.globus.org token ──────────> API Gateway (HttpApi)
+X-Globus-Token: data token                    │
+                                              ▼
+                                    ┌─── ApiFunction (Lambda) ───┐
+                                    │  FastAPI + Mangum           │
+                                    │  Auth, Submit, Stream,      │
+                                    │  Search, Curation, Cards    │
+                                    └──────┬─────────┬────────────┘
+                                           │         │
+                                    ┌──────┴───┐  ┌──┴──────────────┐
+                                    │ DynamoDB  │  │  SQS            │
+                                    │ submissions│  │  async-jobs     │
+                                    │ streams   │  └──┬──────────────┘
+                                    └───────────┘     │
+                                                      ▼
+                                    ┌─── AsyncWorkerFunction (Lambda) ──┐
+                                    │  DOI minting (DataCite)            │
+                                    │  Globus Search ingest              │
+                                    │  Dataset profiling                 │
+                                    └────────────────────────────────────┘
+```
 
-You can verify deployment of the flows in the 
-[Globus Automate Console](https://app.globus.org/flows/library).
+### Internal service architecture
 
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  FastAPI Application  (v2/app/__init__.py)                                  │
+│                                                                             │
+│  Middleware: CORS, request logging                                          │
+│                                                                             │
+│  ┌─── Routers (v2/app/routers/) ─────────────────────────────────────────┐  │
+│  │                                                                       │  │
+│  │  submissions.py          streams.py           files.py                │  │
+│  │  ├ POST /submit          ├ POST /stream/create ├ POST ../upload       │  │
+│  │  ├ GET  /versions/{id}   ├ POST ../append      ├ POST ../upload-url   │  │
+│  │  ├ GET  /status/{id}     ├ GET  /stream/{id}   ├ POST ../upload-confirm│ │
+│  │  ├ POST /status/update   ├ POST ../close       ├ POST ../download-url │  │
+│  │  └ GET  /submissions     └ POST ../snapshot    └ GET  ../files        │  │
+│  │                                                                       │  │
+│  │  curation.py             search.py    cards.py       preview.py       │  │
+│  │  ├ GET  /curation/pending├ GET /search├ GET /card/{id}├ GET stream..  │  │
+│  │  ├ GET  /curation/{id}   │            └ GET /cite/{id}├ GET dataset.. │  │
+│  │  ├ POST ../approve       │                            └ GET ../sample │  │
+│  │  └ POST ../reject        │                                            │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│         │                │                │                                  │
+│         ▼                ▼                ▼                                  │
+│  ┌── Auth ──────┐ ┌─ Dependencies ─┐ ┌── Helpers ──────────────────────┐   │
+│  │  (auth.py)   │ │  (deps.py)     │ │  metadata.py   DatasetMetadata  │   │
+│  │              │ │                │ │  citation.py   BibTeX/APA/RIS   │   │
+│  │  dev mode:   │ │  Singletons:   │ │  search.py     full-text search │   │
+│  │   X-User-Id  │ │  submission    │ │  dataset_card.py  card builder  │   │
+│  │              │ │  store         │ │  preview.py    file previews    │   │
+│  │  production: │ │  stream store  │ │  profiler.py   dataset profiles │   │
+│  │   Globus     │ │  storage       │ │  curation.py   DOI + approve    │   │
+│  │   userinfo() │ │  backend       │ │  datacite.py   DOI minting      │   │
+│  └──────────────┘ └──────┬─────────┘ └─────────────────────────────────┘   │
+│                          │                                                  │
+└──────────────────────────┼──────────────────────────────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+┌─── Store Layer ──┐ ┌─ Stream Store ─┐ ┌── Storage Layer ──────────────────┐
+│  (store.py)      │ │(stream_store.py)│ │  (storage/)                      │
+│                  │ │                │ │                                   │
+│  SubmissionStore │ │  StreamStore   │ │  StorageBackend                   │
+│  (abstract)      │ │  (abstract)    │ │  (abstract)                      │
+│    │             │ │    │           │ │    │                              │
+│    ├─ Dynamo     │ │    ├─ Dynamo   │ │    ├─ GlobusHTTPSStorage (prod)  │
+│    │  SubmStore  │ │    │  StrmStore│ │    │  PUT/GET to data.mdf.org    │
+│    │             │ │    │           │ │    │                              │
+│    └─ Sqlite     │ │    └─ Sqlite   │ │    ├─ S3Storage                  │
+│       SubmStore  │ │       StrmStore│ │    │  AWS S3 bucket              │
+│                  │ │                │ │    │                              │
+│  Operations:     │ │  Operations:   │ │    └─ LocalStorage (dev)         │
+│  put, get, list  │ │  create, get   │ │       Local filesystem           │
+│  upsert, update  │ │  append, close │ │                                  │
+│  list_by_user    │ │  update_meta   │ │  Operations:                     │
+│  list_by_org     │ │  list_all      │ │  store_file, get_file            │
+│  list_by_status  │ │                │ │  get_upload_url (presigned)      │
+│  update_profile  │ │                │ │  get_download_url                │
+│  scan_transfers  │ │                │ │  list_files                      │
+└──────────────────┘ └────────────────┘ └──────────────────────────────────┘
 
-## Deploy the MDF Connect Service
-The MDF Connect service is deployed via a GitHub action. The action is triggered
-by a push to the dev or main branch. The action will deploy the service to the
-dev or prod environment respectively.
+          ┌──────────────────────────────────────────────┐
+          │  Async Job Dispatch  (async_jobs.py)          │
+          │                                              │
+          │  Job types:                                  │
+          │  ├ profile_submission  (scan data files)     │
+          │  ├ mint_submission_doi (DataCite API)        │
+          │  ├ mint_stream_doi    (DataCite API)         │
+          │  ├ publish_submission (search index + DOI)   │
+          │  ├ transfer_data      (Globus Transfer)      │
+          │  └ cleanup_transfers  (ACL cleanup)          │
+          │                                              │
+          │  Dispatchers:                                │
+          │  ├ InlineJobDispatcher   (dev: sync)         │
+          │  ├ SQSJobDispatcher      (prod: async)       │
+          │  └ SqliteJobDispatcher   (test: queued)      │
+          └──────────────────────────────────────────────┘
+```
 
-## Updating Schemas
-Schemas and the MDF organization database are managed in the automate branch
-of the [Data Schemas Repo](https://github.com/materials-data-facility/data-schemas/tree/automate).
+### Data flow: dataset submission to publication
 
-The schema is deployed into the docker images used to serve up the lambda 
-functions. 
+```
+Researcher                    CLI/SDK                    Backend                    External
+──────────                    ───────                    ───────                    ────────
+    │                            │                          │                          │
+    ├─ mdf publish ─────────────>│                          │                          │
+    │                            ├─ upload files (HTTPS PUT)│─────────────────────────>│ Globus
+    │                            │                          │                          │ Storage
+    │                            ├─ POST /submit ──────────>│                          │
+    │                            │                          ├─ validate metadata       │
+    │                            │                          ├─ generate source_id      │
+    │                            │                          ├─ version (1.0 or +0.1)   │
+    │                            │                          ├─ store (pending_curation) │
+    │                            │                          ├─ enqueue profile job ────>│ Async
+    │                            │<── {source_id, version} ─┤                          │ Worker
+    │                            │                          │                          │
+    │                            │                          │       Profile job runs:   │
+    │                            │                          │       scan files, build   │
+    │                            │                          │       schema + stats      │
+    │                            │                          │                          │
+Curator                          │                          │                          │
+──────                           │                          │                          │
+    ├─ mdf approve ─────────────>│                          │                          │
+    │                            ├─ POST /curation/{id}/approve ─>│                    │
+    │                            │                          ├─ update status: approved  │
+    │                            │                          ├─ enqueue publish job ────>│ Async
+    │                            │<── {success, doi} ───────┤                          │ Worker
+    │                            │                          │                          │
+    │                            │                          │       Publish job runs:   │
+    │                            │                          │       mint DOI (DataCite) │
+    │                            │                          │       index (Globus Search)│
+    │                            │                          │       status → published  │
+```
 
-## Reviewing Logs
-- [Dev Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Flambda$252FMDF-Connect2-submit-dev/log-events/)
-- [Prod Logs](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/$252Faws$252Flambda$252FMDF-Connect2-submit-prod/log-events/)
+## Prerequisites
 
+```bash
+# AWS SAM CLI
+brew install aws-sam-cli   # macOS
+# or: pip install aws-sam-cli
 
-# Running Tests
-To run the tests first make sure that you are running python 3.7.10. Then install the dependencies:
+# AWS credentials
+aws configure
 
-    $ cd aws/tests
-    $ pip3 install -r requirements-test.txt
+# Verify
+aws sts get-caller-identity
+```
 
-Now you can run the tests using the command:
+## Environments
 
-    $ PYTHONPATH=.. python -m pytest --ignore schemas
+| Environment | Stack | Auth | DataCite | Search | Curators |
+|-------------|-------|------|----------|--------|----------|
+| **dev** | `mdf-connect-v2-dev` | `X-User-Id` headers | Mock | Mock | All users |
+| **staging** | `mdf-connect-v2-staging` | Globus tokens | Test API (`Globus.TEST`) | Test index | All users |
+| **prod** | `mdf-connect-v2-prod` | Globus tokens | Test API (switch to real later) | Test index (switch to real later) | All users (switch to group-based later) |
 
-# Support
+All environments are fully separate CloudFormation stacks with their own DynamoDB tables, Lambda functions, API Gateway, and SQS queues.
+
+## Deploying
+
+### Dev (no external dependencies)
+
+```bash
+cd aws
+sam build && ./deploy.sh dev
+```
+
+This creates a self-contained stack. No Globus credentials needed — auth uses `X-User-Id` headers, storage is local, DataCite is mocked.
+
+### Staging
+
+Requires Globus credentials stored in AWS SSM Parameter Store:
+
+```bash
+# One-time: store Globus credentials (already done for staging)
+aws ssm put-parameter --name /mdf/globus-client-id \
+  --value "YOUR_CLIENT_ID" --type String --region us-east-1
+aws ssm put-parameter --name /mdf/globus-client-secret \
+  --value "YOUR_CLIENT_SECRET" --type SecureString --region us-east-1
+```
+
+DataCite and Search credentials are in `samconfig.toml` for staging. Then:
+
+```bash
+cd aws
+sam build && ./deploy.sh staging
+```
+
+### Production
+
+Same SSM prerequisites as staging. The prod config in `samconfig.toml` currently uses **test credentials** (DataCite test API, test search index) so the stack can be deployed and validated before switching to real credentials.
+
+```bash
+cd aws
+sam build && ./deploy.sh prod
+```
+
+#### Switching prod to real credentials
+
+When ready to go live, update `samconfig.toml` `[prod]` section:
+
+```toml
+[prod.deploy.parameters]
+parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=false DataCiteUsername=REAL_USERNAME DataCitePassword=REAL_PASSWORD DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=REAL_INDEX_UUID TestSearchIndexUUID=TEST_INDEX_UUID"
+```
+
+Or store DataCite credentials in SSM (deploy.sh will pick them up automatically):
+
+```bash
+aws ssm put-parameter --name /mdf/datacite-username \
+  --value "REAL_USERNAME" --type String --region us-east-1
+aws ssm put-parameter --name /mdf/datacite-password \
+  --value "REAL_PASSWORD" --type SecureString --region us-east-1
+aws ssm put-parameter --name /mdf/datacite-api-url \
+  --value "https://api.datacite.org" --type String --region us-east-1
+aws ssm put-parameter --name /mdf/datacite-prefix \
+  --value "10.18126" --type String --region us-east-1
+```
+
+Then redeploy: `sam build && ./deploy.sh prod`
+
+### Quick deploy (code only, skips CloudFormation)
+
+For Lambda code changes that don't touch infrastructure:
+
+```bash
+cd aws
+./deploy.sh quick staging   # or: quick prod
+```
+
+### Local development
+
+```bash
+cd aws
+./deploy.sh local
+# Server starts at http://127.0.0.1:8080
+# Uses SQLite, local storage, mock DataCite, dev auth
+```
+
+## After deploying
+
+```bash
+# Get the API URL
+./deploy.sh status staging
+
+# Tail Lambda logs
+./deploy.sh logs staging
+
+# Health check
+curl https://YOUR_API_URL/health
+
+# Full teardown (removes stack, keeps DynamoDB tables)
+./deploy.sh teardown dev
+```
+
+## SSM Parameters
+
+| Parameter | Required for | Description |
+|-----------|-------------|-------------|
+| `/mdf/globus-client-id` | staging, prod | Globus confidential app client ID |
+| `/mdf/globus-client-secret` | staging, prod | Globus confidential app client secret |
+| `/mdf/datacite-username` | prod (optional) | DataCite repository ID — overrides samconfig |
+| `/mdf/datacite-password` | prod (optional) | DataCite repository password |
+| `/mdf/datacite-api-url` | prod (optional) | `https://api.datacite.org` for real DOIs |
+| `/mdf/datacite-prefix` | prod (optional) | DOI prefix (e.g., `10.18126`) |
+
+## Running tests
+
+Backend tests run in CI (GitHub Actions) on every pull request to `master` or `mdf-agent`. No AWS credentials are needed — all tests use SQLite, local storage, and mock services.
+
+```bash
+cd aws
+
+# All v2 tests
+python -m pytest v2/test_v2_*.py -v
+
+# Individual suites
+python -m pytest v2/test_v2_publish_pipeline.py -v   # Full publish pipeline
+python -m pytest v2/test_v2_hardening.py -v           # Security hardening
+python -m pytest v2/test_v2_integration.py -v         # Integration tests
+python -m pytest v2/test_v2_versioning.py -v          # Dataset versioning
+python -m pytest v2/test_v2_async_jobs.py -v          # Async job dispatch
+```
+
+## Environment variables
+
+For local development, set these in your shell or a `.env` file (requires `pip install python-dotenv`). The `.env` file is loaded automatically when running `python -m v2.app.main`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Core** | | |
+| `STORE_BACKEND` | `dynamo` | `sqlite` (dev) or `dynamo` (prod) |
+| `SQLITE_PATH` | `/tmp/mdf_connect_v2.db` | Database path when using SQLite |
+| `AUTH_MODE` | `dev` | `dev` (X-User-Id headers) or `production` (Globus tokens) |
+| `ASYNC_DISPATCH_MODE` | `inline` | `inline` (sync), `sqs` (prod), or `sqlite` (test) |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| **Storage** | | |
+| `STORAGE_BACKEND` | `local` | `local`, `s3`, or `globus` |
+| `FILE_STORE_PATH` | `/tmp/mdf_files` | Filesystem path when `STORAGE_BACKEND=local` |
+| `S3_BUCKET` | — | S3 bucket when `STORAGE_BACKEND=s3` |
+| `GLOBUS_ENDPOINT_ID` | NCSA UUID | Globus endpoint when `STORAGE_BACKEND=globus` |
+| `GLOBUS_HTTPS_SERVER` | `data.materialsdatafacility.org` | HTTPS hostname for Globus storage |
+| **Auth** | | |
+| `LOCAL_USER_ID` | `local-user` | Dev-mode user identity |
+| `LOCAL_USER_EMAIL` | `local@example.com` | Dev-mode user email |
+| `GLOBUS_CLIENT_ID` | — | Globus confidential app client ID (prod) |
+| `GLOBUS_CLIENT_SECRET` | — | Globus confidential app client secret (prod) |
+| `ALLOW_ALL_CURATORS` | `false` | `true` lets all users curate (dev only) |
+| `CURATOR_USER_IDS` | — | Comma-separated Globus user IDs |
+| `CURATOR_GROUP_IDS` | — | Comma-separated Globus group UUIDs |
+| **DataCite** | | |
+| `USE_MOCK_DATACITE` | `false` | `true` for mock DOI minting (dev/test) |
+| `DATACITE_USERNAME` | — | DataCite repository ID |
+| `DATACITE_PASSWORD` | — | DataCite repository password |
+| `DATACITE_PREFIX` | `10.23677` | DOI prefix |
+| `DATACITE_TEST_MODE` | `true` | Use DataCite test API |
+| **Search** | | |
+| `USE_MOCK_SEARCH` | `false` | `true` for mock search (dev/test) |
+| `SEARCH_INDEX_UUID` | — | Production Globus Search index |
+| `TEST_SEARCH_INDEX_UUID` | — | Test Globus Search index |
+| **Limits** | | |
+| `MAX_SUBMIT_METADATA_BYTES` | `262144` | Max metadata payload size |
+| `MAX_SUBMIT_DATA_SOURCES` | `2000` | Max data sources per submission |
+| `MAX_SUBMIT_AUTHORS` | `1000` | Max authors per submission |
+| `MAX_STREAM_APPEND_COUNT` | `10000` | Max records per stream append |
+| `CORS_ALLOWED_ORIGINS` | `*` | CORS allowed origins |
+
+## Key configuration files
+
+| File | Purpose |
+|------|---------|
+| `aws/template.yaml` | SAM/CloudFormation template — Lambda, API Gateway, DynamoDB, SQS, S3 |
+| `aws/samconfig.toml` | Per-environment deploy config (dev, staging, prod) |
+| `aws/deploy.sh` | Deploy script — `dev`, `staging`, `prod`, `quick`, `local`, `teardown`, `logs`, `status` |
+| `aws/requirements.txt` | Python dependencies bundled into Lambda |
+
+## v1 (legacy)
+
+The v1 system (`aws/submit.py`, `aws/status.py`, `aws/automate_manager.py`, `infra/`) uses per-endpoint Lambda functions deployed via Terraform and GitHub Actions, orchestrated by Globus Automate Flows. It remains operational on the `prod` branch. The v2 backend runs on completely separate infrastructure (different stack name, tables, API Gateway) and can be deployed in parallel.
+
+## Support
+
 This work was performed under financial assistance award 70NANB14H012 from U.S. Department of Commerce, National Institute of Standards and Technology as part of the [Center for Hierarchical Material Design (CHiMaD)](http://chimad.northwestern.edu). This work was performed under the following financial assistance award 70NANB19H005 from U.S. Department of Commerce, National Institute of Standards and Technology as part of the Center for Hierarchical Materials Design (CHiMaD). This work was also supported by the National Science Foundation as part of the [Midwest Big Data Hub](http://midwestbigdatahub.org) under NSF Award Number: 1636950 "BD Spokes: SPOKE: MIDWEST: Collaborative: Integrative Materials Design (IMaD): Leverage, Innovate, and Disseminate".

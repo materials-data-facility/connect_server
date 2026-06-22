@@ -1,0 +1,77 @@
+[
+  {
+    "check": "SYNC-02 resource_type written",
+    "verdict": "PASS",
+    "evidence": "mdf.resource_type='dataset'"
+  },
+  {
+    "check": "INFRA-06 source_name preserved from v1 extensions",
+    "verdict": "PASS",
+    "evidence": "mdf.source_name='pub_42_smith' (was corrupted to 'mdf' by rsplit before)"
+  },
+  {
+    "check": "INFRA-06 native source_name not corrupted",
+    "verdict": "PASS",
+    "evidence": "mdf.source_name='mdf-deadbeefcafe' (full stable id, not 'mdf')"
+  },
+  {
+    "check": "INFRA-04 datacite raises (no silent mock) when USE_MOCK_DATACITE=false + no creds",
+    "verdict": "PASS",
+    "evidence": "raised RuntimeError=True"
+  },
+  {
+    "check": "INFRA-04 auto/unset still falls back to mock (dev unaffected)",
+    "verdict": "PASS",
+    "evidence": "auto -> MockDataCiteClient"
+  },
+  {
+    "check": "SRCH-03 POST /embed requires auth",
+    "verdict": "PASS",
+    "evidence": "/embed unauth -> 401"
+  },
+  {
+    "check": "SRCH-02 GET /search/semantic requires auth",
+    "verdict": "PASS",
+    "evidence": "/search/semantic unauth -> 401"
+  },
+  {
+    "check": "Public keyword /search still anonymous",
+    "verdict": "PASS",
+    "evidence": "/search unauth -> 200"
+  },
+  {
+    "check": "SRCH-01 _is_public_dataset(public)",
+    "verdict": "PASS",
+    "evidence": "acl=[public] -> public"
+  },
+  {
+    "check": "SRCH-01 _is_public_dataset(restricted)",
+    "verdict": "PASS",
+    "evidence": "acl=[identity] -> not public"
+  },
+  {
+    "check": "SRCH-01 _is_public_dataset(no acl defaults public)",
+    "verdict": "PASS",
+    "evidence": "no acl -> public"
+  },
+  {
+    "check": "SRCH-01 fallback returns public dataset",
+    "verdict": "PASS",
+    "evidence": "public mdf-55c49a23671b4b8195e86b052cabf58a in results=True"
+  },
+  {
+    "check": "SRCH-01 fallback EXCLUDES restricted dataset",
+    "verdict": "PASS",
+    "evidence": "restricted mdf-845f20ed33c241d485459a87a5ee6d30 excluded=True"
+  },
+  {
+    "check": "CUR-03 publish aborted (status != published) when search ingest fails",
+    "verdict": "PASS",
+    "evidence": "approve->200; final status='publish_failed' (expected NOT 'published')"
+  },
+  {
+    "check": "CURATION-07 approve stores dataset_mdata as JSON string (Dynamo-consistent)",
+    "verdict": "PASS",
+    "evidence": "approve now json.dumps dataset_mdata"
+  }
+]
