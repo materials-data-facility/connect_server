@@ -264,6 +264,103 @@ rights without group membership — e.g. a break-glass admin if the groups-token
 fails — add their Globus user id (`sub`) to `CuratorUserIds` in the `[prod]`
 `parameter_overrides` (comma-separated).
 
+### Custom domain (`api.materialsdatafacility.org`)
+
+The CLI and SDK point at `https://api.materialsdatafacility.org` in prod (and
+`https://api-staging.materialsdatafacility.org` for staging). The stack creates that
+hostname only when both parameters below are set — otherwise nothing changes and the
+`https://{apiId}.execute-api.us-east-1.amazonaws.com/{stage}` URL is the only entry
+point. Adding the domain is **additive**: the execute-api URL keeps working afterwards.
+
+| Parameter | Example | Notes |
+|-----------|---------|-------|
+| `ApiCustomDomainName` | `api.materialsdatafacility.org` | The public hostname |
+| `ApiCustomDomainCertArn` | `arn:aws:acm:us-east-1:123456789012:certificate/…` | ACM cert for that hostname, **in this stack's region** |
+
+**1. Request the ACM certificate.** HTTP API (API Gateway v2) custom domains are
+`REGIONAL` only, so the certificate must live in the *same region as the stack*
+(`us-east-1` here). The `us-east-1`-only rule people remember applies to
+edge-optimized REST API domains and CloudFront, not to this one — for MDF both happen
+to be `us-east-1`, so one cert in `us-east-1` satisfies either reading.
+
+```bash
+aws acm request-certificate \
+  --domain-name api.materialsdatafacility.org \
+  --validation-method DNS \
+  --region us-east-1
+
+# Print the CNAME that proves ownership, then create it in DNS:
+aws acm describe-certificate --region us-east-1 \
+  --certificate-arn arn:aws:acm:us-east-1:ACCOUNT:certificate/UUID \
+  --query 'Certificate.DomainValidationOptions[].ResourceRecord'
+```
+
+Wait for `Status: ISSUED` — CloudFormation fails to create the domain with a
+`PENDING_VALIDATION` certificate.
+
+**2. Set the two parameters** in `aws/samconfig.toml` under `[prod.deploy.parameters]`
+(commented placeholders are already there) and deploy:
+
+```bash
+cd aws
+sam build && ./deploy.sh prod
+```
+
+**3. Create the DNS record.** The stack deliberately does **not** create Route53
+records — the `materialsdatafacility.org` zone may not live in this AWS account. Read
+the DNS target from the stack outputs (`./deploy.sh prod` prints it too):
+
+```bash
+aws cloudformation describe-stacks --stack-name mdf-connect-v2-prod \
+  --region us-east-1 \
+  --query 'Stacks[0].Outputs[?starts_with(OutputKey, `ApiCustomDomain`)]' --output table
+```
+
+| Output | Use |
+|--------|-----|
+| `ApiCustomDomainRegionalDomainName` | `d-xxxx.execute-api.us-east-1.amazonaws.com` — the CNAME / alias target |
+| `ApiCustomDomainRegionalHostedZoneId` | Only needed for a Route53 alias (`AliasTarget.HostedZoneId`) |
+| `ApiCustomDomainUrl` | `https://api.materialsdatafacility.org` |
+
+- **External DNS provider:** create a `CNAME` from `api.materialsdatafacility.org` to
+  the `ApiCustomDomainRegionalDomainName` value.
+- **Route53 in this account:** create an `A`/`AAAA` alias record pointing at that same
+  regional domain name with the regional hosted zone id.
+
+**4. Verify** once DNS propagates:
+
+```bash
+curl https://api.materialsdatafacility.org/health
+```
+
+Paths on the custom domain drop the stage prefix: the mapping has no base path, so
+`https://api.materialsdatafacility.org/health` corresponds to
+`https://{apiId}.execute-api.us-east-1.amazonaws.com/prod/health`.
+
+### Alarms and monitoring
+
+Set `AlarmEmail` (in the environment's `parameter_overrides`) to create an SNS topic
+plus CloudWatch alarms. Leave it blank and no monitoring resources are created.
+**AWS emails a subscription confirmation link once — it must be clicked, or the topic
+delivers nothing.** All alarms treat missing data as `notBreaching` (an idle stack is
+not an incident) and notify on both ALARM and OK.
+
+| Alarm | Condition |
+|-------|-----------|
+| `api-errors` | `ApiFunction` Lambda `Errors` > 0 for 2 consecutive 5-min periods |
+| `async-worker-errors` | `AsyncWorkerFunction` `Errors` > 0 for 2 consecutive 5-min periods |
+| `async-dlq-not-empty` | Any visible message in the async-jobs DLQ (jobs dropped after 3 attempts) |
+| `async-queue-backlog` | Oldest queued async job older than 900 s (worker stalled or throttled) |
+| `{submissions,streams}-{read,write}-throttles` | DynamoDB `ReadThrottleEvents` / `WriteThrottleEvents` > 0 |
+| `{submissions,streams}-system-errors` | DynamoDB `SystemErrors` > 0 (service-side faults) |
+
+```bash
+# Alarm state at a glance
+aws cloudwatch describe-alarms --region us-east-1 \
+  --alarm-name-prefix mdf-connect-v2-prod \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
+```
+
 ### Quick deploy (code only, skips CloudFormation)
 
 For Lambda code changes that don't touch infrastructure:

@@ -2,7 +2,7 @@
 
 Complete API contract for building a frontend against the MDF Connect v2 backend. Every endpoint, request shape, and response shape is documented here.
 
-**Base URL (staging):** `https://hjccjf3eqg.execute-api.us-east-1.amazonaws.com/staging`
+**Base URL (staging):** `https://3xicgt0g7l.execute-api.us-east-1.amazonaws.com/staging`
 
 ---
 

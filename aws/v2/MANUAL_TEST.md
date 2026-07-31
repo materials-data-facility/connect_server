@@ -4,11 +4,11 @@
 1. Deploy updated code to staging: `cd cs/aws && ./deploy.sh quick staging`
 2. 904 production datasets are already ingested (DynamoDB + Globus Search)
 
-**Staging API:** `https://hjccjf3eqg.execute-api.us-east-1.amazonaws.com/staging`
+**Staging API:** `https://3xicgt0g7l.execute-api.us-east-1.amazonaws.com/staging`
 
 Set a shorthand:
 ```bash
-API=https://hjccjf3eqg.execute-api.us-east-1.amazonaws.com/staging
+API=https://3xicgt0g7l.execute-api.us-east-1.amazonaws.com/staging
 ```
 
 ---

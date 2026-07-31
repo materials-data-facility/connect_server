@@ -186,6 +186,18 @@ Parameters:
     Type: String
     Default: ""
     Description: "owner/repo hosting the sync workflow, e.g. 'materials-data-facility/connect_server'. Leave blank to disable the POST /admin/sync trigger."
+  ApiCustomDomainName:
+    Type: String
+    Default: ""
+    Description: "Custom API hostname, e.g. api.materialsdatafacility.org (prod) or api-staging.materialsdatafacility.org (staging). Only used when ApiCustomDomainCertArn is also set."
+  ApiCustomDomainCertArn:
+    Type: String
+    Default: ""
+    Description: "ACM certificate ARN for ApiCustomDomainName. Must live in THIS stack's region (HTTP API custom domains are REGIONAL). Leave blank to skip the custom domain entirely; the execute-api URL always works."
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: "Email address subscribed to the CloudWatch alarm SNS topic. Leave blank to skip alarms/SNS. The subscription must be confirmed from the address's inbox once."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
@@ -195,6 +207,8 @@ Conditions:
   UseAutoAllowCurators: !Equals [!Ref AllowAllCurators, "auto"]
   CreateStreamFilesBucket: !Not [!Equals [!Ref AuthMode, dev]]
   EmailsEnabled: !Equals [!Ref EnableEmails, "true"]
+  HasCustomDomain: !Not [!Equals [!Ref ApiCustomDomainCertArn, ""]]
+  HasAlarms: !Not [!Equals [!Ref AlarmEmail, ""]]
 
 Globals:
   Function:
@@ -435,6 +449,44 @@ Resources:
         AllowCredentials: !If [IsProd, true, false]
 
   # ===========================================================================
+  # Custom domain (optional, additive)
+  #
+  # Created only when ApiCustomDomainCertArn is set; the default
+  # https://{apiId}.execute-api.{region}.amazonaws.com/{stage} URL keeps working
+  # either way. HTTP APIs only support REGIONAL custom domains, so the ACM
+  # certificate must be issued in the same region as this stack (us-east-1).
+  #
+  # DNS is intentionally NOT managed here: the materialsdatafacility.org zone
+  # may live outside this AWS account. After deploying, point the hostname at
+  # the ApiCustomDomainRegionalDomainName / ApiCustomDomainRegionalHostedZoneId
+  # outputs (Route53 alias, or a CNAME with an external DNS provider).
+  # ===========================================================================
+
+  ApiDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref ApiCustomDomainName
+      DomainNameConfigurations:
+        - CertificateArn: !Ref ApiCustomDomainCertArn
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  # Maps https://<custom domain>/ to the existing HttpApi stage (no base path),
+  # so paths are identical to the execute-api URL minus the /{stage} prefix.
+  # DependsOn targets the stage that SAM generates for HttpApi (StageName is an
+  # intrinsic, so the generated logical id is "HttpApiStage") — an ApiMapping
+  # create fails if the stage does not exist yet.
+  ApiDomainMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasCustomDomain
+    DependsOn: HttpApiStage
+    Properties:
+      ApiId: !Ref HttpApi
+      DomainName: !Ref ApiDomainName
+      Stage: !Ref Environment
+
+  # ===========================================================================
   # S3 Bucket for Stream File Storage
   # ===========================================================================
 
@@ -593,6 +645,260 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
+  # ===========================================================================
+  # Observability: CloudWatch alarms -> SNS email
+  #
+  # Everything here is created only when AlarmEmail is set. The email
+  # subscription must be confirmed once from the recipient's inbox (AWS sends a
+  # confirmation link); until then the topic delivers nothing.
+  #
+  # All alarms use TreatMissingData: notBreaching — no traffic (and therefore no
+  # metric datapoints) is not an incident.
+  # ===========================================================================
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarms
+    Properties:
+      TopicName: !Sub "mdf-connect-v2-alarms-${Environment}"
+      DisplayName: !Sub "MDF Connect v2 alarms (${Environment})"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmEmail
+
+  # Any unhandled API exception is user-visible — alert on two consecutive
+  # 5-minute windows to ride out a single cold-start blip.
+  ApiFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-api-errors"
+      AlarmDescription: "ApiFunction is returning Lambda errors (5xx to clients)."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  AsyncWorkerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-async-worker-errors"
+      AlarmDescription: "AsyncWorkerFunction is failing — DOI minting / search ingest / profiling jobs are not completing."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AsyncWorkerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  # A message only reaches the DLQ after maxReceiveCount=3 failed attempts, so
+  # anything in there is already news — one period, threshold 0.
+  AsyncJobsDLQMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-async-dlq-not-empty"
+      AlarmDescription: "Messages are sitting in the async-jobs DLQ — jobs were dropped after 3 failed attempts. Inspect and redrive."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AsyncJobsDLQ.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  # Oldest message older than 15 minutes means the worker is wedged or throttled
+  # (reserved concurrency is small), not merely busy.
+  AsyncJobsQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-async-queue-backlog"
+      AlarmDescription: "Oldest async job has been queued for more than 15 minutes — worker is stalled or throttled."
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AsyncJobsQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  # DynamoDB throttling. Tables are PAY_PER_REQUEST, so throttles mean a hot
+  # partition or a burst beyond the table's adaptive capacity — reads and writes
+  # are separate metrics (ReadThrottleEvents / WriteThrottleEvents); the
+  # table-level names include GSI throttles.
+  SubmissionsTableReadThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-submissions-read-throttles"
+      AlarmDescription: "Read throttling on the submissions table (or its GSIs)."
+      Namespace: AWS/DynamoDB
+      MetricName: ReadThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref SubmissionsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  SubmissionsTableWriteThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-submissions-write-throttles"
+      AlarmDescription: "Write throttling on the submissions table (or its GSIs)."
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref SubmissionsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  StreamsTableReadThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-streams-read-throttles"
+      AlarmDescription: "Read throttling on the streams table (or its GSI)."
+      Namespace: AWS/DynamoDB
+      MetricName: ReadThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref StreamsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  StreamsTableWriteThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-streams-write-throttles"
+      AlarmDescription: "Write throttling on the streams table (or its GSI)."
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref StreamsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  # DynamoDB server-side faults (HTTP 500s from the service). Table-level
+  # SystemErrors has no Operation dimension requirement, so a single alarm per
+  # table covers every operation.
+  SubmissionsTableSystemErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-submissions-system-errors"
+      AlarmDescription: "DynamoDB returned server-side errors for the submissions table."
+      Namespace: AWS/DynamoDB
+      MetricName: SystemErrors
+      Dimensions:
+        - Name: TableName
+          Value: !Ref SubmissionsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  StreamsTableSystemErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-streams-system-errors"
+      AlarmDescription: "DynamoDB returned server-side errors for the streams table."
+      Namespace: AWS/DynamoDB
+      MetricName: SystemErrors
+      Dimensions:
+        - Name: TableName
+          Value: !Ref StreamsTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
 # ===========================================================================
 # Outputs
 # ===========================================================================
@@ -615,3 +921,25 @@ Outputs:
   AsyncJobsQueueUrl:
     Description: SQS queue URL for async jobs
     Value: !Ref AsyncJobsQueue
+
+  ApiCustomDomainUrl:
+    Condition: HasCustomDomain
+    Description: Public HTTPS URL once DNS points at the regional domain below
+    Value: !Sub "https://${ApiCustomDomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiCustomDomainUrl"
+
+  ApiCustomDomainRegionalDomainName:
+    Condition: HasCustomDomain
+    Description: "DNS target for the custom domain: create a CNAME (external DNS) or an A/ALIAS record (Route53) from ApiCustomDomainName to this value."
+    Value: !GetAtt ApiDomainName.RegionalDomainName
+
+  ApiCustomDomainRegionalHostedZoneId:
+    Condition: HasCustomDomain
+    Description: "Hosted zone id of the regional domain, needed only for a Route53 alias record (AliasTarget.HostedZoneId)."
+    Value: !GetAtt ApiDomainName.RegionalHostedZoneId
+
+  AlarmTopicArn:
+    Condition: HasAlarms
+    Description: SNS topic receiving CloudWatch alarm notifications
+    Value: !Ref AlarmTopic

@@ -252,6 +252,36 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
         --parameter-overrides "$all_params"
 
     log "Deployment complete!"
+    print_custom_domain_dns "$stack_name"
+}
+
+# ---------------------------------------------------------------------------
+# Custom domain DNS hint — printed only when the stack created a custom domain
+# (ApiCustomDomainCertArn set). DNS is managed outside this account, so the
+# record must be created by hand; see README "Custom domain".
+# ---------------------------------------------------------------------------
+print_custom_domain_dns() {
+    local stack_name=$1
+    local outputs domain regional
+    outputs=$(aws cloudformation describe-stacks \
+        --stack-name "$stack_name" \
+        --region "$REGION" \
+        --query 'Stacks[0].Outputs' --output json 2>/dev/null || echo "[]")
+    domain=$(echo "$outputs" | python3 -c "
+import sys, json
+o = {x['OutputKey']: x['OutputValue'] for x in (json.load(sys.stdin) or [])}
+print(o.get('ApiCustomDomainUrl', ''))
+" 2>/dev/null || echo "")
+    [[ -z "$domain" ]] && return 0
+    regional=$(echo "$outputs" | python3 -c "
+import sys, json
+o = {x['OutputKey']: x['OutputValue'] for x in (json.load(sys.stdin) or [])}
+print(o.get('ApiCustomDomainRegionalDomainName', ''))
+" 2>/dev/null || echo "")
+    echo ""
+    info "Custom domain: $domain"
+    info "  DNS target (CNAME / Route53 alias): $regional"
+    info "  The domain only answers once that record exists and has propagated."
 }
 
 # ---------------------------------------------------------------------------

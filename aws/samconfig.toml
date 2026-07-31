@@ -32,7 +32,8 @@ s3_bucket = "mdf-sam-deployments-dev"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=dev AuthMode=dev"
+# Custom domain and alarms are off for dev (empty = resource not created).
+parameter_overrides = 'Environment=dev AuthMode=dev ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 confirm_changeset = false
 tags = "Project=mdf-connect Environment=dev Team=MDF"
 
@@ -50,7 +51,16 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 # DataCite credentials are NOT stored here — deploy.sh resolves them from SSM
 # (/mdf/staging/datacite-username, /mdf/staging/datacite-password) and refuses
 # to deploy without them while UseMockDatacite=false.
-parameter_overrides = "Environment=staging AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+#
+# Custom domain / alarms are opt-in — empty means the resources are not created
+# and only the execute-api URL exists. To turn them on for staging, request an
+# ACM cert in us-east-1 (this stack's region; HTTP API custom domains are
+# REGIONAL) and fill in:
+#   ApiCustomDomainName="api-staging.materialsdatafacility.org"
+#   ApiCustomDomainCertArn="arn:aws:acm:us-east-1:<account>:certificate/<uuid>"
+#   AlarmEmail="mdf-ops@uchicago.edu"
+# Then point DNS at the ApiCustomDomainRegionalDomainName stack output.
+parameter_overrides = 'Environment=staging AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================
@@ -68,5 +78,16 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 # (AllowAllCurators=false + CuratorGroupIds). Add named break-glass admins via
 # CuratorUserIds=<sub>,<sub> if the group-membership path needs a fallback.
 # DataCite credentials are resolved from SSM by deploy.sh, never stored here.
-parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+#
+# Custom domain: the CLI/docs expect prod at https://api.materialsdatafacility.org.
+# Fill both values in before the domain exists (empty = no domain resources, the
+# execute-api URL still works). The ACM cert must be in us-east-1 — the same
+# region as this stack — because HTTP API custom domains are REGIONAL:
+#   ApiCustomDomainName="api.materialsdatafacility.org"
+#   ApiCustomDomainCertArn="arn:aws:acm:us-east-1:<account>:certificate/<uuid>"
+# After deploying, create the DNS record from the
+# ApiCustomDomainRegionalDomainName / ApiCustomDomainRegionalHostedZoneId outputs
+# (see README "Custom domain"). Alarms: set AlarmEmail to a monitored inbox, e.g.
+#   AlarmEmail="mdf-ops@uchicago.edu"
+parameter_overrides = 'Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 tags = "Project=mdf-connect Environment=prod Team=MDF"
