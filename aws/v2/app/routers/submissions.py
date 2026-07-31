@@ -16,6 +16,7 @@ from v2.app.auth import (
     get_auth,
     get_optional_auth,
     is_curator,
+    is_submission_owner_or_curator,
     require_curator,
     require_submitter,
 )
@@ -280,13 +281,54 @@ def _parse_mdata(record: Dict[str, Any]) -> dict:
 def _can_access_submission(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
     if not record:
         return False
-    if auth:
-        owner_id = record.get("user_id")
-        if owner_id and owner_id == auth.user_id:
-            return True
-        if is_curator(auth):
-            return True
+    if is_submission_owner_or_curator(auth, record):
+        return True
     return record.get("status") == "published"
+
+
+def _is_privileged(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
+    """True when the caller is the submission's owner or a curator.
+
+    The distinction that matters for reads: a *privileged* caller sees the raw
+    record, while a caller who merely satisfies ``_can_access_submission``
+    (i.e. the dataset happens to be published) gets the sanitized view.
+    """
+    return is_submission_owner_or_curator(auth, record)
+
+
+# Submitter PII, curation internals and transfer plumbing. A caller who can only
+# see a record because it is *published* has no business reading any of these.
+_SENSITIVE_RECORD_FIELDS = frozenset({
+    "user_id", "user_email",
+    "curation_history",
+    "approved_by", "approved_at",
+    "rejected_by", "rejected_at", "rejection_reason",
+    "deleted_by", "deleted_at",
+    "reviewer", "reviewed_by",
+    "publish_error", "publish_error_at",
+    "transfer_status", "transfer_destination", "transfer_task_ids",
+    "transfer_acl_rule_ids", "transfer_bytes_transferred",
+    "transfer_files_transferred",
+    "metadata_updated_at",
+})
+
+
+def _public_submission_view(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitized view of a published submission for a non-owner, non-curator.
+
+    Strips submitter identity/email, the curation history (curator ids, review
+    notes and rejection reasons) and the internal transfer bookkeeping. Also
+    drops ``dataset_mdata.acl``, which would otherwise enumerate the Globus
+    identities a restricted dataset is shared with.
+    """
+    rec = _normalize_record(dict(record))
+    public = {k: v for k, v in rec.items() if k not in _SENSITIVE_RECORD_FIELDS}
+    mdata = public.get("dataset_mdata")
+    if isinstance(mdata, dict):
+        mdata = dict(mdata)
+        mdata.pop("acl", None)
+        public["dataset_mdata"] = mdata
+    return public
 
 
 @router.post("/submissions/{source_id}/metadata")
@@ -349,8 +391,14 @@ async def edit_metadata(
             "source_id": source_id,
             "version": new_version,
             "versioned_source_id": new_versioned_id,
-            "user_id": auth.user_id,
-            "user_email": auth.user_email,
+            # Ownership follows the dataset, not the editor. A curator editing
+            # someone else's published dataset must not silently become the
+            # owner of the new latest version — that would move the dataset out
+            # of the submitter's GET /submissions listing and into the curator's,
+            # and misattribute it everywhere ownership is displayed. The actor is
+            # still recorded below via approved_by.
+            "user_id": submission.get("user_id") or auth.user_id,
+            "user_email": submission.get("user_email") or auth.user_email,
             "organization": submission.get("organization"),
             "status": "approved",
             "dataset_mdata": json.dumps(existing_mdata),
@@ -522,6 +570,10 @@ async def delete_submission(
     if submission.get("status") == "deleted":
         raise HTTPException(400, "Submission is already deleted")
 
+    # Captured before the status flip: only a version that was actually
+    # published can have contributed to the search index.
+    was_published = submission.get("status") == "published"
+
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     curation_history = submission.get("curation_history") or []
@@ -546,15 +598,68 @@ async def delete_submission(
     submission["updated_at"] = now
     store.upsert_submission(submission)
 
+    search_reconcile = None
+    if was_published:
+        search_reconcile = _reconcile_search_after_removal(store, source_id, submission)
+
     logger.info("Submission deleted source_id=%s version=%s by=%s reason=%s",
                 source_id, version, auth.user_id, payload.reason)
 
-    return {
+    result = {
         "success": True,
         "source_id": source_id,
         "version": version,
         "status": "deleted",
     }
+    if search_reconcile:
+        result["search_index"] = search_reconcile
+    return result
+
+
+def _reconcile_search_after_removal(
+    store: SubmissionStore,
+    source_id: str,
+    removed: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Bring the search index back in line after a published version is removed.
+
+    The index holds exactly ONE entry per dataset, keyed on the version-less
+    detail-URL subject, and it always describes the latest published version
+    (see ``async_jobs._owns_search_entry``). So removal has two cases:
+
+    - other published versions remain → re-ingest the highest remaining one, so
+      the entry stops advertising the removed version's metadata;
+    - none remain → delete the entry, otherwise the dataset keeps showing up in
+      search results and /detail links 404 (bug B-18).
+
+    Never raises: the record is already updated in the store, and a search
+    outage must not turn a completed delete into a 500. Failures are logged and
+    reported in the response so the caller can retry.
+    """
+    try:
+        from v2.search_client import get_search_client
+
+        client = get_search_client(test_mode=bool(removed.get("test", False)))
+        remaining = [
+            v for v in (store.list_versions(source_id) or [])
+            if v.get("status") == "published"
+        ]
+        if remaining:
+            latest_published = max(remaining, key=_version_sort_key)
+            outcome = client.ingest(latest_published, version_count=len(remaining))
+            return {
+                "action": "reingested",
+                "version": latest_published.get("version"),
+                "success": bool(outcome.get("success")),
+            }
+        outcome = client.delete_entry(source_id)
+        return {"action": "deleted", "success": bool(outcome.get("success"))}
+    except Exception:
+        logger.warning(
+            "Failed to reconcile the search index after removing %s v%s",
+            source_id, removed.get("version"), exc_info=True,
+        )
+        return {"action": "failed", "success": False}
 
 
 @router.get("/versions/{source_id}/diff")
@@ -738,11 +843,11 @@ async def submit(
             if isinstance(prior_mdata, dict):
                 root_version_id = prior_mdata.get("root_version")
         if not root_version_id:
-            # Earliest version is the root
-            earliest_ver = sorted(
-                existing_versions, key=lambda v: v.get("version", "0")
-            )[0]
-            root_version_id = "{}-{}".format(source_id, earliest_ver.get("version", "1.0"))
+            # Earliest version is the root. Numeric-aware (and shared with the
+            # ownership check above) so a chain that reached 10.0 does not
+            # suddenly re-root itself onto 10.0 under a string sort.
+            earliest = root_version_record(existing_versions) or {}
+            root_version_id = "{}-{}".format(source_id, earliest.get("version", "1.0"))
 
     # Inherit data_sources from prior version for metadata-only updates
     if update and not has_new_data and prior_record:
@@ -873,7 +978,9 @@ async def list_versions(
         if not versions:
             return {"success": False, "error": "No versions found for this source_id"}
 
-    sorted_versions = sorted(versions, key=lambda x: x.get("version", "0"))
+    # Numeric-aware: a plain string sort orders 1.0, 10.0, 2.0 and makes the
+    # UI's version picker (and the paginated slice below) wrong past v9.
+    sorted_versions = sorted(versions, key=_version_sort_key)
     total_count = len(sorted_versions)
     paginated = sorted_versions[offset:offset + limit]
 
@@ -973,6 +1080,13 @@ async def get_status(
     if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
+    # A caller who reaches this point only because the dataset is published gets
+    # the sanitized public view. This also skips the inline transfer check below,
+    # so an anonymous caller cannot drive repeated Globus polling and store
+    # writes on someone else's submission.
+    if not _is_privileged(auth, record):
+        return {"success": True, "submission": _public_submission_view(record)}
+
     # Inline transfer status check — single Globus API call (~200ms)
     if record.get("transfer_status") == "active":
         _inline_transfer_check(record, store)
@@ -1064,6 +1178,9 @@ async def get_status_all(
     # Apply same access control as GET /status/{source_id}
     if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
+
+    if not _is_privileged(auth, record):
+        return {"success": True, "submission": _public_submission_view(record)}
 
     return {"success": True, "submission": _normalize_record(record)}
 

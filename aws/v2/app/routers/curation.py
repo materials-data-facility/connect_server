@@ -162,9 +162,15 @@ async def approve(
                 existing_metadata = json.loads(existing_metadata)
             except Exception:
                 existing_metadata = {}
-        # Deep merge metadata updates into existing flat metadata
+        # Deep merge metadata updates into existing flat metadata, then store it
+        # as a JSON string the way every other write path does (submit, metadata
+        # edit, latest-flag flips). Assigning the raw dict made dataset_mdata a
+        # DynamoDB Map on this path and a String everywhere else — the sqlite
+        # backend normalizes it, DynamoDB's put_item does not — which forces
+        # every reader to handle both shapes and breaks Decimal-free round-trips
+        # for numeric metadata.
         deep_merge(existing_metadata, payload.metadata_updates)
-        submission["dataset_mdata"] = existing_metadata
+        submission["dataset_mdata"] = json.dumps(existing_metadata)
         submission["metadata_updated_at"] = now
 
     submission["status"] = "approved"

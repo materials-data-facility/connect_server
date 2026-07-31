@@ -49,6 +49,41 @@ def _is_searchable_dataset(record: Dict[str, Any]) -> bool:
     return record.get("status") == "published"
 
 
+def dataset_is_public(record: Dict[str, Any]) -> bool:
+    """True only when a dataset is publicly visible (acl empty/absent or "public").
+
+    This is the single definition of "anyone may see this dataset", mirroring the
+    ``visible_to`` rule that ``search_client.build_gmeta_entry`` writes into
+    Globus Search. Everything that serves dataset content to a possibly
+    anonymous caller — the local search fallback, cards, citations, detail
+    pages, previews — must apply this same rule, or a restricted-but-published
+    dataset leaks whenever the caller takes a path Globus Search does not gate.
+
+    Fails closed: a record whose stored metadata cannot be read is treated as
+    non-public. ``parse_metadata`` swallows malformed metadata and returns an
+    empty acl, which would otherwise read as "public" — exactly the wrong
+    default for a record we cannot inspect.
+    """
+    raw = record.get("dataset_mdata") if isinstance(record, dict) else None
+    if raw:
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                return False
+        if not isinstance(raw, dict):
+            return False
+    try:
+        acl = parse_metadata(record).acl or ["public"]
+    except Exception:
+        return False
+    return "public" in acl
+
+
+# Backwards-compatible private alias (used by the fallback scan below).
+_is_public_dataset = dataset_is_public
+
+
 def _extract_searchable_text(record: Dict[str, Any]) -> str:
     """Extract all searchable text from a submission record."""
     parts = []
@@ -217,6 +252,11 @@ def search_datasets(
     results = []
     for record in all_submissions:
         if not _is_searchable_dataset(record):
+            continue
+        # ACL parity with the Globus path: that index only returns a restricted
+        # dataset to an identity in its visible_to list, so this unauthenticated
+        # fallback must not surface non-public datasets either.
+        if not _is_public_dataset(record):
             continue
         text = _extract_searchable_text(record)
         score = _simple_match(text, query)

@@ -1,0 +1,99 @@
+# .samignore — files kept OUT of the Lambda deployment artifact (B-15)
+#
+# IMPORTANT — read this before assuming it is a standard SAM feature:
+#
+#   AWS SAM CLI has NO native .samignore / .lambdaignore support for
+#   zip-packaged Python functions. Verified against SAM CLI 1.162.1:
+#     * aws_lambda_builders/workflows/python_pip/workflow.py exposes a
+#       hard-coded EXCLUDED_FILES tuple (.aws-sam, .git, *.pyc, __pycache__,
+#       .pytest_cache, .venv, ...) with no user extension point.
+#     * `Metadata: BuildProperties` file exclusion exists only for the esbuild
+#       (Node.js) workflow, not for python3.x.
+#     * `sam build --exclude` excludes *resources* from the build, not files.
+#     * grep for "samignore" across the whole samcli package: zero hits.
+#   Because both v2 Lambdas use `CodeUri: .`, an unmodified `sam build` copies
+#   the entire aws/ tree into each artifact — v1 modules, aws/tests/, every
+#   test_v2_*.py, docs, Dockerfile, deploy.sh, samconfig.toml, template.yaml.
+#
+#   So this file is applied by us, not by SAM: aws/deploy.sh runs a prune pass
+#   over .aws-sam/build/<Function>/ after `sam build` and before `sam deploy`
+#   (see prune_build() in deploy.sh). `sam deploy` zips the built directory, so
+#   pruning between the two steps genuinely changes what is uploaded.
+#
+#   Consequence: `sam build && sam deploy` run by hand (or `make deploy-*`)
+#   bypasses the prune and ships everything. Deploy via ./deploy.sh (or the
+#   Deploy v2 Backend GitHub workflow, which calls it) to get the exclusions.
+#
+# Pattern syntax (deliberately small and predictable):
+#   foo.py        matches only a TOP-LEVEL entry named foo.py
+#   *.md          matches only TOP-LEVEL entries ending in .md
+#   dir/          matches a directory at any path prefix given, trailing / is
+#                 required for directories
+#   v2/test_*.py  a pattern containing "/" is fnmatch'd against the full
+#                 artifact-relative path
+# Patterns without "/" never descend into installed dependencies, so a bare
+# "*.md" cannot strip READMEs out of site-packages.
+
+# ---------------------------------------------------------------------------
+# Tests — never executed inside Lambda
+# ---------------------------------------------------------------------------
+tests/
+test_curation.py
+test_doi_minting.py
+test_globus_upload.py
+test_preview_clone.py
+v2/test_v2_*.py
+v2/requirements-test.txt
+v2/scripts/test_*.py
+
+# ---------------------------------------------------------------------------
+# v1 (legacy) application modules. The v2 handlers are v2.app.main.handler and
+# v2.async_worker.lambda_handler; nothing under v2/ imports any of these
+# (verified: no static import, no importlib/__import__ anywhere in v2/).
+# Leaving them in the artifact only creates generically-named top-level modules
+# (auth, utils, status, submit, ...) on the Lambda sys.path.
+# ---------------------------------------------------------------------------
+auth.py
+automate_manager.py
+dynamo_manager.py
+flow_action.py
+globus_auth_manager.py
+globus_automate_flow.py
+organization.py
+source_id_manager.py
+status.py
+submissions.py
+submit.py
+utils.py
+mdf_flow_info.json
+
+# ---------------------------------------------------------------------------
+# Build / deploy / infra metadata. template.yaml and samconfig.toml describe
+# the deployment itself and have no business inside the running function.
+# ---------------------------------------------------------------------------
+template.yaml
+samconfig.toml
+deploy.sh
+Makefile
+Dockerfile
+requirements.txt
+.github/
+.samignore
+
+# ---------------------------------------------------------------------------
+# Docs and local dev / demo helpers
+# ---------------------------------------------------------------------------
+*.md
+demo_mdf_v2.py
+show/
+v2/*.md
+v2/demo_*.py
+v2/demo_*.sh
+v2/local_*.py
+v2/local_*.sh
+
+# ---------------------------------------------------------------------------
+# Editor / OS cruft that the SAM python builder does not already drop
+# ---------------------------------------------------------------------------
+.DS_Store
+*/.DS_Store

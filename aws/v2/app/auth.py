@@ -173,6 +173,39 @@ def ensure_submission_owner_or_curator(auth: AuthContext, submission: Dict[str, 
     raise HTTPException(status_code=403, detail="You do not have permission for this submission")
 
 
+def is_submission_owner_or_curator(
+    auth: Optional[AuthContext], submission: Dict[str, Any]
+) -> bool:
+    """Non-raising form of :func:`ensure_submission_owner_or_curator`."""
+    if not auth or not submission:
+        return False
+    owner_id = submission.get("user_id")
+    if owner_id and owner_id == auth.user_id:
+        return True
+    return is_curator(auth)
+
+
+def can_view_dataset(auth: Optional[AuthContext], record: Optional[Dict[str, Any]]) -> bool:
+    """True when the caller may read a dataset's content.
+
+    A dataset is viewable when it is published AND (it is public, OR the caller
+    is its owner or a curator). "published" alone is not enough: a restricted
+    dataset is published into Globus Search with a ``visible_to`` limited to its
+    acl identities, so serving it to anonymous callers through cards, citations,
+    detail pages or previews is an ACL bypass around that gate.
+    """
+    if not record or record.get("status") != "published":
+        return False
+    if is_submission_owner_or_curator(auth, record):
+        return True
+    # Imported lazily: v2.search pulls the store/stream-store modules and is
+    # itself imported by the search router, so a module-level import here would
+    # close an import cycle through the app package.
+    from v2.search import dataset_is_public
+
+    return dataset_is_public(record)
+
+
 def ensure_stream_owner_or_curator(auth: AuthContext, stream: Dict[str, Any]) -> None:
     """Only the stream owner (or a curator) may mutate/view a stream."""
     owner_id = stream.get("user_id")

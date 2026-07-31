@@ -376,3 +376,199 @@ def test_transfer_job_never_persists_user_token(tmp_path: Path, monkeypatch: pyt
     finally:
         conn.close()
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Baseline security response headers
+# ---------------------------------------------------------------------------
+
+def test_responses_carry_baseline_security_headers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "store.db"))
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
+    reset_storage_backend()
+    reset_middleware_state()
+
+    resp = TestClient(app).get("/")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    assert "max-age=31536000" in resp.headers["Strict-Transport-Security"]
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-backed endpoints are not anonymous
+# ---------------------------------------------------------------------------
+
+def test_openai_backed_endpoints_require_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """/embed and /search/semantic spend the server's OpenAI key per call.
+
+    Anonymous access is an unmetered bill; anonymous keyword /search is not
+    affected and must stay open.
+    """
+    monkeypatch.setenv("STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "store.db"))
+    monkeypatch.setenv("USE_MOCK_SEARCH", "true")
+    monkeypatch.setenv("AUTH_MODE", "production")
+    monkeypatch.delenv("LOCAL_DEV_AUTH", raising=False)
+    monkeypatch.delenv("AWS_SAM_LOCAL", raising=False)
+    reset_storage_backend()
+    reset_middleware_state()
+
+    client = TestClient(app)
+    assert client.post("/embed", json={"text": "hello"}).status_code == 401
+    assert client.get("/search/semantic", params={"q": "hello"}).status_code == 401
+    assert client.get("/search", params={"q": "hello"}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# DataCite client selection
+# ---------------------------------------------------------------------------
+
+def test_datacite_client_fails_loud_when_mock_disabled_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Silently mocking in a real environment mints fake DOIs and reports success."""
+    from v2.datacite import MockDataCiteClient, get_datacite_client
+
+    monkeypatch.delenv("DATACITE_USERNAME", raising=False)
+    monkeypatch.delenv("DATACITE_PASSWORD", raising=False)
+
+    monkeypatch.setenv("USE_MOCK_DATACITE", "false")
+    with pytest.raises(RuntimeError, match="DataCite credentials required"):
+        get_datacite_client()
+
+    # Explicit mock and auto/unset both keep local dev and tests working.
+    monkeypatch.setenv("USE_MOCK_DATACITE", "true")
+    assert isinstance(get_datacite_client(), MockDataCiteClient)
+    monkeypatch.setenv("USE_MOCK_DATACITE", "")
+    assert isinstance(get_datacite_client(), MockDataCiteClient)
+
+
+# ---------------------------------------------------------------------------
+# Search document shape (v1 index parity)
+# ---------------------------------------------------------------------------
+
+def test_gmeta_entry_writes_resource_type_and_stable_source_name():
+    """v1 tooling filters on mdf.resource_type and groups on mdf.source_name.
+
+    The old rsplit("-", 1) derivation turned every "mdf-<uuid>" id into
+    source_name="mdf", and resource_type was never written at all — so a v1
+    parity/migration query against the v2 index returned zero rows.
+    """
+    import json as _json
+
+    from v2.search_client import GlobusSearchClient
+
+    client = GlobusSearchClient.__new__(GlobusSearchClient)
+
+    migrated = {
+        "source_id": "mdf-abc123def456",
+        "version": "1.0",
+        "organization": "MDF Open",
+        "dataset_mdata": _json.dumps({
+            "title": "T", "authors": [{"name": "A"}], "acl": ["public"],
+            "extensions": {"mdf_source_name": "pub_42_smith"},
+        }),
+    }
+    mdf = client.build_gmeta_entry(migrated)["content"]["mdf"]
+    assert mdf["resource_type"] == "dataset"
+    assert mdf["source_name"] == "pub_42_smith"
+
+    native = {
+        "source_id": "mdf-deadbeefcafe",
+        "version": "1.0",
+        "dataset_mdata": _json.dumps({"title": "T2", "authors": [{"name": "A"}], "acl": ["public"]}),
+    }
+    mdf_native = client.build_gmeta_entry(native)["content"]["mdf"]
+    assert mdf_native["resource_type"] == "dataset"
+    assert mdf_native["source_name"] == "mdf-deadbeefcafe"
+
+
+# ---------------------------------------------------------------------------
+# Public-visibility rule shared by search, cards, citations and previews
+# ---------------------------------------------------------------------------
+
+def test_dataset_is_public_matches_the_globus_visible_to_rule():
+    import json as _json
+
+    from v2.search import dataset_is_public
+
+    assert dataset_is_public({"dataset_mdata": _json.dumps({"acl": ["public"]})}) is True
+    # No acl means public, matching build_gmeta_entry's `meta.acl or ["public"]`.
+    assert dataset_is_public({"dataset_mdata": _json.dumps({})}) is True
+    assert dataset_is_public(
+        {"dataset_mdata": _json.dumps({"acl": ["urn:globus:auth:identity:x"]})}
+    ) is False
+    # Fails closed on unparseable metadata.
+    assert dataset_is_public({"dataset_mdata": object()}) is False
+
+
+# ---------------------------------------------------------------------------
+# dataset_mdata is always stored as a JSON string
+# ---------------------------------------------------------------------------
+
+def test_curation_approve_stores_dataset_mdata_as_json_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """DynamoDB's put_item stores whatever it is given.
+
+    The sqlite backend normalizes a dict to a JSON string, so only the record
+    handed to the store reveals the divergence: on DynamoDB a raw dict becomes a
+    Map on this path and a String on every other write path.
+    """
+    from v2.app.deps import get_submission_store
+    from v2.store import get_store
+
+    monkeypatch.setenv("STORE_BACKEND", "sqlite")
+    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "store.db"))
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("FILE_STORE_PATH", str(tmp_path / "files"))
+    monkeypatch.setenv("AUTH_MODE", "dev")
+    monkeypatch.setenv("LOCAL_DEV_AUTH", "true")
+    monkeypatch.setenv("ALLOW_ALL_CURATORS", "true")
+    monkeypatch.setenv("ASYNC_DISPATCH_MODE", "inline")
+    monkeypatch.setenv("USE_MOCK_DATACITE", "true")
+    monkeypatch.setenv("USE_MOCK_SEARCH", "true")
+    reset_storage_backend()
+    reset_middleware_state()
+
+    written = []
+
+    class _RecordingStore:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def upsert_submission(self, record):
+            written.append(dict(record))
+            return self._inner.upsert_submission(record)
+
+    app.dependency_overrides[get_submission_store] = lambda: _RecordingStore(get_store())
+    try:
+        client = TestClient(app)
+        submit = client.post(
+            "/submit",
+            headers={"X-User-Id": "submitter"},
+            json={"title": "Dataset", "authors": [{"name": "A"}],
+                  "data_sources": ["https://example.com/a.csv"]},
+        )
+        assert submit.status_code == 200
+        source_id = submit.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers={"X-User-Id": "curator"},
+            json={"mint_doi": False, "metadata_updates": {"description": "Curator note"}},
+        )
+        assert approve.status_code == 200, approve.json()
+    finally:
+        app.dependency_overrides.pop(get_submission_store, None)
+
+    assert written, "approve should have written the submission"
+    for record in written:
+        assert isinstance(record["dataset_mdata"], str), record["dataset_mdata"]
+    assert "Curator note" in written[0]["dataset_mdata"]

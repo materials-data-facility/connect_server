@@ -1,6 +1,3 @@
-Who is working on topics 11/12G
-
-
 # MDF Connect
 
 The Materials Data Facility Connect service is the backend for submitting, curating, and publishing datasets to MDF Search. For the Python client, see [connect_client](https://github.com/materials-data-facility/connect_client).
@@ -200,12 +197,51 @@ DataCite credentials for staging and prod live only in SSM (`/mdf/{env}/datacite
 
 ## Deploying
 
+### GitHub Actions (the supported path for staging and prod)
+
+`.github/workflows/deploy-v2.yml` ("Deploy v2 Backend") is the recommended way to
+deploy. It removes the "run `./deploy.sh` from a laptop" failure mode: no credentials
+on anyone's command line, an auditable run log, and three gates before anything
+reaches AWS.
+
+Run it from **Actions → Deploy v2 Backend → Run workflow**, pick `dev` / `staging` /
+`prod`, and type the same environment name into the **confirm** box.
+
+| Gate | Where it lives |
+|------|----------------|
+| Typed confirmation — `confirm` must equal `environment` | First step of the job; fails before checkout, build, or AWS auth. Mirrors `deploy.sh teardown`'s prompt. |
+| v2 test suite | Runs in the same job (same env vars/command as `test-v2.yml`) before credentials are issued. |
+| Required reviewers | GitHub **environment protection rules**. The job declares `environment: ${{ inputs.environment }}`, so creating repo environments named `dev`, `staging`, `prod` under *Settings → Environments* and adding "Required reviewers" (plus an optional wait timer / branch restriction) to `prod` blocks the deploy until a human approves. No workflow change needed to turn this on. |
+
+AWS auth is GitHub OIDC — no static access keys. The only secret is
+`AWS_DEPLOY_ROLE_ARN` (the IAM role assumed via
+`aws-actions/configure-aws-credentials@v4`, region `us-east-1`). Globus and DataCite
+credentials are never passed to the workflow; `deploy.sh` resolves them from SSM at
+deploy time. The full list of IAM permissions the deploy role needs — CloudFormation,
+S3 (SAM artifacts), Lambda, ApiGatewayV2, DynamoDB, SQS, SNS, CloudWatch,
+`iam:PassRole` for the SAM-created execution roles, and SSM read on `/mdf/*` — is
+documented in the header comment of `.github/workflows/deploy-v2.yml`.
+
+Manual deploys below still work; the workflow calls the exact same `deploy.sh`.
+
+### Running deploy.sh non-interactively
+
+Set `MDF_NON_INTERACTIVE=1` (GitHub Actions' own `CI=true`, or a non-TTY stdin, also
+count) and `deploy.sh` drops every blocking prompt: it passes
+`--no-confirm-changeset` to `sam deploy`, and `teardown` requires
+`MDF_CONFIRM_TEARDOWN=<env>` instead of reading from the terminal. No `--profile` flag
+is hard-coded anywhere in the script, so `AWS_PROFILE=... ./deploy.sh prod` and
+OIDC/env-var credentials both work unchanged.
+
 ### Dev (no external dependencies)
 
 ```bash
 cd aws
-sam build && ./deploy.sh dev
+./deploy.sh dev
 ```
+
+(`deploy.sh` runs `sam build` itself — a separate `sam build` beforehand is redundant,
+and `sam build && sam deploy` by hand skips the bundle pruning described below.)
 
 This creates a self-contained stack. No Globus credentials needed — auth uses `X-User-Id` headers, storage is local, DataCite is mocked.
 
@@ -225,7 +261,7 @@ DataCite and Search credentials are in `samconfig.toml` for staging. Then:
 
 ```bash
 cd aws
-sam build && ./deploy.sh staging
+./deploy.sh staging
 ```
 
 ### Production
@@ -253,7 +289,7 @@ Then deploy (Globus client id/secret must also be in SSM — see below):
 
 ```bash
 cd aws
-sam build && ./deploy.sh prod
+./deploy.sh prod
 ```
 
 #### Curator access
@@ -303,7 +339,7 @@ Wait for `Status: ISSUED` — CloudFormation fails to create the domain with a
 
 ```bash
 cd aws
-sam build && ./deploy.sh prod
+./deploy.sh prod
 ```
 
 **3. Create the DNS record.** The stack deliberately does **not** create Route53
@@ -369,6 +405,50 @@ For Lambda code changes that don't touch infrastructure:
 cd aws
 ./deploy.sh quick staging   # or: quick prod
 ```
+
+### What ships in the Lambda bundle (`aws/.samignore`)
+
+Both v2 functions use `CodeUri: .`, so by default **the entire `aws/` tree is copied
+into each Lambda artifact** — the v1 modules, `aws/tests/`, every `test_v2_*.py`,
+`Dockerfile`, `deploy.sh`, `samconfig.toml`, and `template.yaml` included.
+
+**AWS SAM CLI has no native exclusion mechanism for zip-packaged Python functions.**
+This was verified against SAM CLI 1.162.1, not assumed:
+
+- There is no `.samignore` support anywhere in `samcli` (zero hits for the string).
+- `aws_lambda_builders/workflows/python_pip/workflow.py` exposes a **hard-coded**
+  `EXCLUDED_FILES` tuple (`.aws-sam`, `.git`, `*.pyc`, `__pycache__`, `.pytest_cache`,
+  `.venv`, editor dirs …) with no user extension point.
+- File exclusion via `Metadata: BuildProperties` exists only for the **esbuild**
+  (Node.js) workflow, not for `python3.x`.
+- `sam build --exclude` excludes **resources** from the build, not files.
+- The remaining SAM-native option is `Metadata: BuildMethod: makefile`, which would
+  require hand-reimplementing SAM's manylinux-aware `pip download`/wheel-resolution
+  logic in a Makefile — a real correctness risk for `numpy`, `cryptography`,
+  `pydantic-core`, `uvloop`, and `httptools` when building from macOS.
+
+So the exclusion list lives in **`aws/.samignore`** and is applied by us:
+`prune_build()` in `aws/deploy.sh` deletes matching paths from
+`.aws-sam/build/<Function>/` after `sam build` and before `sam deploy`. Since
+`sam deploy` zips that directory at package time, this genuinely changes what is
+uploaded — it is not advisory.
+
+Measured on a clean build (`sam build`, then `./deploy.sh build`):
+
+| | Files in `ApiFunction` artifact | `aws/tests/` | `test_v2_*.py` | `template.yaml` / `samconfig.toml` / `deploy.sh` |
+|---|---|---|---|---|
+| Before | 2514 | present | 9 files | present |
+| After | 2440 | gone | 0 | gone |
+
+74 files / ~634 KiB removed per function. The on-disk size barely moves (112 MB →
+111 MB) because installed dependencies dominate; the point is correctness and
+attack surface, not bytes. Nothing under `v2/` imports any pruned module (checked by
+AST scan), and both handlers (`v2.app.main.handler`, `v2.async_worker.lambda_handler`)
+import cleanly from the pruned tree alone.
+
+**Caveat:** running `sam build && sam deploy` by hand, or `make deploy-dev` /
+`deploy-staging` / `deploy-prod`, bypasses the prune and ships everything. Deploy via
+`./deploy.sh <env>` or the "Deploy v2 Backend" workflow.
 
 ### Local development
 
@@ -476,8 +556,10 @@ For local development, set these in your shell or a `.env` file (requires `pip i
 |------|---------|
 | `aws/template.yaml` | SAM/CloudFormation template — Lambda, API Gateway, DynamoDB, SQS, S3 |
 | `aws/samconfig.toml` | Per-environment deploy config (dev, staging, prod) |
-| `aws/deploy.sh` | Deploy script — `dev`, `staging`, `prod`, `quick`, `local`, `teardown`, `logs`, `status` |
+| `aws/deploy.sh` | Deploy script — `dev`, `staging`, `prod`, `quick`, `local`, `teardown`, `logs`, `status`, `build` |
+| `aws/.samignore` | Paths pruned out of the Lambda artifact after `sam build` (applied by `deploy.sh`, not by SAM — see "What ships in the Lambda bundle") |
 | `aws/requirements.txt` | Python dependencies bundled into Lambda |
+| `.github/workflows/deploy-v2.yml` | Manual-dispatch deploy with typed confirmation, test gate, OIDC auth, and GitHub environment protection |
 
 ## v1 (legacy)
 

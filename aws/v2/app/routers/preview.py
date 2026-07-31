@@ -4,7 +4,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from v2.app.auth import can_view_dataset, get_optional_auth
 from v2.app.deps import get_submission_store
+from v2.app.models import AuthContext
 from v2.store import SubmissionStore
 
 logger = logging.getLogger(__name__)
@@ -20,13 +22,21 @@ router = APIRouter()
 
 # ── Dataset-level preview (new) ────────────────────────────────────
 
-def _get_profile_and_record(source_id: str, store: SubmissionStore):
-    """Load the stored DatasetProfile + record for a source_id (published only).
+def _get_profile_and_record(
+    source_id: str,
+    store: SubmissionStore,
+    auth: Optional[AuthContext] = None,
+):
+    """Load the stored DatasetProfile + record for a source_id.
+
+    Gated on ``can_view_dataset``: the profile carries file names, column
+    names and sample rows, so a restricted-but-published dataset must not be
+    previewable by anyone outside its acl.
 
     Returns (profile_dict, record_dict) or (None, None).
     """
     record = store.get(source_id)
-    if not record or record.get("status") != "published":
+    if not can_view_dataset(auth, record):
         return None, None
     profile = record.get("dataset_profile")
     if profile is None:
@@ -39,9 +49,13 @@ def _get_profile_and_record(source_id: str, store: SubmissionStore):
     return profile, record
 
 
-def _get_profile(source_id: str, store: SubmissionStore) -> Optional[dict]:
-    """Load the stored DatasetProfile for a source_id (published only)."""
-    profile, _ = _get_profile_and_record(source_id, store)
+def _get_profile(
+    source_id: str,
+    store: SubmissionStore,
+    auth: Optional[AuthContext] = None,
+) -> Optional[dict]:
+    """Load the stored DatasetProfile for a source_id (published + visible)."""
+    profile, _ = _get_profile_and_record(source_id, store, auth)
     return profile
 
 
@@ -58,10 +72,11 @@ def _increment_view(source_id: str, record: Optional[dict], store: SubmissionSto
 @router.get("/preview/{source_id}")
 async def dataset_preview(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Return the stored DatasetProfile for a dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -72,10 +87,11 @@ async def dataset_preview(
 @router.get("/preview/{source_id}/files")
 async def dataset_files(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """List all files in the dataset with metadata."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -98,10 +114,11 @@ async def dataset_files(
 async def dataset_file_detail(
     source_id: str,
     path: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Get detailed profile of a specific file in the dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
@@ -117,10 +134,11 @@ async def dataset_file_detail(
 @router.get("/preview/{source_id}/sample")
 async def dataset_sample(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Quick sample data from the first tabular file in the dataset."""
-    profile, record = _get_profile_and_record(source_id, store)
+    profile, record = _get_profile_and_record(source_id, store, auth)
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 

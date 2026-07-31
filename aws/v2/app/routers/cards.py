@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from v2.app.auth import get_optional_auth, is_curator
+from v2.app.auth import can_view_dataset, get_optional_auth, is_curator
 from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext
 from v2.citation import generate_apa, generate_bibtex, generate_datacite_xml, generate_ris
@@ -20,20 +20,28 @@ _EDITABLE_STATUSES = {"pending_curation", "rejected", "published"}
 
 
 def _resolve_published(
-    store: SubmissionStore, source_id: str, version: Optional[str]
+    store: SubmissionStore,
+    source_id: str,
+    version: Optional[str],
+    auth: Optional[AuthContext] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Resolve a published record, falling back to a pre-migration (v1) id.
+    """Resolve a record the caller may view, falling back to a pre-migration id.
 
     Returns (record, canonical_source_id). If ``source_id`` is an old v1 id that
     was promoted during migration, the matching record is returned and the
     canonical (current) source_id is reported so callers can surface a redirect.
+
+    Visibility is ``can_view_dataset``, not just "published": a restricted
+    dataset is only indexed for the identities in its acl, so its card,
+    citation and detail page must 404 for everyone else rather than serve the
+    metadata that Globus Search deliberately withholds.
     """
     record = store.get(source_id, version=version)
-    if record and record.get("status") == "published":
+    if can_view_dataset(auth, record):
         return record, record.get("source_id", source_id)
 
     legacy = store.get_by_legacy_source_id(source_id)
-    if legacy and legacy.get("status") == "published":
+    if can_view_dataset(auth, legacy):
         return legacy, legacy.get("source_id")
 
     return None, None
@@ -65,7 +73,7 @@ async def get_card(
     if version and version.lower() == "latest":
         version = None
 
-    record, canonical = _resolve_published(store, source_id, version)
+    record, canonical = _resolve_published(store, source_id, version, auth)
     if not record:
         raise HTTPException(404, "Dataset not found")
 
@@ -90,9 +98,10 @@ async def get_citation(
     source_id: str,
     version: Optional[str] = Query(None),
     format: Optional[str] = Query("all"),
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
-    record, canonical = _resolve_published(store, source_id, version)
+    record, canonical = _resolve_published(store, source_id, version, auth)
     if not record:
         raise HTTPException(404, "Dataset not found")
 
@@ -161,7 +170,7 @@ async def get_card_by_slug(
     if version and version.lower() == "latest":
         version = None
 
-    record, canonical = _resolve_published(store, source_id, version)
+    record, canonical = _resolve_published(store, source_id, version, auth)
     if not record:
         raise HTTPException(404, "Dataset not found")
 

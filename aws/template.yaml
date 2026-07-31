@@ -493,8 +493,15 @@ Resources:
   StreamFilesBucket:
     Type: AWS::S3::Bucket
     Condition: CreateStreamFilesBucket
+    # Holds submitted data files: never delete it with the stack.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub "mdf-stream-files-${Environment}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -507,8 +514,14 @@ Resources:
   # want browsers to read it — content-hashed keys make long cache TTLs safe.
   EmbeddingsSnapshotBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub "mdf-embeddings-${Environment}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -530,6 +543,7 @@ Resources:
     Properties:
       QueueName: !Sub "mdf-async-jobs-dlq-${Environment}"
       MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
 
   AsyncJobsQueue:
     Type: AWS::SQS::Queue
@@ -540,6 +554,7 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt AsyncJobsDLQ.Arn
         maxReceiveCount: 3
+      SqsManagedSseEnabled: true
 
   ApiFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -560,6 +575,8 @@ Resources:
     Properties:
       TableName: !Sub "mdf-submissions-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
       AttributeDefinitions:
         - AttributeName: source_id
           AttributeType: S
@@ -623,6 +640,8 @@ Resources:
     Properties:
       TableName: !Sub "mdf-streams-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
       AttributeDefinitions:
         - AttributeName: stream_id
           AttributeType: S

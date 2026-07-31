@@ -358,7 +358,14 @@ class MockDataCiteClient:
 def get_datacite_client(test_mode: bool = None) -> DataCiteClient:
     """Get configured DataCite client.
 
-    Uses mock client if credentials not configured.
+    ``USE_MOCK_DATACITE`` is three-valued:
+
+    - ``true``  — always mock (local dev / tests).
+    - ``false`` — real DataCite is required. Missing credentials raise instead of
+      silently degrading: a mock mints fake, non-resolvable DOIs and reports
+      success, so a credential misconfiguration in a real environment would
+      publish datasets with bogus DOIs and no visible error.
+    - unset/other — auto: real client when credentials exist, mock otherwise.
     """
     if test_mode is None:
         test_mode = os.environ.get("DATACITE_TEST_MODE", "true").lower() == "true"
@@ -366,9 +373,20 @@ def get_datacite_client(test_mode: bool = None) -> DataCiteClient:
     username = os.environ.get("DATACITE_USERNAME")
     password = os.environ.get("DATACITE_PASSWORD")
 
-    # Use mock if no credentials
-    use_mock = os.environ.get("USE_MOCK_DATACITE", "").lower() == "true"
-    if use_mock or not (username and password):
+    mock_setting = os.environ.get("USE_MOCK_DATACITE", "").strip().lower()
+
+    # Explicit opt-in to the mock always wins.
+    if mock_setting == "true":
+        return MockDataCiteClient()
+
+    if not (username and password):
+        if mock_setting == "false":
+            raise RuntimeError(
+                "DataCite credentials required (USE_MOCK_DATACITE=false) but "
+                "DATACITE_USERNAME/DATACITE_PASSWORD are not configured"
+            )
+        # Auto mode: no credentials available, fall back to the mock so local
+        # dev and tests keep working.
         return MockDataCiteClient()
 
     return DataCiteClient(test_mode=test_mode)

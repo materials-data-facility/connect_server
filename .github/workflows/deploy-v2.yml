@@ -1,0 +1,186 @@
+# MDF Connect v2 — backend deploy (B-12)
+#
+# Replaces "run ./deploy.sh from a laptop with credentials on the command line".
+# Everything here is manual-trigger only, gated three ways:
+#
+#   1. Typed confirmation  — the `confirm` input must exactly equal the
+#      `environment` input, mirroring the teardown gate inside aws/deploy.sh.
+#      This is the job's first step, so a typo fails before anything is
+#      checked out, built, or authenticated.
+#   2. GitHub environment  — the job declares `environment: ${{ inputs.environment }}`.
+#      Create repo environments named `dev`, `staging` and `prod` under
+#      Settings -> Environments and add protection rules there; for `prod` set
+#      "Required reviewers" (and optionally a wait timer / branch restriction to
+#      `prod`). GitHub then blocks the job until a reviewer approves. Nothing in
+#      this file needs to change to turn that on.
+#   3. Pre-deploy test gate — the v2 suite runs in the same job before any AWS
+#      credential is issued. A red suite means no deploy.
+#
+# Required repository secrets
+#   AWS_DEPLOY_ROLE_ARN   IAM role ARN assumed via GitHub OIDC (no static keys).
+#                         Its trust policy must allow
+#                         token.actions.githubusercontent.com with
+#                         sub = repo:<org>/<repo>:environment:<dev|staging|prod>
+#                         (or ...:ref:refs/heads/prod), aud = sts.amazonaws.com.
+#                         Scope one role per environment if you want prod
+#                         separated — set the secret per GitHub environment.
+#
+# No other secrets are needed. Globus and DataCite credentials are NOT passed
+# in: aws/deploy.sh resolves them from SSM at deploy time
+# (/mdf/globus-client-id, /mdf/globus-client-secret,
+#  /mdf/<env>/datacite-username, /mdf/<env>/datacite-password,
+#  /mdf/<env>/datacite-api-url, /mdf/<env>/datacite-prefix).
+#
+# IAM permissions the deploy role needs (SAM deploys the whole stack, so this is
+# broad by nature — scope Resource to the mdf-connect-v2-* stacks and
+# mdf-* resources where you can):
+#   cloudformation:  CreateStack, UpdateStack, DeleteStack, DescribeStacks,
+#                    DescribeStackEvents, DescribeStackResource(s),
+#                    CreateChangeSet, DescribeChangeSet, ExecuteChangeSet,
+#                    DeleteChangeSet, GetTemplateSummary, ListStackResources
+#                    (+ CAPABILITY_IAM / CAPABILITY_AUTO_EXPAND are requested by
+#                    samconfig.toml)
+#   s3:              CreateBucket, HeadBucket/ListBucket, PutBucketPublicAccessBlock,
+#                    PutObject, GetObject on mdf-sam-deployments-<env>
+#                    (deploy.sh creates the bucket if it is missing) and on the
+#                    stack-managed mdf-stream-files-<env> / mdf-embeddings-<env>
+#   lambda:          CreateFunction, UpdateFunctionCode, UpdateFunctionConfiguration,
+#                    GetFunction, DeleteFunction, AddPermission, RemovePermission,
+#                    PutFunctionConcurrency, TagResource, ListVersionsByFunction
+#   apigateway:      full control of the ApiGatewayV2 (HTTP API) resources —
+#                    apigateway:POST/GET/PATCH/PUT/DELETE on /apis*, /domainnames*
+#   dynamodb:        CreateTable, DescribeTable, UpdateTable, UpdateTimeToLive,
+#                    DescribeTimeToLive, TagResource on mdf-submissions-<env> and
+#                    mdf-streams-<env> (both are DeletionPolicy=Retain)
+#   sqs:             CreateQueue, GetQueueAttributes, SetQueueAttributes,
+#                    DeleteQueue, TagQueue for the async jobs queue + DLQ
+#   sns:             CreateTopic, GetTopicAttributes, SetTopicAttributes,
+#                    Subscribe, DeleteTopic for the alarm topic (only used when
+#                    AlarmEmail is set)
+#   cloudwatch/logs: logs:CreateLogGroup, PutRetentionPolicy, DescribeLogGroups,
+#                    DeleteLogGroup; cloudwatch:PutMetricAlarm,
+#                    DescribeAlarms, DeleteAlarms
+#   iam:             CreateRole, DeleteRole, GetRole, AttachRolePolicy,
+#                    DetachRolePolicy, PutRolePolicy, DeleteRolePolicy,
+#                    TagRole for the SAM-generated execution roles, plus
+#                    iam:PassRole on those roles (required — SAM passes the
+#                    execution role it creates to Lambda)
+#   ssm:             GetParameter(s) with decryption on
+#                    arn:aws:ssm:us-east-1:<acct>:parameter/mdf/*
+#                    and kms:Decrypt on the key backing those SecureStrings
+#   sts:             GetCallerIdentity (deploy.sh prints the identity it is using)
+#
+# Manual laptop deploys still work exactly as before (`cd aws && ./deploy.sh prod`);
+# this workflow is the supported path, not a replacement of the script.
+
+name: Deploy v2 Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: dev
+      confirm:
+        description: "Type the environment name again to confirm (e.g. prod)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write # request the OIDC JWT used to assume AWS_DEPLOY_ROLE_ARN
+  contents: read # actions/checkout
+
+concurrency:
+  # One deploy at a time per environment; never cancel an in-flight deploy.
+  group: deploy-v2-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Layer protection rules (required reviewers for prod) on this GitHub
+    # environment. See the header comment.
+    environment: ${{ inputs.environment }}
+
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      CONFIRM: ${{ inputs.confirm }}
+      AWS_REGION: us-east-1
+
+    steps:
+      # ---------------------------------------------------------------------
+      # Gate 1: typed confirmation. Must be the first step — fails before
+      # checkout, before build, before any AWS credential exists.
+      # ---------------------------------------------------------------------
+      - name: Confirm environment
+        run: |
+          if [ "$CONFIRM" != "$DEPLOY_ENV" ]; then
+            echo "::error::Confirmation mismatch: typed '$CONFIRM', expected '$DEPLOY_ENV'. Aborting."
+            exit 1
+          fi
+          echo "Confirmed deploy to '$DEPLOY_ENV'."
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ---------------------------------------------------------------------
+      # Gate 2: the v2 test suite. Same env vars and command as test-v2.yml.
+      # ---------------------------------------------------------------------
+      - name: Install test dependencies
+        working-directory: aws
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt 2>/dev/null || true
+          pip install fastapi uvicorn mangum pydantic httpx globus-sdk pytest boto3
+
+      - name: Run v2 tests (pre-deploy gate)
+        working-directory: aws
+        env:
+          STORE_BACKEND: sqlite
+          AUTH_MODE: dev
+          USE_MOCK_DATACITE: "true"
+          USE_MOCK_SEARCH: "true"
+        run: |
+          PYTHONPATH=. pytest v2/test_v2_*.py -v
+
+      - name: Install AWS SAM CLI
+        run: |
+          python -m pip install --upgrade aws-sam-cli
+          sam --version
+
+      # ---------------------------------------------------------------------
+      # Gate 3 (optional, configured in repo settings): GitHub environment
+      # protection pauses here for required reviewers before credentials are
+      # issued for the first time in this job.
+      # ---------------------------------------------------------------------
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: mdf-deploy-v2-${{ inputs.environment }}
+
+      - name: Deploy
+        working-directory: aws
+        env:
+          # deploy.sh reads this (and GitHub's own CI=true) to stay
+          # non-interactive: no changeset prompt, no teardown read -p.
+          MDF_NON_INTERACTIVE: "1"
+        run: ./deploy.sh "$DEPLOY_ENV"
+
+      - name: Stack status
+        if: always()
+        working-directory: aws
+        run: ./deploy.sh status "$DEPLOY_ENV" || true

@@ -17,6 +17,19 @@
 # First-time setup:
 #   pip install aws-sam-cli
 #   aws configure  # Set up AWS credentials
+#
+# AWS credentials / profile:
+#   No --profile flag is hard-coded anywhere in this script. Every `aws` and
+#   `sam` invocation picks up the ambient credential chain, so all of these work
+#   without editing anything:
+#     AWS_PROFILE=mdf-prod ./deploy.sh prod        # named profile
+#     ./deploy.sh prod                             # default profile
+#     (GitHub Actions OIDC)  ./deploy.sh prod      # env-var credentials
+#
+# Non-interactive / CI:
+#   Set MDF_NON_INTERACTIVE=1 (GitHub Actions' own CI=true also counts, as does
+#   a non-TTY stdin) to remove every blocking prompt. See NON_INTERACTIVE below.
+#   .github/workflows/deploy-v2.yml is the supported CI entry point.
 
 set -e
 
@@ -24,6 +37,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 REGION="us-east-1"
+
+# ---------------------------------------------------------------------------
+# Non-interactive mode.
+# GitHub Actions exports CI=true; .github/workflows/deploy-v2.yml additionally
+# sets MDF_NON_INTERACTIVE=1. A piped/redirected stdin also counts. Anything
+# that would otherwise block on a TTY prompt must honour this flag.
+# ---------------------------------------------------------------------------
+NON_INTERACTIVE=0
+if [[ -n "${MDF_NON_INTERACTIVE:-}" || -n "${CI:-}" || ! -t 0 ]]; then
+    NON_INTERACTIVE=1
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -85,6 +109,150 @@ ensure_s3_bucket() {
 build() {
     log "Building SAM application..."
     sam build
+    prune_build
+}
+
+# ---------------------------------------------------------------------------
+# Prune the built Lambda artifacts using .samignore
+#
+# Both functions use `CodeUri: .`, and SAM CLI has NO native file-exclusion
+# mechanism for zip-packaged Python functions (no .samignore support; the
+# python_pip builder's EXCLUDED_FILES tuple is hard-coded; `Metadata:
+# BuildProperties` exclusion is esbuild-only; `sam build --exclude` skips
+# resources, not files). So an untouched `sam build` copies the whole aws/ tree
+# into each artifact: v1 modules, aws/tests/, every test_v2_*.py, docs,
+# Dockerfile, deploy.sh, samconfig.toml, template.yaml.
+#
+# `sam deploy` zips .aws-sam/build/<Function>/ at package time, so deleting
+# files from that directory after `sam build` and before `sam deploy` really
+# does change what is uploaded. See aws/.samignore for the pattern syntax.
+# ---------------------------------------------------------------------------
+prune_build() {
+    local ignore_file="$SCRIPT_DIR/.samignore"
+    local build_dir="$SCRIPT_DIR/.aws-sam/build"
+
+    [[ -d "$build_dir" ]] || return 0
+    if [[ ! -f "$ignore_file" ]]; then
+        warn ".samignore not found — shipping the full CodeUri tree"
+        return 0
+    fi
+
+    log "Pruning build artifacts with .samignore..."
+    python3 - "$ignore_file" "$build_dir" <<'PY'
+import fnmatch
+import os
+import shutil
+import sys
+
+ignore_file, build_dir = sys.argv[1], sys.argv[2]
+
+patterns = []
+with open(ignore_file, encoding="utf-8") as fh:
+    for raw in fh:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Refuse patterns that would nuke an entire artifact.
+        if line.strip("/*") == "":
+            print("  ! refusing catch-all pattern: %r" % line)
+            continue
+        patterns.append(line)
+
+if not patterns:
+    print("  no patterns; nothing to prune")
+    sys.exit(0)
+
+
+def matched_by(rel, is_dir):
+    """rel is an artifact-root-relative POSIX path."""
+    name = rel.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        dir_only = pattern.endswith("/")
+        pat = pattern[:-1] if dir_only else pattern
+        if dir_only and not is_dir:
+            continue
+        if "/" in pat:
+            if fnmatch.fnmatch(rel, pat):
+                return pattern
+        elif "/" not in rel and fnmatch.fnmatch(name, pat):
+            # Bare patterns are top-level only, so "*.md" can never strip
+            # READMEs out of installed dependencies.
+            return pattern
+    return None
+
+
+def tree_size(path):
+    total = files = 0
+    for root, _dirs, names in os.walk(path):
+        for n in names:
+            p = os.path.join(root, n)
+            files += 1
+            try:
+                total += os.path.getsize(p)
+            except OSError:
+                pass
+    return total, files
+
+
+artifacts = sorted(
+    d for d in os.listdir(build_dir) if os.path.isdir(os.path.join(build_dir, d))
+)
+if not artifacts:
+    print("  no function artifacts under %s" % build_dir)
+    sys.exit(0)
+
+for artifact in artifacts:
+    root_dir = os.path.realpath(os.path.join(build_dir, artifact))
+    removed_files = 0
+    removed_bytes = 0
+    hits = []
+
+    for dirpath, dirnames, filenames in os.walk(root_dir, topdown=True):
+        rel_dir = os.path.relpath(dirpath, root_dir).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+
+        keep_dirs = []
+        for d in dirnames:
+            rel = "%s/%s" % (rel_dir, d) if rel_dir else d
+            pattern = matched_by(rel, True)
+            if pattern is None:
+                keep_dirs.append(d)
+                continue
+            target = os.path.realpath(os.path.join(dirpath, d))
+            if not (target == root_dir or target.startswith(root_dir + os.sep)):
+                keep_dirs.append(d)
+                continue
+            size, count = tree_size(target)
+            shutil.rmtree(target, ignore_errors=True)
+            removed_files += count
+            removed_bytes += size
+            hits.append(rel + "/")
+        dirnames[:] = keep_dirs  # do not descend into removed trees
+
+        for f in filenames:
+            rel = "%s/%s" % (rel_dir, f) if rel_dir else f
+            if matched_by(rel, False) is None:
+                continue
+            target = os.path.realpath(os.path.join(dirpath, f))
+            if not target.startswith(root_dir + os.sep):
+                continue
+            try:
+                removed_bytes += os.path.getsize(target)
+                os.remove(target)
+                removed_files += 1
+                hits.append(rel)
+            except OSError as exc:
+                print("  ! could not remove %s: %s" % (rel, exc))
+
+    print(
+        "  %s: removed %d file(s), %.1f KiB"
+        % (artifact, removed_files, removed_bytes / 1024.0)
+    )
+    for h in sorted(hits)[:40]:
+        print("      - %s" % h)
+    if len(hits) > 40:
+        print("      ... and %d more" % (len(hits) - 40))
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -245,10 +413,19 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     [[ -n "$datacite_url" ]] && all_params="$all_params DataCiteApiUrl=$datacite_url"
     [[ -n "$datacite_prefix" ]] && all_params="$all_params DataCitePrefix=$datacite_prefix"
 
+    # In CI there is no TTY to approve a changeset on. The typed-confirmation
+    # gate in .github/workflows/deploy-v2.yml (plus GitHub environment
+    # protection rules) is the approval step there.
+    local confirm_flag=()
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+        confirm_flag=(--no-confirm-changeset)
+    fi
+
     log "Deploying stack $stack_name..."
     sam deploy \
         --config-env "$env" \
         --no-fail-on-empty-changeset \
+        "${confirm_flag[@]}" \
         --parameter-overrides "$all_params"
 
     log "Deployment complete!"
@@ -310,8 +487,16 @@ teardown() {
     warn "═══════════════════════════════════════════════════"
     echo ""
 
-    read -p "Type '$env' to confirm teardown: " confirm
-    [[ "$confirm" != "$env" ]] && error "Aborted."
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+        # No TTY to type into. Require the same value out-of-band so an
+        # automated caller still has to name the environment explicitly.
+        [[ "${MDF_CONFIRM_TEARDOWN:-}" == "$env" ]] \
+            || error "Non-interactive teardown requires MDF_CONFIRM_TEARDOWN=$env"
+        warn "Non-interactive teardown confirmed via MDF_CONFIRM_TEARDOWN=$env"
+    else
+        read -p "Type '$env' to confirm teardown: " confirm
+        [[ "$confirm" != "$env" ]] && error "Aborted."
+    fi
 
     log "Deleting CloudFormation stack $stack_name..."
     sam delete \

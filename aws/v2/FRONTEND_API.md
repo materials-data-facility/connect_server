@@ -4,6 +4,8 @@ Complete API contract for building a frontend against the MDF Connect v2 backend
 
 **Base URL (staging):** `https://3xicgt0g7l.execute-api.us-east-1.amazonaws.com/staging`
 
+> **Contract changes (2026-07-30 hardening):** `POST /embed` and `GET /search/semantic` now require auth (401 anonymously; keyword `GET /search` stays public). Restricted-but-published datasets return 404 on card/citation/detail/preview for non-owner/non-curator callers. `GET /status` responses are field-reduced for non-owners (submitter PII, curation history, and internal transfer state are stripped). `GET /versions` ordering is numeric (`2.0 < 10.0`). Delete responses may include a `search_index` block describing index reconciliation. `POST /submissions/{id}/metadata` on a published dataset returns the new version as `approved` with a `publish_job` block (the publish job flips it to `published`), and returns 502 if indexing fails.
+
 ---
 
 ## Authentication

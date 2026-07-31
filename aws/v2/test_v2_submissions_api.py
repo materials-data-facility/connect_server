@@ -1588,3 +1588,324 @@ class TestAdminStats:
             assert resp.status_code == 403
         finally:
             os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+
+# ---------------------------------------------------------------------------
+# Restricted (non-public acl) datasets must not be readable by outsiders
+# ---------------------------------------------------------------------------
+
+RESTRICTED_ACL = ["urn:globus:auth:identity:secret-collaborator"]
+
+
+@pytest.fixture()
+def strict_curators(monkeypatch: pytest.MonkeyPatch):
+    """Turn off the blanket dev-mode curator grant so authz is actually tested."""
+    monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
+    monkeypatch.setenv("CURATOR_USER_IDS", "curator-user")
+    yield
+
+
+def _publish_restricted(client, title="Restricted Dataset"):
+    """Publish a dataset owned by test-user whose acl excludes "public"."""
+    result = _submit(client, extra={"title": title, "acl": RESTRICTED_ACL}, headers=HEADERS)
+    source_id = result["source_id"]
+    resp = client.post(
+        f"/curation/{source_id}/approve",
+        headers=CURATOR_HEADERS,
+        json={"mint_doi": False},
+    )
+    assert resp.status_code == 200, resp.json()
+    return source_id
+
+
+class TestRestrictedDatasetReads:
+    """A published-but-restricted dataset is only readable by owner/curator.
+
+    Globus Search gates it with visible_to; these endpoints read the store
+    directly, so without an explicit acl check they hand the metadata to anyone
+    who knows the source_id.
+    """
+
+    def test_card_404_for_outsider_200_for_owner_and_curator(self, env, strict_curators):
+        client = TestClient(app)
+        source_id = _publish_restricted(client)
+
+        assert client.get(f"/card/{source_id}", headers=OTHER_HEADERS).status_code == 404
+        assert client.get(f"/card/{source_id}", headers=HEADERS).status_code == 200
+        assert client.get(f"/card/{source_id}", headers=CURATOR_HEADERS).status_code == 200
+
+    def test_citation_404_for_outsider(self, env, strict_curators):
+        client = TestClient(app)
+        source_id = _publish_restricted(client)
+
+        assert client.get(f"/citation/{source_id}", headers=OTHER_HEADERS).status_code == 404
+        assert client.get(f"/citation/{source_id}", headers=HEADERS).status_code == 200
+
+    def test_detail_404_for_outsider(self, env, strict_curators):
+        client = TestClient(app)
+        source_id = _publish_restricted(client)
+
+        assert client.get(f"/detail/{source_id}-1.0", headers=OTHER_HEADERS).status_code == 404
+        assert client.get(f"/detail/{source_id}-1.0", headers=HEADERS).status_code == 200
+
+    def test_preview_404_for_outsider(self, env, strict_curators):
+        from v2.store import get_store
+
+        client = TestClient(app)
+        source_id = _publish_restricted(client)
+        get_store().update_profile(
+            source_id, "1.0",
+            json.dumps({"files": [{"path": "a.csv", "filename": "a.csv",
+                                   "columns": ["secret"], "sample_rows": [[1]]}]}),
+        )
+
+        for suffix in ("", "/files", "/sample"):
+            assert client.get(
+                f"/preview/{source_id}{suffix}", headers=OTHER_HEADERS
+            ).status_code == 404, suffix
+            assert client.get(
+                f"/preview/{source_id}{suffix}", headers=HEADERS
+            ).status_code == 200, suffix
+
+    def test_public_dataset_still_readable_by_anyone(self, env, strict_curators):
+        """The gate must not break the normal case: no acl == public."""
+        client = TestClient(app)
+        result = _submit(client, extra={"title": "Public Dataset"}, headers=HEADERS)
+        source_id = result["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+
+        assert client.get(f"/card/{source_id}", headers=OTHER_HEADERS).status_code == 200
+        assert client.get(f"/citation/{source_id}", headers=OTHER_HEADERS).status_code == 200
+        assert client.get(f"/detail/{source_id}-1.0", headers=OTHER_HEADERS).status_code == 200
+
+    def test_local_search_fallback_excludes_restricted(self, env, strict_curators, mock_search):
+        """The DynamoDB/sqlite fallback scan must apply the same acl rule as Globus Search."""
+        from v2.search import search_datasets
+
+        client = TestClient(app)
+        public_result = _submit(
+            client, extra={"title": "ZEBRAQUERY public dataset"}, headers=HEADERS
+        )
+        public_id = public_result["source_id"]
+        client.post(f"/curation/{public_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+        restricted_id = _publish_restricted(client, title="ZEBRAQUERY restricted dataset")
+
+        # Empty the mock index so search_datasets falls through to the local scan.
+        mock_search._entries.clear()
+
+        found = {r.get("source_id") for r in search_datasets("ZEBRAQUERY", limit=20)["results"]}
+        assert public_id in found
+        assert restricted_id not in found
+
+
+# ---------------------------------------------------------------------------
+# GET /status — sanitized response for non-owner / non-curator callers
+# ---------------------------------------------------------------------------
+
+class TestStatusSanitization:
+    def test_outsider_gets_sanitized_published_record(self, env, strict_curators):
+        client = TestClient(app)
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+
+        resp = client.get(f"/status/{source_id}", headers=OTHER_HEADERS)
+        assert resp.status_code == 200
+        sub = resp.json()["submission"]
+
+        # Still useful: the public facts about a published dataset.
+        assert sub["source_id"] == source_id
+        assert sub["status"] == "published"
+        assert sub["dataset_mdata"]["title"] == "Test Dataset"
+
+        # Stripped: submitter PII and the curation audit trail.
+        for field in ("user_id", "user_email", "curation_history",
+                      "approved_by", "approved_at", "transfer_status",
+                      "transfer_task_ids"):
+            assert field not in sub, field
+
+    def test_outsider_never_sees_dataset_acl(self, env, strict_curators):
+        """The acl enumerates the identities a dataset is shared with."""
+        client = TestClient(app)
+        source_id = _publish_restricted(client)
+
+        # The owner shares it with a curator, who is privileged and sees everything.
+        curator_view = client.get(f"/status/{source_id}", headers=CURATOR_HEADERS).json()["submission"]
+        assert curator_view["dataset_mdata"]["acl"] == RESTRICTED_ACL
+
+        outsider = client.get(f"/status/{source_id}", headers=OTHER_HEADERS).json()["submission"]
+        assert "acl" not in outsider["dataset_mdata"]
+
+    def test_owner_and_curator_still_get_the_full_record(self, env, strict_curators):
+        client = TestClient(app)
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+
+        for headers in (HEADERS, CURATOR_HEADERS):
+            sub = client.get(f"/status/{source_id}", headers=headers).json()["submission"]
+            assert sub["user_id"] == "test-user"
+            assert sub["user_email"] is not None
+            assert "curation_history" in sub
+
+    def test_status_query_endpoint_is_sanitized_too(self, env, strict_curators):
+        """GET /status?source_id= shares the code path's exposure, so it shares the fix."""
+        client = TestClient(app)
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+
+        outsider = client.get("/status", params={"source_id": source_id}, headers=OTHER_HEADERS)
+        assert outsider.status_code == 200
+        assert "user_email" not in outsider.json()["submission"]
+
+        owner = client.get("/status", params={"source_id": source_id}, headers=HEADERS)
+        assert owner.json()["submission"]["user_email"] is not None
+
+    def test_unpublished_stays_invisible_to_outsiders(self, env, strict_curators):
+        """Sanitization is not a new read grant — unpublished is still 'not found'."""
+        client = TestClient(app)
+        source_id = _submit(client, headers=HEADERS)["source_id"]
+
+        resp = client.get(f"/status/{source_id}", headers=OTHER_HEADERS)
+        assert resp.json() == {"success": False, "error": "Submission not found"}
+
+
+# ---------------------------------------------------------------------------
+# Delete reconciles the one-entry-per-dataset search index
+# ---------------------------------------------------------------------------
+
+class TestDeleteReconcilesSearch:
+    def test_deleting_only_published_version_removes_search_entry(self, env, mock_search):
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=False)
+        assert mock_search.get_entry(source_id) is not None
+
+        resp = client.post(
+            f"/submissions/{source_id}/delete", headers=HEADERS, json={"reason": "Bad data"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["search_index"] == {"action": "deleted", "success": True}
+        assert mock_search.get_entry(source_id) is None
+
+    def test_deleting_latest_repoints_entry_at_remaining_version(self, env, mock_search):
+        """One entry per dataset: removing the newest must expose the older one, not nothing."""
+        client = TestClient(app)
+        source_id = _submit(client, extra={"title": "V1 Title"})["source_id"]
+        _approve(client, source_id, mint_doi=False)
+        _submit(client, extra={
+            "title": "V2 Title",
+            "update": True,
+            "data_sources": ["https://example.com/new-data.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+        _approve(client, source_id, mint_doi=False, version="2.0")
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V2 Title"
+
+        resp = client.post(
+            f"/submissions/{source_id}/delete",
+            headers=HEADERS,
+            json={"reason": "Bad revision", "version": "2.0"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["search_index"]["action"] == "reingested"
+        assert resp.json()["search_index"]["version"] == "1.0"
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V1 Title"
+
+    def test_deleting_unpublished_version_leaves_the_index_alone(self, env, mock_search):
+        client = TestClient(app)
+        source_id = _submit(client, extra={"title": "V1 Title"})["source_id"]
+        _approve(client, source_id, mint_doi=False)
+        _submit(client, extra={
+            "title": "Pending V2",
+            "update": True,
+            "data_sources": ["https://example.com/new-data.csv"],
+            "extensions": {"mdf_source_id": source_id},
+        })
+
+        resp = client.post(
+            f"/submissions/{source_id}/delete",
+            headers=HEADERS,
+            json={"reason": "Withdrawn revision", "version": "2.0"},
+        )
+        assert resp.status_code == 200
+        assert "search_index" not in resp.json()
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V1 Title"
+
+
+# ---------------------------------------------------------------------------
+# Ownership of a curator-edited published dataset
+# ---------------------------------------------------------------------------
+
+class TestPublishedEditOwnership:
+    def test_curator_edit_preserves_original_submitter(self, env, strict_curators):
+        """A curator's metadata fix must not transfer the dataset to the curator."""
+        client = TestClient(app)
+        source_id = _submit(client, headers=HEADERS)["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=CURATOR_HEADERS,
+            json={"description": "Corrected by a curator"},
+        )
+        assert resp.status_code == 200, resp.json()
+        new_version = resp.json()["new_version"]
+
+        new_record = client.get(
+            f"/status/{source_id}", params={"version": new_version}, headers=HEADERS,
+        ).json()["submission"]
+        assert new_record["user_id"] == "test-user"
+        assert new_record["user_email"] == client.get(
+            f"/status/{source_id}", params={"version": "1.0"}, headers=HEADERS,
+        ).json()["submission"]["user_email"]
+        # The acting curator is still recorded, just not as the owner.
+        assert new_record["approved_by"] == "curator-user"
+
+    def test_original_owner_can_still_update_after_a_curator_edit(self, env, strict_curators):
+        """Root-version ownership authz keeps working across the new version."""
+        client = TestClient(app)
+        source_id = _submit(client, headers=HEADERS)["source_id"]
+        client.post(f"/curation/{source_id}/approve", headers=CURATOR_HEADERS, json={"mint_doi": False})
+        client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=CURATOR_HEADERS,
+            json={"description": "Corrected by a curator"},
+        )
+
+        resp = client.post("/submit", headers=HEADERS, json=_update_payload(source_id, title="Owner v2"))
+        assert resp.status_code == 200, resp.json()
+        # An unrelated submitter still cannot.
+        assert client.post(
+            "/submit", headers=OTHER_HEADERS, json=_update_payload(source_id),
+        ).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /versions ordering
+# ---------------------------------------------------------------------------
+
+class TestVersionOrdering:
+    def test_versions_sort_numerically_not_lexicographically(self, env):
+        """A dataset past v9 must not list 1.0, 10.0, 2.0 (breaks pagination too)."""
+        from v2.store import get_store
+
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+
+        store = get_store()
+        base = store.get_submission(source_id, "1.0")
+        for version in ("2.0", "10.0", "9.0"):
+            record = dict(base)
+            record["version"] = version
+            record["versioned_source_id"] = f"{source_id}-{version}"
+            store.put_submission(record)
+
+        listed = client.get(f"/versions/{source_id}", headers=HEADERS).json()
+        assert [v["version"] for v in listed["versions"]] == ["1.0", "2.0", "9.0", "10.0"]
+
+        first_page = client.get(
+            f"/versions/{source_id}", headers=HEADERS, params={"limit": 2, "offset": 0},
+        ).json()
+        assert [v["version"] for v in first_page["versions"]] == ["1.0", "2.0"]
