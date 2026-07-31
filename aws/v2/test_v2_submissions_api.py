@@ -47,6 +47,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 HEADERS = {"X-User-Id": "test-user"}
 OTHER_HEADERS = {"X-User-Id": "other-user"}
+CURATOR_HEADERS = {"X-User-Id": "curator-user"}
 
 BASE_SUBMISSION = {
     "title": "Test Dataset",
@@ -720,6 +721,312 @@ class TestPermissions:
                 json={},
             )
             assert resp.status_code == 403
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+
+# ---------------------------------------------------------------------------
+# POST /submit with update=true — dataset hijack protection
+# ---------------------------------------------------------------------------
+
+def _update_payload(source_id, title="Hijacked Dataset"):
+    return {
+        **BASE_SUBMISSION,
+        "title": title,
+        "update": True,
+        "extensions": {"mdf_source_id": source_id},
+    }
+
+
+def _latest_flag(client, source_id, version):
+    sub = _status(client, source_id, version=version)
+    mdata = sub.get("dataset_mdata")
+    if isinstance(mdata, str):
+        mdata = json.loads(mdata)
+    return (mdata or {}).get("latest")
+
+
+class TestSubmitUpdatePermissions:
+    def test_update_by_non_owner_non_curator_is_forbidden(self, env):
+        """A submitter who does not own the dataset cannot version it (hijack)."""
+        client = TestClient(app)
+
+        # test-user publishes v1.0
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+        assert _latest_flag(client, source_id, "1.0") is True
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = client.post(
+                "/submit",
+                headers=OTHER_HEADERS,
+                json=_update_payload(source_id),
+            )
+            assert resp.status_code == 403, resp.json()
+            assert "permission" in resp.json()["detail"].lower()
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+        # The owner's version must still be latest, and no v2.0 created
+        assert _latest_flag(client, source_id, "1.0") is True
+        versions = client.get(f"/versions/{source_id}", headers=HEADERS).json()
+        assert versions["total_count"] == 1
+        assert [v["version"] for v in versions["versions"]] == ["1.0"]
+
+    def test_update_by_owner_still_succeeds(self, env):
+        """The original submitter can still push a new version."""
+        client = TestClient(app)
+
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = client.post(
+                "/submit",
+                headers=HEADERS,
+                json=_update_payload(source_id, title="Owner Update v2.0"),
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "2.0"
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+        assert _latest_flag(client, source_id, "1.0") is False
+        assert _latest_flag(client, source_id, "2.0") is True
+
+    def test_update_by_curator_is_allowed(self, env):
+        """A curator may version someone else's dataset."""
+        client = TestClient(app)
+
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        os.environ["CURATOR_USER_IDS"] = "other-user"
+        try:
+            resp = client.post(
+                "/submit",
+                headers=OTHER_HEADERS,
+                json=_update_payload(source_id, title="Curator Update v2.0"),
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "2.0"
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+            os.environ.pop("CURATOR_USER_IDS", None)
+
+    def test_owner_keeps_control_after_curator_update(self, env):
+        """Ownership follows the ROOT version, not the newest one.
+
+        Each new version record is stamped with the *updating* user's user_id,
+        so after a curator legitimately updates someone's dataset the newest
+        version carries the curator's id. The original submitter must still be
+        able to update their own dataset, and unrelated users must still be
+        blocked.
+        """
+        client = TestClient(app)
+
+        # test-user (owner) publishes v1.0
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        os.environ["CURATOR_USER_IDS"] = "curator-user"
+        try:
+            # Curator pushes v2.0 — record's user_id becomes curator-user
+            resp = client.post(
+                "/submit",
+                headers=CURATOR_HEADERS,
+                json=_update_payload(source_id, title="Curator Update v2.0"),
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "2.0"
+            # v2.0 is pending_curation, so read it as the curator
+            v20 = client.get(
+                f"/status/{source_id}", params={"version": "2.0"}, headers=CURATOR_HEADERS
+            ).json()["submission"]
+            assert v20["user_id"] == "curator-user"
+
+            # The original submitter must NOT be locked out of their dataset
+            resp = client.post(
+                "/submit",
+                headers=HEADERS,
+                json=_update_payload(source_id, title="Owner Update v3.0"),
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "3.0"
+
+            # ...and an unrelated submitter is still blocked
+            resp = client.post(
+                "/submit",
+                headers=OTHER_HEADERS,
+                json=_update_payload(source_id),
+            )
+            assert resp.status_code == 403, resp.json()
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+            os.environ.pop("CURATOR_USER_IDS", None)
+
+        versions = client.get(f"/versions/{source_id}", headers=HEADERS).json()
+        assert [v["version"] for v in versions["versions"]] == ["1.0", "2.0", "3.0"]
+
+    def test_new_dataset_submit_unaffected(self, env):
+        """Brand-new (non-update) submissions are unaffected by the ownership gate."""
+        client = TestClient(app)
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = client.post("/submit", headers=OTHER_HEADERS, json=dict(BASE_SUBMISSION))
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "1.0"
+
+            # update=true against an unknown source_id still yields the 400 path
+            resp = client.post(
+                "/submit",
+                headers=OTHER_HEADERS,
+                json=_update_payload("no-such-source-id"),
+            )
+            assert resp.status_code == 400, resp.json()
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+
+class TestRootVersionOwnerResolution:
+    """Unit coverage for the shared ownership helper's version ordering."""
+
+    def test_root_record_is_earliest_regardless_of_list_order(self, env):
+        from v2.app.routers.submissions import root_version_record
+
+        records = [
+            {"version": "10.0", "user_id": "later", "created_at": "2024-05-01"},
+            {"version": "2.0", "user_id": "middle", "created_at": "2024-03-01"},
+            {"version": "1.0", "user_id": "owner", "created_at": "2024-01-01"},
+            {"version": "1.1", "user_id": "owner", "created_at": "2024-02-01"},
+        ]
+        assert root_version_record(records)["user_id"] == "owner"
+        assert root_version_record(list(reversed(records)))["user_id"] == "owner"
+        assert root_version_record([]) is None
+
+    def test_non_numeric_versions_do_not_crash(self, env):
+        from v2.app.routers.submissions import root_version_record
+
+        records = [
+            {"version": "draft", "user_id": "odd", "created_at": "2024-06-01"},
+            {"version": "1.0", "user_id": "owner", "created_at": "2024-01-01"},
+        ]
+        assert root_version_record(records)["user_id"] == "owner"
+
+
+# ---------------------------------------------------------------------------
+# POST /stream/{stream_id}/snapshot with update=true — same hijack protection
+#
+# The streams router is not mounted in v2.app (disabled pending the B-1
+# decision), so these tests mount it on a throwaway FastAPI app to exercise the
+# gate directly.
+# ---------------------------------------------------------------------------
+
+class TestStreamSnapshotUpdatePermissions:
+    @staticmethod
+    def _streams_client():
+        from fastapi import FastAPI
+
+        from v2.app.routers import streams
+
+        streams_app = FastAPI()
+        streams_app.include_router(streams.router)
+        return TestClient(streams_app)
+
+    def test_snapshot_update_by_non_owner_is_forbidden(self, env):
+        """A stream owner cannot snapshot onto someone else's dataset."""
+        client = TestClient(app)
+        stream_client = self._streams_client()
+
+        # test-user owns the dataset
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        created = stream_client.post(
+            "/stream/create", headers=OTHER_HEADERS, json={"title": "Attacker Stream"}
+        )
+        assert created.status_code == 200, created.json()
+        stream_id = created.json()["stream_id"]
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = stream_client.post(
+                f"/stream/{stream_id}/snapshot",
+                headers=OTHER_HEADERS,
+                json={"source_id": source_id, "update": True},
+            )
+            assert resp.status_code == 403, resp.json()
+            assert "permission" in resp.json()["detail"].lower()
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+        # No hijacked version was written
+        versions = client.get(f"/versions/{source_id}", headers=HEADERS).json()
+        assert [v["version"] for v in versions["versions"]] == ["1.0"]
+
+    def test_snapshot_update_by_dataset_owner_is_allowed(self, env):
+        """The dataset owner can still snapshot a new version of their dataset."""
+        client = TestClient(app)
+        stream_client = self._streams_client()
+
+        result = _submit(client, headers=HEADERS)
+        source_id = result["source_id"]
+
+        created = stream_client.post(
+            "/stream/create", headers=HEADERS, json={"title": "Owner Stream"}
+        )
+        assert created.status_code == 200, created.json()
+        stream_id = created.json()["stream_id"]
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = stream_client.post(
+                f"/stream/{stream_id}/snapshot",
+                headers=HEADERS,
+                json={"source_id": source_id, "update": True},
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "1.1"
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
+
+    def test_snapshot_new_dataset_unaffected(self, env):
+        """Snapshots that do not target an existing dataset are unaffected."""
+        stream_client = self._streams_client()
+
+        created = stream_client.post(
+            "/stream/create", headers=OTHER_HEADERS, json={"title": "Fresh Stream"}
+        )
+        assert created.status_code == 200, created.json()
+        stream_id = created.json()["stream_id"]
+
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = stream_client.post(
+                f"/stream/{stream_id}/snapshot",
+                headers=OTHER_HEADERS,
+                json={},
+            )
+            assert resp.status_code == 200, resp.json()
+            assert resp.json()["version"] == "1.0"
         finally:
             os.environ["ALLOW_ALL_CURATORS"] = "true"
 

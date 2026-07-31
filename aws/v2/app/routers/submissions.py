@@ -142,6 +142,79 @@ def _flip_latest_on_prior(store: SubmissionStore, prior_record: Dict[str, Any]) 
     store.upsert_submission(prior_record)
 
 
+def _version_sort_key(record: Dict[str, Any]):
+    """Numeric-aware ordering key for a submission version record.
+
+    Mirrors ``submission_utils.latest_version`` (per-component numeric sort so
+    "10.0" > "2.0"), with created_at as a stable tie-breaker.
+    """
+    parts = []
+    for part in str(record.get("version") or "0").split("."):
+        # Numeric components sort before/among themselves; non-numeric ones
+        # sort after, compared as strings. Uniform tuple shape keeps the
+        # comparison type-safe.
+        parts.append((0, int(part), "") if part.isdigit() else (1, 0, part))
+    return (parts, record.get("created_at") or "")
+
+
+def root_version_record(existing_versions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the earliest (root) version record of a dataset's version chain.
+
+    ``store.list_versions()`` makes no ordering guarantee (the SQLite backend
+    issues a bare SELECT; DynamoDB orders by the raw string sort key), so the
+    caller must sort explicitly rather than trusting list position.
+    """
+    records = [v for v in existing_versions if v]
+    if not records:
+        return None
+    return sorted(records, key=_version_sort_key)[0]
+
+
+def ensure_dataset_update_permitted(
+    auth: AuthContext,
+    existing_versions: List[Dict[str, Any]],
+    source_id: str,
+) -> None:
+    """Only a dataset's original submitter (or a curator) may add a version to it.
+
+    Without this check any member of the submitters group could hijack someone
+    else's dataset by submitting update=true with their source_id, which also
+    flips latest=false on the real owner's current version.
+
+    Ownership is derived from the ROOT (earliest) version, not the latest one:
+    both this route and /stream/{id}/snapshot stamp the *updating* user's
+    user_id onto each new version record, so a curator legitimately updating
+    someone else's dataset would otherwise (a) lock the original submitter out
+    of their own dataset and (b) keep permanent write access for themselves
+    after losing curator status.
+
+    Migrated v1 datasets have root user_id="v1-migration", so they are
+    curator-only for updates. That is intended.
+    """
+    root = root_version_record(existing_versions)
+    if root is None:
+        # Brand-new dataset (no prior versions) — nothing to protect.
+        return
+
+    owner_id = root.get("user_id")
+    if owner_id and owner_id == auth.user_id:
+        return
+    if is_curator(auth):
+        return
+
+    logger.warning(
+        "Blocked update to source_id=%s by non-owner user_id=%s (dataset owner=%s)",
+        source_id,
+        auth.user_id,
+        owner_id,
+    )
+    raise HTTPException(
+        403,
+        "You do not have permission to submit a new version of this dataset; "
+        "only the original submitter or a curator may update it",
+    )
+
+
 def _resolve_submission(
     store: SubmissionStore,
     source_id: str,
@@ -601,6 +674,9 @@ async def submit(
 
     if update and not latest_ver:
         raise HTTPException(400, "Update requested but no prior submission found")
+
+    if update:
+        ensure_dataset_update_permitted(auth, existing_versions, source_id)
 
     versioned_source_id = "{}-{}".format(source_id, version)
 

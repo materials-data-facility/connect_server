@@ -5,7 +5,7 @@
 #   make test       # Run tests
 #   make deploy-dev # Deploy to AWS dev environment
 
-.PHONY: help local test lint build deploy-dev deploy-prod clean
+.PHONY: help local test test-v1 lint build deploy-dev deploy-prod clean
 
 # Default target
 help:
@@ -14,7 +14,8 @@ help:
 	@echo "Development:"
 	@echo "  make local         Start local development server (port 8080)"
 	@echo "  make demo          Run the demo script"
-	@echo "  make test          Run unit tests"
+	@echo "  make test          Run v2 unit tests"
+	@echo "  make test-v1       Run legacy v1 unit tests"
 	@echo "  make lint          Run linters"
 	@echo ""
 	@echo "Deployment:"
@@ -39,6 +40,10 @@ demo:
 	@python v2/demo_full_workflow.py
 
 test:
+	@STORE_BACKEND=sqlite AUTH_MODE=dev USE_MOCK_DATACITE=true USE_MOCK_SEARCH=true \
+		PYTHONPATH=. pytest v2/test_v2_*.py -v
+
+test-v1:
 	@pytest tests/ -v --tb=short
 
 lint:

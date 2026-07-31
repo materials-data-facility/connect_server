@@ -165,6 +165,7 @@ def test_submissions_pagination(local_env: Path):
     assert b3["next_key"] is None
 
 
+@pytest.mark.skip(reason="streams router disabled pending B-1 decision")
 def test_path_validation_edge_cases(local_env: Path):
     client = TestClient(app)
     headers = {"X-User-Id": "owner-user"}

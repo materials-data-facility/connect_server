@@ -58,6 +58,10 @@ _RELEVANT_ENV_KEYS = {
 
 REGION = "us-east-1"
 
+# Legacy production Globus Search index (v1). The v1 -> v2 migration is
+# one-way; nothing this script does may ever write to this index.
+LEGACY_SEARCH_INDEX_UUID = "1a57bbe5-5272-477f-9d31-343b8258b7a5"
+
 
 def resolve_env_from_stack(env: str) -> Dict[str, str]:
     """Read the deployed Lambda's environment variables from CloudFormation.
@@ -109,6 +113,28 @@ def apply_env(resolved: Dict[str, str]) -> None:
     for key, value in resolved.items():
         if key not in os.environ:
             os.environ[key] = value
+
+
+def guard_against_legacy_index() -> None:
+    """Hard-fail if the effective SEARCH_INDEX_UUID is the legacy v1 index.
+
+    Must run after config resolution (resolve_env_from_stack / apply_env,
+    and/or pre-set env vars) and before any write to the store or search
+    index. Runs in every mode, including --dry-run, since a mis-set
+    SearchIndexUUID stack parameter or env var is a config error regardless
+    of whether the run actually writes.
+    """
+    effective = os.environ.get("SEARCH_INDEX_UUID")
+    if effective == LEGACY_SEARCH_INDEX_UUID:
+        print(
+            f"\nFATAL: SEARCH_INDEX_UUID resolved to {effective!r}, which is "
+            "the LEGACY v1 production Globus Search index.\n"
+            "The v1 -> v2 migration is one-way and must NEVER write to the "
+            "legacy index. Refusing to continue.\n"
+            "Check the SearchIndexUUID CloudFormation stack parameter and/or "
+            "the SEARCH_INDEX_UUID environment variable for this run."
+        )
+        sys.exit(1)
 
 
 def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
@@ -345,6 +371,12 @@ def main():
         print(f"  GLOBUS_CLIENT_ID:       {'***' if has_globus else '(not set)'}")
         print(f"  GLOBUS_CLIENT_SECRET:   {'***' if resolved.get('GLOBUS_CLIENT_SECRET') else '(not set)'}")
         print()
+
+    # ── Refuse to run against the legacy v1 production index ──
+    # Must happen after config resolution/env overrides and before any
+    # write, in every mode (including --dry-run — a mis-set index is a
+    # config error regardless of whether this run actually writes).
+    guard_against_legacy_index()
 
     input_path = os.path.abspath(args.input)
     print(f"Loading {input_path}")

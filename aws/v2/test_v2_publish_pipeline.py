@@ -468,9 +468,9 @@ class TestDomainsAndExternalImport:
 
         status = client.get(f"/status/{source_id}")
         mdata = status.json()["submission"]["dataset_mdata"]
-        assert mdata["external_doi"] == "10.1234/ext-dataset"
-        assert mdata["external_url"] == "https://zenodo.org/record/12345"
-        assert mdata["external_source"] == "Zenodo"
+        assert mdata["external"]["doi"] == "10.1234/ext-dataset"
+        assert mdata["external"]["url"] == "https://zenodo.org/record/12345"
+        assert mdata["external"]["source"] == "Zenodo"
 
     def test_combined_domains_and_external_import(self, env):
         """Submit with both domains and external fields, verify all appear."""
@@ -489,9 +489,9 @@ class TestDomainsAndExternalImport:
         status = client.get(f"/status/{source_id}")
         mdata = status.json()["submission"]["dataset_mdata"]
         assert mdata["domains"] == ["physics"]
-        assert mdata["external_doi"] == "10.5678/phys"
-        assert mdata["external_url"] == "https://arxiv.org/abs/2301.00001"
-        assert mdata["external_source"] == "arXiv"
+        assert mdata["external"]["doi"] == "10.5678/phys"
+        assert mdata["external"]["url"] == "https://arxiv.org/abs/2301.00001"
+        assert mdata["external"]["source"] == "arXiv"
 
     def test_domains_empty_by_default(self, env):
         """Submit without domains, verify dataset_mdata has domains: []."""
@@ -505,7 +505,7 @@ class TestDomainsAndExternalImport:
         assert mdata["domains"] == []
 
     def test_external_fields_absent_by_default(self, env):
-        """Submit without external fields, verify they are None in dataset_mdata."""
+        """Submit without external fields, verify external provenance is absent."""
         client = TestClient(app)
         resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
         assert resp.status_code == 200
@@ -513,9 +513,7 @@ class TestDomainsAndExternalImport:
 
         status = client.get(f"/status/{source_id}")
         mdata = status.json()["submission"]["dataset_mdata"]
-        assert mdata.get("external_doi") is None
-        assert mdata.get("external_url") is None
-        assert mdata.get("external_source") is None
+        assert mdata.get("external") is None
 
     def test_domains_in_search_index(self, env):
         """Approve with domains, verify GMetaEntry mdf block contains them."""
@@ -574,4 +572,4 @@ class TestDomainsAndExternalImport:
         assert sub["doi"] != "10.9999/someone-elses-doi"
         # External DOI is preserved in metadata
         mdata = sub["dataset_mdata"]
-        assert mdata["external_doi"] == "10.9999/someone-elses-doi"
+        assert mdata["external"]["doi"] == "10.9999/someone-elses-doi"

@@ -17,6 +17,7 @@ from v2.app.models import (
     StreamCreateRequest,
     StreamSnapshotRequest,
 )
+from v2.app.routers.submissions import ensure_dataset_update_permitted
 from v2.doi_utils import mint_doi_for_stream
 from v2.store import SubmissionStore
 from v2.stream_store import StreamStore
@@ -185,6 +186,13 @@ async def stream_snapshot(
 
     if update and not existing_versions:
         raise HTTPException(400, "Update requested but no prior submission found")
+
+    # A snapshot with update=true is an alternate writer into a dataset's version
+    # history, so it needs the same ownership gate as POST /submit — otherwise any
+    # stream owner could push a version onto an arbitrary victim's dataset by
+    # passing its source_id. Shared helper so the two paths cannot drift.
+    if update:
+        ensure_dataset_update_permitted(auth, existing_versions, source_id)
 
     if not update and existing_versions:
         source_id = generate_source_id(prefix=source_id)

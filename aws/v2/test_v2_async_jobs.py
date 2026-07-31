@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 import pytest
@@ -13,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from v2.app import app
 from v2.app.middleware import reset_middleware_state
 from v2.async_jobs import run_sqlite_worker_once
-from v2.storage import reset_storage_backend
+from v2.storage import get_storage_backend, reset_storage_backend
 
 
 @pytest.fixture()
@@ -40,29 +39,29 @@ def async_sqlite_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def test_async_profile_job_with_sqlite_worker(async_sqlite_env):
     client = TestClient(app)
     headers = {"X-User-Id": "owner-user"}
+    stream_id = "async-profile-stream"
 
-    stream = client.post("/stream/create", headers=headers, json={"title": "Async Profile Stream"})
-    assert stream.status_code == 200
-    stream_id = stream.json()["stream_id"]
-
-    content_b64 = base64.b64encode(b"a,b\n1,2\n3,4\n").decode("ascii")
-    upload = client.post(
-        f"/stream/{stream_id}/upload",
-        headers=headers,
-        json={"filename": "sample.csv", "content_base64": content_b64, "content_type": "text/csv"},
+    storage = get_storage_backend()
+    storage.store_file(
+        stream_id=stream_id,
+        filename="sample.csv",
+        content=b"a,b\n1,2\n3,4\n",
+        content_type="text/csv",
     )
-    assert upload.status_code == 200
-
-    snap = client.post(
-        f"/stream/{stream_id}/snapshot",
+    submit = client.post(
+        "/submit",
         headers=headers,
-        json={"title": "Snapshot"},
+        json={
+            "title": "Async Profile Dataset",
+            "authors": [{"name": "Owner"}],
+            "data_sources": [f"stream://{stream_id}"],
+        },
     )
-    assert snap.status_code == 200
-    body = snap.json()
+    assert submit.status_code == 200
+    body = submit.json()
     source_id = body["source_id"]
-    assert body["profile_job"]["queued"] is True
-    assert body["profile_job"]["mode"] == "sqlite"
+    assert body["profile_jobs"][0]["queued"] is True
+    assert body["profile_jobs"][0]["mode"] == "sqlite"
 
     before = client.get(f"/status/{source_id}")
     assert before.status_code == 200

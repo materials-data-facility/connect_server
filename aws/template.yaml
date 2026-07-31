@@ -358,6 +358,8 @@ Resources:
             Queue: !GetAtt AsyncJobsQueue.Arn
             BatchSize: !Ref AsyncWorkerBatchSize
             MaximumBatchingWindowInSeconds: !Ref AsyncWorkerBatchWindowSeconds
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
         TransferCleanupSchedule:
           Type: Schedule
           Properties:
@@ -541,6 +543,8 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
 
   StreamsTable:
     Type: AWS::DynamoDB::Table
@@ -568,6 +572,8 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
 
 # ===========================================================================
 # Outputs

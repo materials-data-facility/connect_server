@@ -25,6 +25,10 @@ import globus_sdk
 # MDF v2 test search index
 DEFAULT_INDEX_UUID = "ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
 
+# Legacy production Globus Search index (v1). The v1 -> v2 migration is
+# one-way; this script must never grant roles on the legacy index.
+LEGACY_SEARCH_INDEX_UUID = "1a57bbe5-5272-477f-9d31-343b8258b7a5"
+
 # Native app client for interactive login (same one used by mdf_agent)
 NATIVE_APP_CLIENT_ID = "074cebcc-19ad-4332-bbf2-78402291b659"
 
@@ -78,6 +82,16 @@ def main():
     parser.add_argument("--role", default="writer", choices=["writer", "admin"], help="Role to grant (default: writer)")
     parser.add_argument("--list-only", action="store_true", help="Just list current roles, don't create")
     args = parser.parse_args()
+
+    # Refuse to touch the legacy v1 production index, before any Globus API call.
+    if args.index == LEGACY_SEARCH_INDEX_UUID:
+        print(
+            f"\nFATAL: refusing to grant roles on the legacy v1 production "
+            f"index ({LEGACY_SEARCH_INDEX_UUID}).\n"
+            "The v1 -> v2 migration is one-way; this script must never "
+            "modify roles on the legacy index. Pass a different --index."
+        )
+        sys.exit(1)
 
     # Resolve the confidential app's client ID
     app_client_id = args.client_id
