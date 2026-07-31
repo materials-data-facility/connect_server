@@ -63,12 +63,13 @@ async def auth_check(
     }
 
 
-from v2.app.routers import submissions, files, search, cards, curation, preview, admin  # noqa: E402
+from v2.app.routers import submissions, search, cards, curation, preview, admin  # noqa: E402
 # from v2.app.routers import streams  # noqa: E402  — disabled until stream feature is ready
+# from v2.app.routers import files  # noqa: E402  — disabled until stream feature is ready
 
 app.include_router(submissions.router)
-# app.include_router(streams.router)  — disabled
-app.include_router(files.router)
+# app.include_router(streams.router)  — disabled until stream feature is ready
+# app.include_router(files.router)  — disabled until stream feature is ready
 app.include_router(search.router)
 app.include_router(cards.router)
 app.include_router(curation.router)

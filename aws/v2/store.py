@@ -349,6 +349,14 @@ class SqliteSubmissionStore(SubmissionStore):
                     rejection_reason TEXT,
                     curation_history TEXT,
                     dataset_profile TEXT,
+                    view_count INTEGER DEFAULT 0,
+                    download_count INTEGER DEFAULT 0,
+                    title_description_embedding TEXT,
+                    embedding_model TEXT,
+                    embedding_generated_at TEXT,
+                    sync_content_hash TEXT,
+                    search_synced_hash TEXT,
+                    last_synced_at TEXT,
                     PRIMARY KEY (source_id, version)
                 )
                 """
@@ -392,6 +400,18 @@ class SqliteSubmissionStore(SubmissionStore):
             if "metadata_updated_at" not in col_names:
                 self.conn.execute(
                     "ALTER TABLE submissions ADD COLUMN metadata_updated_at TEXT"
+                )
+            if "sync_content_hash" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN sync_content_hash TEXT"
+                )
+            if "search_synced_hash" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN search_synced_hash TEXT"
+                )
+            if "last_synced_at" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN last_synced_at TEXT"
                 )
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
@@ -471,8 +491,10 @@ class SqliteSubmissionStore(SubmissionStore):
                     organization, status, dataset_mdata, test, created_at, updated_at, action_id,
                     doi, dataset_doi, legacy_source_id, published_at, approved_at, approved_by, rejected_at, rejected_by,
                     rejection_reason, curation_history, dataset_profile, metadata_updated_at,
-                    title_description_embedding, embedding_model, embedding_generated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title_description_embedding, embedding_model, embedding_generated_at,
+                    view_count, download_count, sync_content_hash, search_synced_hash,
+                    last_synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -502,6 +524,11 @@ class SqliteSubmissionStore(SubmissionStore):
                     embedding,
                     record.get("embedding_model"),
                     record.get("embedding_generated_at"),
+                    int(record.get("view_count") or 0),
+                    int(record.get("download_count") or 0),
+                    record.get("sync_content_hash"),
+                    record.get("search_synced_hash"),
+                    record.get("last_synced_at"),
                 ),
             )
 

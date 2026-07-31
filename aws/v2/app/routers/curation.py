@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 
-from v2.async_jobs import enqueue_publish_job
+from v2.async_jobs import dispatch_publish_job
 from v2.app.auth import require_curator
 from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext, CurationApproveRequest, CurationRejectRequest
@@ -123,17 +123,23 @@ async def approve(
     submission = _resolve_submission_for_curation(store, source_id, payload.version)
     version = submission.get("version")
 
-    if submission.get("status") != "pending_curation":
+    status = submission.get("status")
+    # "approved" is accepted as well as "pending_curation": approval persists the
+    # approved state before dispatching the publish job, so a transient publish
+    # failure (search/DataCite down) would otherwise leave the submission stuck
+    # with no way to retry. Re-approving re-dispatches the publish job, which is
+    # idempotent. Already-published submissions are still rejected.
+    if status not in ("pending_curation", "approved"):
         raise HTTPException(
             400,
-            f"Submission is not pending curation (status: {submission.get('status')})",
+            f"Submission is not pending curation (status: {status})",
         )
 
     curator_id = auth.user_id
     now = datetime.now(timezone.utc).isoformat()
 
     curation_record = {
-        "action": "approved",
+        "action": "approved" if status == "pending_curation" else "publish_retried",
         "curator_id": curator_id,
         "timestamp": now,
         "notes": payload.notes or "",
@@ -181,8 +187,10 @@ async def approve(
     }
 
     # Always trigger publish pipeline (search ingest + status update);
-    # mint_doi flag only controls the DOI step
-    publish_job = enqueue_publish_job(source_id, version, mint_doi=payload.mint_doi)
+    # mint_doi flag only controls the DOI step. A dispatch/inline failure raises
+    # (502) rather than reporting success for a publish that did not happen —
+    # the submission stays "approved" and re-approving retries it.
+    publish_job = dispatch_publish_job(source_id, version, mint_doi=payload.mint_doi)
     result["publish_job"] = publish_job
     if not publish_job.get("queued"):
         publish_result = publish_job.get("result", {})

@@ -19,6 +19,11 @@ JOB_GENERATE_EMBEDDING = "generate_embedding"
 JOB_BUILD_EMBEDDING_SNAPSHOT = "build_embedding_snapshot"
 JOB_DISPATCH_EMBEDDING_REBUILD = "dispatch_embedding_rebuild"
 
+# Statuses a publish job accepts. "approved" is the state routes move a record
+# into before dispatching (curation approve, metadata edit, status update);
+# "published" is allowed so a redelivered message is a safe no-op re-run.
+PUBLISHABLE_STATUSES = frozenset({"approved", "published"})
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -28,6 +33,24 @@ def _sqlite_path() -> str:
     return os.environ.get("ASYNC_SQLITE_PATH", os.environ.get("SQLITE_PATH", "/tmp/mdf_connect_v2.db"))
 
 
+class JobExecutionError(RuntimeError):
+    """A job could not complete and must be retried.
+
+    Raised out of ``process_job`` so that:
+    - the SQS event source (ReportBatchItemFailures) records a batch item
+      failure and redelivers the message, eventually landing it in the DLQ;
+    - ``run_sqlite_worker_once`` marks the job failed;
+    - ``InlineJobDispatcher`` surfaces an explicit API error instead of
+      pretending the job succeeded.
+
+    Jobs that raise this must be safe to re-run from the start.
+    """
+
+    def __init__(self, message: str, result: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.result = result or {}
+
+
 class JobDispatcher:
     def dispatch(self, job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
@@ -35,13 +58,35 @@ class JobDispatcher:
 
 class InlineJobDispatcher(JobDispatcher):
     def dispatch(self, job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        result = process_job(job_type, payload)
+        try:
+            result = process_job(job_type, payload)
+        except Exception as exc:
+            # Inline dispatch runs inside the API request, so there is no queue
+            # to retry the work. Surface a targeted upstream-failure error
+            # instead of letting the generic handler turn it into an opaque 500.
+            logger.exception("Inline async job failed job_type=%s", job_type)
+            raise _inline_job_error(job_type, exc) from exc
         return {
             "mode": "inline",
             "queued": False,
             "job_type": job_type,
             "result": result,
         }
+
+
+def _inline_job_error(job_type: str, exc: Exception) -> Exception:
+    """Translate an inline job failure into an HTTP-shaped error when possible.
+
+    Inline dispatch is only used from request handlers (and local/test runs), so
+    a failed dependency (DataCite, Globus Search, ...) is a 502, not a 500. If
+    FastAPI is unavailable (pure worker context) the original exception is kept.
+    """
+    detail = f"Async job '{job_type}' failed: {exc}"
+    try:
+        from fastapi import HTTPException
+    except Exception:  # pragma: no cover - fastapi is always present in the API
+        return exc
+    return HTTPException(status_code=502, detail=detail)
 
 
 class SQSJobDispatcher(JobDispatcher):
@@ -223,6 +268,28 @@ def enqueue_publish_job(source_id: str, version: str, mint_doi: bool = True) -> 
     return get_job_dispatcher().dispatch(JOB_PUBLISH_SUBMISSION, payload)
 
 
+def dispatch_publish_job(source_id: str, version: str, mint_doi: bool = True) -> Dict[str, Any]:
+    """Dispatch a publish job on behalf of an API request.
+
+    Routes must never return success for a publish that did not happen. Inline
+    dispatch already raises ``HTTPException(502)`` when the job fails; a queue
+    dispatch failure (SQS/sqlite unavailable) is translated to the same error so
+    both modes behave alike from the caller's point of view.
+    """
+    try:
+        from fastapi import HTTPException
+    except Exception:  # pragma: no cover - fastapi is always present in the API
+        HTTPException = ()  # type: ignore[assignment]
+
+    try:
+        return enqueue_publish_job(source_id, version, mint_doi=mint_doi)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to dispatch publish job for %s v%s", source_id, version)
+        raise _inline_job_error(JOB_PUBLISH_SUBMISSION, exc) from exc
+
+
 def enqueue_transfer_job(
     source_id: str,
     version: str,
@@ -339,29 +406,23 @@ def _process_mint_stream_doi(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _process_mint_submission_doi(payload: Dict[str, Any]) -> Dict[str, Any]:
-    from v2.curation import _mint_doi_for_submission
-    from v2.store import get_store
+    """Legacy job: mint a DOI for a submission and publish it.
 
-    source_id = payload["source_id"]
-    version = payload["version"]
+    Unreachable from the v2 API — nothing calls ``enqueue_submission_doi_job``;
+    curation approve dispatches JOB_PUBLISH_SUBMISSION instead. Kept only so
+    in-flight/queued messages of this type still process correctly.
 
-    store = get_store()
-    submission = store.get_submission(source_id, version)
-    if not submission:
-        return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
-
-    all_versions = store.list_versions(source_id)
-    doi_result = _mint_doi_for_submission(submission, all_versions=all_versions, mint_doi=True)
-    if doi_result.get("success"):
-        if doi_result.get("doi"):
-            submission["doi"] = doi_result["doi"]
-        if doi_result.get("dataset_doi"):
-            submission["dataset_doi"] = doi_result["dataset_doi"]
-        submission["status"] = "published"
-        submission["published_at"] = _utc_now()
-        submission["updated_at"] = _utc_now()
-        store.upsert_submission(submission)
-    return doi_result
+    It used to mark the submission "published" on DOI success alone, which
+    bypassed the search ingest and produced published-but-unindexed datasets.
+    It now delegates to the publish job so the "published implies indexed"
+    invariant holds no matter which message type shows up. Do not re-wire this
+    job; use ``enqueue_publish_job``.
+    """
+    return _process_publish_submission({
+        "source_id": payload["source_id"],
+        "version": payload["version"],
+        "mint_doi": True,
+    })
 
 
 def _process_transfer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -451,15 +512,56 @@ def _process_cleanup_transfers(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _update_prior_versions_search(store, search_client, source_id: str, current_version: str, all_versions: list) -> None:
-    """Re-ingest prior versions into search with latest=false."""
-    for v_record in all_versions:
+def _version_sort_key(version: Optional[str]) -> list:
+    """Numeric-aware ordering key for a version string ("10.0" > "2.0")."""
+    parts = []
+    for part in str(version or "0").split("."):
+        parts.append((0, int(part), "") if part.isdigit() else (1, 0, part))
+    return parts
+
+
+def _owns_search_entry(version: str, all_versions: list) -> bool:
+    """True when `version` is the newest published version of the dataset.
+
+    The Globus Search index holds exactly ONE entry per dataset, keyed on the
+    version-less subject ``{MDF_DETAIL_BASE}/{source_id}``, and that entry
+    always represents the LATEST published version. So a publish of an older
+    version — an out-of-order curation approval, a re-run for a superseded
+    version, or a redelivered queue message — must not overwrite the subject
+    with stale content.
+    """
+    current_key = _version_sort_key(version)
+    for record in all_versions or []:
+        other = record.get("version")
+        if not other or other == version:
+            continue
+        if record.get("status") != "published":
+            continue
+        if _version_sort_key(other) > current_key:
+            return False
+    return True
+
+
+def _mark_prior_versions_not_latest(
+    store, source_id: str, current_version: str, all_versions: list,
+) -> None:
+    """Ensure prior published versions carry ``latest=false`` in the store.
+
+    Deliberately does NOT touch Globus Search. There is one search entry per
+    dataset (subject = the version-less detail URL) and it always describes the
+    latest published version, so re-ingesting a prior version here would
+    overwrite the entry just written for the version being published — leaving
+    the index advertising stale metadata with ``latest=false`` (bug B-2).
+
+    The submit path (`_flip_latest_on_prior`) normally does this already; this is
+    a defensive backstop for records created out of band (migration, reconcile).
+    """
+    for v_record in all_versions or []:
         v = v_record.get("version")
-        if v == current_version:
+        if not v or v == current_version:
             continue
         if v_record.get("status") != "published":
             continue
-        # Ensure the prior version's metadata has latest=false
         mdata = v_record.get("dataset_mdata")
         if isinstance(mdata, str):
             try:
@@ -471,14 +573,125 @@ def _update_prior_versions_search(store, search_client, source_id: str, current_
             v_record["dataset_mdata"] = json.dumps(mdata)
             v_record["updated_at"] = _utc_now()
             store.upsert_submission(v_record)
-        # Re-ingest into search with latest=false
-        search_client.ingest(v_record, version_count=len(all_versions))
-        logger.info("Updated prior version %s v%s search entry with latest=false", source_id, v)
+            logger.info("Marked prior version %s v%s latest=false in the store", source_id, v)
+
+
+def _publish_doi_step(
+    store,
+    submission: Dict[str, Any],
+    source_id: str,
+    version: str,
+    all_versions: list,
+    mint_doi: bool,
+) -> Dict[str, Any]:
+    """DOI handling for a publish job, safe under at-least-once delivery.
+
+    Idempotency (bug B-7b): a DOI is an irreversible external side effect, so
+    the job must never mint twice for the same version.
+
+    - If the record already carries ``doi``, that DOI was minted by an earlier
+      attempt (or by migration) and no new one is created. Without this guard a
+      redelivered first-version job would see the ``dataset_doi`` written by the
+      first attempt, conclude that a *prior* version exists, and mint a bogus
+      ``-v{version}`` duplicate.
+    - Only *other* versions are considered when resolving the dataset (concept)
+      DOI, so a partially-completed attempt on this version cannot change which
+      branch of the versioning logic runs.
+    - The minted DOI is persisted immediately, before the search step, so it
+      survives a later failure in this job and is visible to the retry.
+
+    Never raises.
+    """
+    from v2.curation import _mint_doi_for_submission
+
+    existing_doi = submission.get("doi")
+    if existing_doi:
+        logger.info(
+            "Publish job for %s v%s: DOI %s already recorded, skipping mint",
+            source_id, version, existing_doi,
+        )
+        return {
+            "success": True,
+            "doi": existing_doi,
+            "dataset_doi": submission.get("dataset_doi") or existing_doi,
+            "already_minted": True,
+        }
+
+    prior_versions = [v for v in (all_versions or []) if v.get("version") != version]
+
+    try:
+        doi_result = _mint_doi_for_submission(
+            submission, all_versions=prior_versions, mint_doi=mint_doi,
+        )
+    except Exception:
+        logger.exception("DOI handling error for %s", source_id)
+        return {"success": False, "error": "DOI handling exception"}
+
+    if not doi_result.get("success"):
+        logger.warning("DOI handling failed for %s: %s", source_id, doi_result.get("error"))
+        return doi_result
+
+    changed = False
+    if doi_result.get("doi") and submission.get("doi") != doi_result["doi"]:
+        submission["doi"] = doi_result["doi"]
+        changed = True
+    if doi_result.get("dataset_doi") and submission.get("dataset_doi") != doi_result["dataset_doi"]:
+        submission["dataset_doi"] = doi_result["dataset_doi"]
+        changed = True
+    if changed:
+        submission["updated_at"] = _utc_now()
+        try:
+            store.upsert_submission(submission)
+        except Exception:
+            logger.exception("Failed to persist minted DOI for %s v%s", source_id, version)
+
+    return doi_result
+
+
+def _record_publish_failure(store, submission: Dict[str, Any], error: str) -> None:
+    """Note a failed publish attempt without advancing the submission state.
+
+    The submission keeps its prior status (typically "approved") so the retried
+    job can complete the transition. ``curation_history`` is the record's
+    existing audit trail and is persisted by both store backends.
+    """
+    now = _utc_now()
+    history = submission.get("curation_history") or []
+    if isinstance(history, str):
+        try:
+            history = json.loads(history)
+        except Exception:
+            history = []
+    if not isinstance(history, list):
+        history = []
+    history.append({
+        "action": "publish_failed",
+        "timestamp": now,
+        "error": str(error)[:500],
+    })
+    submission["curation_history"] = history
+    # publish_error is persisted by the DynamoDB backend; the sqlite backend has
+    # a fixed column set and keeps only the curation_history entry.
+    submission["publish_error"] = str(error)[:500]
+    submission["publish_error_at"] = now
+    submission["updated_at"] = now
+    try:
+        store.upsert_submission(submission)
+    except Exception:
+        logger.exception(
+            "Failed to record publish failure for %s v%s",
+            submission.get("source_id"), submission.get("version"),
+        )
 
 
 def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Publish a submission: mint DOI (optional), ingest into search, update status."""
-    from v2.curation import _mint_doi_for_submission
+    """Publish a submission: handle DOI, ingest into search, then mark published.
+
+    Ordering matters: status only advances to "published" once the dataset is
+    actually discoverable. If the search ingest fails the job raises
+    ``JobExecutionError`` so the queue retries it (bug B-7a); every step above is
+    idempotent so the retry is safe.
+    """
     from v2.search_client import get_search_client
     from v2.store import get_store
 
@@ -491,63 +704,103 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not submission:
         return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
 
+    # Only records that a route deliberately moved into a pre-publish state may
+    # be published. A queue message can outlive the state it was created for
+    # (withdrawn, rejected, reverted to pending_curation), and an at-least-once
+    # delivery must not resurrect such a record. Skipping is reported as success
+    # so the message is consumed rather than retried forever against a tombstone.
+    status = submission.get("status")
+    if status not in PUBLISHABLE_STATUSES:
+        logger.info(
+            "Publish job for %s v%s skipped: status is %r, expected one of %s "
+            "(stale queue message or the record changed state after enqueue)",
+            source_id, version, status, sorted(PUBLISHABLE_STATUSES),
+        )
+        return {
+            "success": True,
+            "skipped": True,
+            "source_id": source_id,
+            "version": version,
+            "status": status,
+            "reason": f"submission status '{status}' is not publishable",
+        }
+
     # Look up all versions for DOI versioning context
     all_versions = store.list_versions(source_id)
+    was_published = status == "published"
 
     result: Dict[str, Any] = {"source_id": source_id, "version": version}
 
-    # Step 1: DOI handling (mint new or update existing dataset DOI)
-    # Always call _mint_doi_for_submission — it handles both mint_doi=True
-    # (mint new DOI) and mint_doi=False (update dataset DOI metadata only)
-    try:
-        doi_result = _mint_doi_for_submission(
-            submission, all_versions=all_versions, mint_doi=mint_doi,
-        )
-        result["doi"] = doi_result
-        if doi_result.get("success"):
-            if doi_result.get("doi"):
-                submission["doi"] = doi_result["doi"]
-            if doi_result.get("dataset_doi"):
-                submission["dataset_doi"] = doi_result["dataset_doi"]
-        else:
-            logger.warning("DOI handling failed for %s: %s", source_id, doi_result.get("error"))
-    except Exception:
-        logger.exception("DOI handling error for %s", source_id)
-        result["doi"] = {"success": False, "error": "DOI handling exception"}
+    # Step 1: DOI handling (mint new or update existing dataset DOI).
+    # Handles both mint_doi=True (mint) and mint_doi=False (metadata update only).
+    result["doi"] = _publish_doi_step(
+        store, submission, source_id, version, all_versions, mint_doi,
+    )
 
-    # Step 2: Ingest into Globus Search
-    try:
-        search_client = get_search_client()
-        search_result = search_client.ingest(submission, version_count=len(all_versions))
-        result["search_ingest"] = search_result
-        if not search_result.get("success"):
-            logger.warning("Search ingest failed for %s: %s", source_id, search_result.get("error"))
-    except Exception:
-        logger.exception("Search ingest error for %s", source_id)
-        result["search_ingest"] = {"success": False, "error": "Search ingest exception"}
-
-    # Step 2b: If this is a new version, re-ingest prior version with latest=false
-    if len(all_versions) > 1:
+    # Step 2: Ingest into Globus Search — one entry per dataset, always the
+    # latest published version.
+    owns_entry = _owns_search_entry(version, all_versions)
+    if owns_entry:
         try:
-            _update_prior_versions_search(store, search_client, source_id, version, all_versions)
-        except Exception:
-            logger.warning("Failed to update prior version search entries for %s", source_id, exc_info=True)
+            search_client = get_search_client()
+            search_result = search_client.ingest(submission, version_count=len(all_versions))
+        except Exception as exc:
+            logger.exception("Search ingest error for %s", source_id)
+            search_result = {"success": False, "error": f"Search ingest exception: {exc}"}
+    else:
+        logger.info(
+            "Publish job for %s v%s: a newer published version owns the search entry, "
+            "leaving the index untouched",
+            source_id, version,
+        )
+        search_result = {
+            "success": True,
+            "skipped": True,
+            "reason": "a newer published version owns the search entry",
+        }
+    result["search_ingest"] = search_result
 
-    # Step 3: Update status to published
+    if not search_result.get("success"):
+        error = search_result.get("error") or "search ingest failed"
+        logger.warning("Search ingest failed for %s v%s: %s", source_id, version, error)
+        _record_publish_failure(store, submission, error)
+        result["success"] = False
+        result["status"] = submission.get("status")
+        result["error"] = error
+        # Do NOT mark the submission published: an unindexed dataset is not
+        # published. Raising fails the SQS batch item so the job is retried.
+        raise JobExecutionError(
+            f"Publish failed for {source_id} v{version}: search ingest failed: {error}",
+            result=result,
+        )
+
+    # Step 3: normalize prior versions' latest flag in the store (never search).
+    if owns_entry and len(all_versions) > 1:
+        try:
+            _mark_prior_versions_not_latest(store, source_id, version, all_versions)
+        except Exception:
+            logger.warning("Failed to update prior version latest flags for %s", source_id, exc_info=True)
+
+    # Step 4: Update status to published
     now = _utc_now()
     submission["status"] = "published"
-    submission["published_at"] = now
+    if not submission.get("published_at"):
+        submission["published_at"] = now
     submission["updated_at"] = now
+    submission.pop("publish_error", None)
+    submission.pop("publish_error_at", None)
     store.upsert_submission(submission)
 
-    # Notify submitter their dataset is live
-    try:
-        from v2.email_utils import notify_submitter_approved
-        notify_submitter_approved(submission)
-    except Exception:
-        logger.warning("Failed to send approval email for %s", source_id, exc_info=True)
+    # Notify submitter their dataset is live — only on the transition into
+    # published, so a redelivered job does not re-email them.
+    if not was_published:
+        try:
+            from v2.email_utils import notify_submitter_approved
+            notify_submitter_approved(submission)
+        except Exception:
+            logger.warning("Failed to send approval email for %s", source_id, exc_info=True)
 
-    # Step 4: kick off embedding generation (non-blocking for publish)
+    # Step 5: kick off embedding generation (non-blocking for publish)
     try:
         emb_result = enqueue_embedding_job(source_id, version)
         result["embedding_enqueue"] = emb_result
@@ -556,7 +809,7 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     result["success"] = True
     result["status"] = "published"
-    result["published_at"] = now
+    result["published_at"] = submission["published_at"]
     return result
 
 

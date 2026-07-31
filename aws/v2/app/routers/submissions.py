@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from v2.async_jobs import enqueue_profile_job, enqueue_publish_job, enqueue_transfer_job
+from v2.async_jobs import dispatch_publish_job, enqueue_profile_job, enqueue_transfer_job
 from v2.transfer import check_transfer_status, cleanup_transfer_acl
 from v2.app.auth import (
     ensure_submission_owner_or_curator,
@@ -140,6 +140,29 @@ def _flip_latest_on_prior(store: SubmissionStore, prior_record: Dict[str, Any]) 
     prior_record["dataset_mdata"] = json.dumps(mdata)
     prior_record["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     store.upsert_submission(prior_record)
+
+
+def _publish_via_job(
+    store: SubmissionStore,
+    source_id: str,
+    version: str,
+    mint_doi: bool = False,
+) -> Dict[str, Any]:
+    """Hand a record to the publish job and report the status it reached.
+
+    The publish job owns the transition to "published": it handles the DOI and
+    ingests into Globus Search *before* flipping the status, so a failure can
+    never leave a published version the search index never saw. With inline
+    dispatch that happens synchronously (and a failure raises a 502); with a
+    queue the record stays "approved" until the worker runs.
+    """
+    publish_job = dispatch_publish_job(source_id, version, mint_doi=mint_doi)
+    status = "approved"
+    if not publish_job.get("queued"):
+        refreshed = store.get_submission(source_id, version)
+        if refreshed:
+            status = refreshed.get("status", status)
+    return {"publish_job": publish_job, "status": status}
 
 
 def _version_sort_key(record: Dict[str, Any]):
@@ -317,6 +340,11 @@ async def edit_metadata(
         existing_mdata["previous_version"] = "{}-{}".format(source_id, version)
         existing_mdata["root_version"] = existing_mdata.get("root_version") or "{}-{}".format(source_id, "1.0")
 
+        # Created in the pre-publish state, exactly like a curator-approved
+        # submission: the publish job refreshes the DOI and the search entry and
+        # only then flips the record to "published". Creating it published here
+        # would leave a published-but-unindexed version behind whenever the job
+        # failed.
         new_record = {
             "source_id": source_id,
             "version": new_version,
@@ -324,14 +352,15 @@ async def edit_metadata(
             "user_id": auth.user_id,
             "user_email": auth.user_email,
             "organization": submission.get("organization"),
-            "status": "published",
+            "status": "approved",
             "dataset_mdata": json.dumps(existing_mdata),
             "schema_version": submission.get("schema_version", "2"),
             "test": submission.get("test", False),
             "created_at": now,
             "updated_at": now,
             "metadata_updated_at": now,
-            "published_at": now,
+            "approved_at": now,
+            "approved_by": auth.user_id,
         }
 
         # Inherit dataset_doi
@@ -344,17 +373,19 @@ async def edit_metadata(
 
         store.put_submission(new_record)
 
-        # Enqueue publish job to update DataCite metadata and re-index in search
-        try:
-            enqueue_publish_job(source_id, new_version, mint_doi=False)
-        except Exception:
-            logger.warning("Failed to enqueue publish job for metadata edit %s v%s", source_id, new_version, exc_info=True)
+        # Publish the new version (updates DataCite metadata + search entry).
+        # Failures surface as a 502 instead of a success response describing a
+        # version that never got indexed; the curator can retry with
+        # POST /curation/{source_id}/approve on the new version.
+        published = _publish_via_job(store, source_id, new_version, mint_doi=False)
 
         return {
             "success": True,
             "source_id": source_id,
             "version": version,
             "new_version": new_version,
+            "status": published["status"],
+            "publish_job": published["publish_job"],
             "updated_fields": list(updates.keys()),
         }
 
@@ -1060,6 +1091,28 @@ async def update_status(
     if not record:
         raise HTTPException(404, "Submission not found")
     ensure_submission_owner_or_curator(auth, record)
+
+    if payload.status == "published":
+        # "published" is never a bare status write: that would create a record
+        # the search index (and DataCite) never heard about. Move it into the
+        # pre-publish state and let the publish job perform the transition, the
+        # same way POST /curation/{source_id}/approve does. Use the approve
+        # endpoint when a DOI should be minted — this path never mints one.
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        record["status"] = "approved"
+        record["approved_at"] = now
+        record["approved_by"] = auth.user_id
+        record["updated_at"] = now
+        store.upsert_submission(record)
+
+        published = _publish_via_job(store, payload.source_id, payload.version, mint_doi=False)
+        return {
+            "success": True,
+            "source_id": payload.source_id,
+            "version": payload.version,
+            "status": published["status"],
+            "publish_job": published["publish_job"],
+        }
 
     store.update_status(payload.source_id, payload.version, payload.status)
 

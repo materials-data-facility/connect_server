@@ -19,8 +19,9 @@ Usage:
     PYTHONPATH=. STORE_BACKEND=sqlite USE_MOCK_SEARCH=true \
         python v2/scripts/reconcile_migration.py --check-search --json
 
-Exit code is non-zero when drift is found (records missing from the store, or —
-with --check-search — missing from search), so it can gate a cron/CI step.
+Exit code is 1 for missing records, stale content, Search-pending latest
+datasets, or (with --check-search) missing Search subjects. Pre-hash records
+are reported as ``never_hashed`` warnings but do not fail reconciliation.
 """
 
 import argparse
@@ -37,6 +38,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from ingest_converted_datasets import (  # noqa: E402
     apply_env,
     build_submission_record,
+    compute_sync_content_hash,
     resolve_env_from_stack,
 )
 
@@ -77,6 +79,12 @@ def reconcile(records, *, check_search=False, show=10):
         "expected": len(records),
         "in_store": 0,
         "missing_from_store": [],
+        "never_hashed": 0,
+        "never_hashed_records": [],
+        "stale_content": 0,
+        "stale_content_records": [],
+        "search_pending": 0,
+        "search_pending_records": [],
         "not_published": [],
         "no_legacy_id": 0,            # migrated records whose old id won't redirect
         "missing_title": [],
@@ -87,6 +95,7 @@ def reconcile(records, *, check_search=False, show=10):
         "search_checked": bool(search),
     }
 
+    checked_search_pending = set()
     for converted in records:
         source_id = converted.get("source_id")
         version = _expected_version(converted)
@@ -112,6 +121,52 @@ def reconcile(records, *, check_search=False, show=10):
             continue
 
         report["in_store"] += 1
+        expected_hash = compute_sync_content_hash(converted)
+        stored_hash = stored.get("sync_content_hash")
+        if not stored_hash:
+            report["never_hashed"] += 1
+            report["never_hashed_records"].append(
+                f"{source_id}-{version}"
+            )
+        elif stored_hash != expected_hash:
+            report["stale_content"] += 1
+            report["stale_content_records"].append(
+                f"{source_id}-{version} (sync_content_hash differs)"
+            )
+
+        # Search owns one version-less subject per dataset, so pending state is
+        # determined once from the store-derived newest published version.
+        if source_id not in checked_search_pending:
+            checked_search_pending.add(source_id)
+            try:
+                published = [
+                    item for item in store.list_versions(source_id)
+                    if item.get("status") == "published"
+                ]
+                latest = max(
+                    published,
+                    key=lambda item: [
+                        (
+                            (0, int(part), "")
+                            if part.isdigit()
+                            else (1, 0, part)
+                        )
+                        for part in str(item.get("version") or "0").split(".")
+                    ],
+                ) if published else None
+            except Exception:
+                latest = None
+            if (
+                latest
+                and latest.get("sync_content_hash")
+                and latest.get("search_synced_hash")
+                != latest.get("sync_content_hash")
+            ):
+                report["search_pending"] += 1
+                report["search_pending_records"].append(
+                    "{}-{}".format(source_id, latest.get("version"))
+                )
+
         if stored.get("status") != "published":
             report["not_published"].append(f"{source_id}-{version} ({stored.get('status')})")
 
@@ -143,6 +198,30 @@ def _print_report(report, show):
         print(f"    - {sid}")
     if len(report["missing_from_store"]) > show:
         print(f"    ... and {len(report['missing_from_store']) - show} more")
+
+    print(f"  Never hashed (warning): {report['never_hashed']}")
+    for sid in report["never_hashed_records"][:show]:
+        print(f"    - {sid}")
+    if len(report["never_hashed_records"]) > show:
+        print(
+            f"    ... and {len(report['never_hashed_records']) - show} more"
+        )
+
+    print(f"  Stale content:          {report['stale_content']}")
+    for sid in report["stale_content_records"][:show]:
+        print(f"    - {sid}")
+    if len(report["stale_content_records"]) > show:
+        print(
+            f"    ... and {len(report['stale_content_records']) - show} more"
+        )
+
+    print(f"  Search pending:         {report['search_pending']}")
+    for sid in report["search_pending_records"][:show]:
+        print(f"    - {sid}")
+    if len(report["search_pending_records"]) > show:
+        print(
+            f"    ... and {len(report['search_pending_records']) - show} more"
+        )
 
     if report["not_published"]:
         print(f"  In store but NOT published: {len(report['not_published'])}")
@@ -199,8 +278,13 @@ def main():
     else:
         _print_report(report, args.show)
 
-    drift = bool(report["missing_from_store"]) or (
+    drift = (
+        bool(report["missing_from_store"])
+        or report["stale_content"] > 0
+        or report["search_pending"] > 0
+        or (
         report["search_checked"] and bool(report["missing_from_search"])
+        )
     )
     sys.exit(1 if drift else 0)
 

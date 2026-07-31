@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v2.app import app
 from v2.app.middleware import reset_middleware_state
-from v2.async_jobs import run_sqlite_worker_once
+from v2.async_jobs import JOB_PUBLISH_SUBMISSION, process_job, run_sqlite_worker_once
 from v2.storage import reset_storage_backend
 
 
@@ -68,6 +68,31 @@ def sqlite_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reset_middleware_state()
 
 
+@pytest.fixture()
+def shared_datacite(monkeypatch: pytest.MonkeyPatch):
+    """One MockDataCiteClient shared across all get_datacite_client() calls.
+
+    get_datacite_client() normally hands out a fresh mock per call, which hides
+    duplicate minting. Pinning a single instance lets tests count DOIs.
+    """
+    from v2.datacite import MockDataCiteClient
+
+    mock = MockDataCiteClient(prefix="10.99999")
+    monkeypatch.setattr("v2.datacite.get_datacite_client", lambda *a, **k: mock)
+    return mock
+
+
+@pytest.fixture()
+def mock_search():
+    """A clean mock search index for the duration of a test."""
+    from v2.search_client import get_search_client, reset_search_client
+
+    reset_search_client()
+    client = get_search_client()
+    yield client
+    reset_search_client()
+
+
 HEADERS = {"X-User-Id": "test-user"}
 
 VALID_SUBMISSION = {
@@ -106,6 +131,49 @@ class TestStatusTransitions:
                 json={"source_id": source_id, "version": "1.0", "status": target},
             )
             assert r.status_code == 200, f"Failed to set status to {target}"
+
+    def test_status_update_to_published_goes_through_publish_pipeline(self, env, mock_search):
+        """POST /status/update status=published must not bypass DOI + search."""
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+        assert mock_search.get_entry(source_id) is None
+
+        update = client.post(
+            "/status/update",
+            headers=HEADERS,
+            json={"source_id": source_id, "version": "1.0", "status": "published"},
+        )
+        assert update.status_code == 200
+        body = update.json()
+        assert body["status"] == "published"
+        assert body["publish_job"]["job_type"] == "publish_submission"
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] == "published"
+        # The bare status write used to skip the index entirely
+        entry = mock_search.get_entry(source_id)
+        assert entry is not None
+        assert entry["content"]["mdf"]["source_id"] == source_id
+
+    def test_status_update_to_published_surfaces_index_failure(self, env, mock_search):
+        """If indexing fails, /status/update cannot report a published record."""
+        mock_search.fail_next_ingests = 1
+
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        update = client.post(
+            "/status/update",
+            headers=HEADERS,
+            json={"source_id": source_id, "version": "1.0", "status": "published"},
+        )
+        assert update.status_code == 502
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] != "published"
+        assert mock_search.get_entry(source_id) is None
 
     def test_disallowed_status_update(self, env):
         client = TestClient(app)
@@ -337,6 +405,205 @@ class TestPublishPipelineAsync:
         sub = status.json()["submission"]
         assert sub["status"] == "published"
         assert sub.get("doi") is not None
+
+
+# =========================================================================
+# Publish failure handling + idempotency (B-7)
+# =========================================================================
+
+
+class TestPublishFailureAndIdempotency:
+    """A publish only counts once the dataset is indexed, and re-runs are safe."""
+
+    def test_search_ingest_failure_does_not_publish(self, env, mock_search, shared_datacite):
+        """Search ingest failure → error surfaced, status not advanced, no entry."""
+        mock_search.fail_next_ingests = 1
+
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        # Inline dispatch: the failure surfaces as an upstream error, not a 500
+        assert approve.status_code == 502
+        assert "publish_submission" in approve.json()["detail"]
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] == "approved"
+        assert not sub.get("published_at")
+        assert mock_search.get_entry(source_id) is None
+
+        actions = [h.get("action") for h in (sub.get("curation_history") or [])]
+        assert "publish_failed" in actions
+
+    def test_retry_after_search_failure_publishes_with_one_doi(
+        self, env, mock_search, shared_datacite,
+    ):
+        """The same publish job re-run with search working completes cleanly."""
+        mock_search.fail_next_ingests = 1
+
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert approve.status_code == 502
+
+        # DOI already minted by the failed attempt — retry must not mint again
+        assert len(shared_datacite._dois) == 1
+        minted_doi = next(iter(shared_datacite._dois))
+
+        # Retry the exact same job (what SQS redelivery does)
+        result = process_job(
+            JOB_PUBLISH_SUBMISSION,
+            {"source_id": source_id, "version": "1.0", "mint_doi": True},
+        )
+        assert result["success"] is True
+        assert result["status"] == "published"
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] == "published"
+        assert sub["doi"] == minted_doi
+        assert sub.get("published_at")
+
+        entry = mock_search.get_entry(source_id)
+        assert entry is not None
+        assert entry["content"]["mdf"]["source_id"] == source_id
+        assert len(mock_search._entries) == 1
+        assert len(shared_datacite._dois) == 1
+
+    def test_publish_job_rerun_is_idempotent(self, env, mock_search, shared_datacite):
+        """Running a successful publish job twice yields one DOI and stable state."""
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert approve.status_code == 200
+        first = client.get(f"/status/{source_id}").json()["submission"]
+        assert first["status"] == "published"
+        assert len(shared_datacite._dois) == 1
+
+        # Redelivery of the same message
+        result = process_job(
+            JOB_PUBLISH_SUBMISSION,
+            {"source_id": source_id, "version": "1.0", "mint_doi": True},
+        )
+        assert result["success"] is True
+        assert result["doi"].get("already_minted") is True
+
+        second = client.get(f"/status/{source_id}").json()["submission"]
+        assert second["doi"] == first["doi"]
+        assert second["dataset_doi"] == first["dataset_doi"]
+        assert second["published_at"] == first["published_at"]
+        assert len(shared_datacite._dois) == 1
+        assert len(mock_search._entries) == 1
+
+    def test_reapprove_retries_failed_publish(self, env, mock_search, shared_datacite):
+        """A transient publish failure is not a dead end: re-approving retries."""
+        mock_search.fail_next_ingests = 1
+
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        first = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert first.status_code == 502
+        assert client.get(f"/status/{source_id}").json()["submission"]["status"] == "approved"
+
+        # Retry: the record is approved-but-not-published, so approve is allowed
+        second = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert second.status_code == 200
+        assert second.json()["status"] == "published"
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] == "published"
+        assert sub.get("doi")
+        assert mock_search.get_entry(source_id) is not None
+        assert len(shared_datacite._dois) == 1
+
+        actions = [h.get("action") for h in (sub.get("curation_history") or [])]
+        assert actions == ["approved", "publish_failed", "publish_retried"]
+
+        # Once published, approving again is still rejected
+        third = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert third.status_code == 400
+
+    def test_publish_job_skips_withdrawn_record(self, env, mock_search, shared_datacite):
+        """A stale queue message must not resurrect a withdrawn submission."""
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        withdraw = client.post(
+            f"/submissions/{source_id}/withdraw",
+            headers=HEADERS,
+            json={"reason": "submitted by mistake"},
+        )
+        assert withdraw.status_code == 200
+
+        # Publish job enqueued before the withdrawal is redelivered afterwards
+        result = process_job(
+            JOB_PUBLISH_SUBMISSION,
+            {"source_id": source_id, "version": "1.0", "mint_doi": True},
+        )
+        # Skipped, not failed: retrying against a tombstone forever is worse
+        assert result["skipped"] is True
+        assert result["success"] is True
+        assert result["status"] == "withdrawn"
+
+        sub = client.get(f"/status/{source_id}", headers=HEADERS).json()["submission"]
+        assert sub["status"] == "withdrawn"
+        assert not sub.get("published_at")
+        assert mock_search.get_entry(source_id) is None
+        assert shared_datacite._dois == {}
+
+    def test_sqlite_worker_marks_publish_job_failed(self, sqlite_env, mock_search):
+        """Queued publish job that cannot index is a failed job, not a publish."""
+        mock_search.fail_next_ingests = 1
+
+        client = TestClient(app)
+        resp = client.post("/submit", headers=HEADERS, json=VALID_SUBMISSION)
+        source_id = resp.json()["source_id"]
+
+        approve = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": True},
+        )
+        assert approve.status_code == 200
+        assert approve.json()["status"] == "approved"
+
+        worker = run_sqlite_worker_once(limit=10)
+        assert worker["failed"] == 1
+
+        sub = client.get(f"/status/{source_id}").json()["submission"]
+        assert sub["status"] == "approved"
+        assert mock_search.get_entry(source_id) is None
 
 
 # =========================================================================

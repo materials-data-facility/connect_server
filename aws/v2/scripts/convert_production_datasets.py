@@ -294,6 +294,13 @@ def main():
         "count": len(converted),
         "errors": errors,
         "records": converted,
+        # Preserve the extract-owned candidate so ingest can consume this file
+        # directly. A limited extract carries a null candidate plus the
+        # suppression reason, which must survive conversion unchanged.
+        "candidate_watermark": data.get("candidate_watermark"),
+        "candidate_watermark_suppressed": data.get(
+            "candidate_watermark_suppressed"
+        ),
     }
 
     with open(args.output, "w") as f:

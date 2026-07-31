@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import sys
@@ -13,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from v2.app import app
+from v2.app.routers import files as files_router
 from v2.app.middleware import reset_middleware_state
 from v2.async_jobs import SqliteJobDispatcher, enqueue_transfer_job
 from v2.clone import StreamCloner
@@ -21,6 +23,15 @@ from v2.storage.globus_https import GlobusHTTPSStorage
 from v2.storage.local import LocalStorage
 from v2.stream_store import SqliteStreamStore
 from v2.store import SqliteSubmissionStore, SubmissionStore
+
+
+def _files_client() -> TestClient:
+    # The files router is unmounted from the main app while streams are
+    # disabled (B-1); mount it on an isolated app so its authz invariants
+    # stay covered until the feature returns.
+    files_app = FastAPI()
+    files_app.include_router(files_router.router)
+    return TestClient(files_app)
 
 
 class _DummyStore(SubmissionStore):
@@ -123,7 +134,7 @@ def test_stream_file_access_requires_owner(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     reset_storage_backend()
 
-    client = TestClient(app)
+    client = _files_client()
     stream_id = "stream-secure-owner"
     stream_store = SqliteStreamStore(path=str(db_path))
     stream_store.create_stream(
@@ -206,7 +217,7 @@ def test_upload_confirm_requires_existing_file(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
     reset_storage_backend()
 
-    client = TestClient(app)
+    client = _files_client()
     stream_id = "stream-upload-confirm"
     stream_store = SqliteStreamStore(path=str(db_path))
     stream_store.create_stream(

@@ -45,6 +45,17 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reset_middleware_state()
 
 
+@pytest.fixture()
+def mock_search():
+    """A clean mock search index for the duration of a test."""
+    from v2.search_client import get_search_client, reset_search_client
+
+    reset_search_client()
+    client = get_search_client()
+    yield client
+    reset_search_client()
+
+
 HEADERS = {"X-User-Id": "test-user"}
 OTHER_HEADERS = {"X-User-Id": "other-user"}
 CURATOR_HEADERS = {"X-User-Id": "curator-user"}
@@ -1196,6 +1207,65 @@ class TestMetadataEditAdvanced:
             mdata = json.loads(mdata)
         assert mdata["title"] == "Edit Two"
         assert mdata["latest"] is True
+
+    def test_edit_publish_failure_leaves_no_published_version(self, env, mock_search):
+        """A metadata edit whose publish fails must not create a published version.
+
+        The minor bump used to be written with status="published" before the
+        publish job ran, so an ingest failure left a published latest version
+        that Globus Search never saw.
+        """
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=True)
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Test Dataset"
+
+        mock_search.fail_next_ingests = 1
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"title": "Edit That Fails To Index", "version": "1.0"},
+        )
+        assert resp.status_code == 502
+
+        v11 = _status(client, source_id, version="1.1")
+        assert v11["status"] == "approved"
+        assert not v11.get("published_at")
+        # The index still describes the last successfully published version
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Test Dataset"
+
+        # The curator can retry the publish through the approve endpoint
+        retry = client.post(
+            f"/curation/{source_id}/approve",
+            headers=HEADERS,
+            json={"mint_doi": False, "version": "1.1"},
+        )
+        assert retry.status_code == 200
+        assert retry.json()["status"] == "published"
+
+        assert _status(client, source_id, version="1.1")["status"] == "published"
+        entry = mock_search.get_entry(source_id)
+        assert entry["content"]["dc"]["title"] == "Edit That Fails To Index"
+        assert entry["content"]["mdf"]["version"] == "1.1"
+        assert entry["content"]["mdf"]["latest"] is True
+
+    def test_edit_published_reports_publish_job(self, env, mock_search):
+        """The successful edit response reports the new version and its status."""
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"title": "Indexed Edit", "version": "1.0"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["new_version"] == "1.1"
+        assert body["status"] == "published"
+        assert body["publish_job"]["job_type"] == "publish_submission"
+        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Indexed Edit"
 
     def test_edit_with_explicit_version(self, env):
         """Edit targets a specific version, not latest."""

@@ -19,6 +19,15 @@ Usage:
 
     # Just print count, don't save
     python cs/aws/v2/scripts/extract_mdf_production_datasets.py --count-only
+
+    # Legacy behavior: advance --since-file immediately after extraction
+    python cs/aws/v2/scripts/extract_mdf_production_datasets.py \
+        --since-file watermark.txt --advance-watermark
+
+By default, extraction only embeds ``candidate_watermark`` in the output.
+Pass that candidate to ingest_converted_datasets.py; a complete successful
+ingest advances the watermark. ``--advance-watermark`` is an explicit escape
+hatch that restores the old write-immediately behavior.
 """
 
 import argparse
@@ -89,6 +98,23 @@ def _entry_ingest_date(entry):
         if ingest:
             return ingest
     return None
+
+
+def _candidate_watermark_fields(max_dt, limit):
+    """Return safe candidate-watermark fields for an extract payload.
+
+    A limited extract is necessarily partial, so its newest observed timestamp
+    must never become a resumable watermark.
+    """
+    if limit is not None:
+        return {
+            "candidate_watermark": None,
+            "candidate_watermark_suppressed": "limit",
+        }
+    return {
+        "candidate_watermark": max_dt.isoformat() if max_dt else None,
+        "candidate_watermark_suppressed": None,
+    }
 
 
 def authenticate():
@@ -232,10 +258,21 @@ def main():
         "--since-file",
         default=None,
         help="Watermark file for ongoing-bridge sync. Read as --since if it "
-             "exists (and --since not given); after a successful save the newest "
-             "ingest_date seen is written back so the next run resumes from there.",
+             "exists (and --since not given). It is not updated unless "
+             "--advance-watermark is explicitly passed.",
+    )
+    parser.add_argument(
+        "--advance-watermark",
+        action="store_true",
+        help="Immediately write the candidate watermark to --since-file after "
+             "a successful extract (legacy behavior; default: do not advance).",
     )
     args = parser.parse_args()
+
+    if args.advance_watermark and not args.since_file:
+        parser.error("--advance-watermark requires --since-file")
+    if args.advance_watermark and args.since:
+        parser.error("--advance-watermark cannot be combined with --since")
 
     print(f"MDF Production Index: {MDF_PRODUCTION_INDEX}")
     print(f"Query: resource_type=dataset\n")
@@ -293,6 +330,7 @@ def main():
         return
 
     # Save raw gmeta entries
+    watermark_fields = _candidate_watermark_fields(max_dt, args.limit)
     output = {
         "source_index": MDF_PRODUCTION_INDEX,
         "query": 'mdf.resource_type:"dataset"',
@@ -304,17 +342,42 @@ def main():
         "skipped_undated": skipped_undated,
         "gmeta": gmeta_list,
     }
+    output.update(watermark_fields)
 
     with open(args.output, "w") as f:
         json.dump(output, f, indent=2, default=str)
 
     print(f"\nSaved {len(gmeta_list)} entries to {args.output}")
 
-    # Advance the watermark for the next ongoing-bridge run.
-    if args.since_file and max_dt:
+    # By default the ingest phase owns advancement: extraction alone does not
+    # prove that the converted records landed in the store/search index.
+    candidate_watermark = watermark_fields["candidate_watermark"]
+    if args.since_file and candidate_watermark and args.advance_watermark:
         with open(args.since_file, "w") as f:
-            f.write(max_dt.isoformat())
-        print(f"Watermark updated: {args.since_file} -> {max_dt.isoformat()}")
+            f.write(candidate_watermark)
+        print(f"Watermark updated: {args.since_file} -> {candidate_watermark}")
+    elif watermark_fields["candidate_watermark_suppressed"]:
+        print(
+            "Watermark NOT advanced: candidate suppressed because --limit "
+            "produced a partial extract."
+        )
+    elif candidate_watermark:
+        if args.since_file:
+            print(
+                f"Watermark NOT advanced: {args.since_file} remains unchanged. "
+                "A fully successful ingest will advance it to "
+                f"{candidate_watermark}."
+            )
+        else:
+            print(
+                "Watermark NOT advanced. The candidate was embedded in the "
+                "extract JSON and should be committed by a fully successful ingest."
+            )
+    elif args.since_file:
+        print(
+            f"Watermark NOT advanced: {args.since_file} remains unchanged "
+            "because no parseable ingest_date was found."
+        )
 
 
 if __name__ == "__main__":

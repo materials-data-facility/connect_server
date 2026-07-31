@@ -301,6 +301,88 @@ class TestVersioningSearchIndex:
         assert "dataset_doi" not in entry["content"]["mdf"]
 
 
+class TestVersioningSearchEntryOwnership:
+    """The single search entry per dataset always describes the LATEST version.
+
+    Regression tests for B-2: publishing a new version used to re-ingest the
+    prior versions into the same subject, overwriting the entry just written for
+    the new version with stale metadata carrying latest=false.
+    """
+
+    def _fresh_search_client(self):
+        from v2.search_client import get_search_client, reset_search_client
+
+        reset_search_client()
+        return get_search_client()
+
+    def test_new_version_publish_owns_search_entry(self, env):
+        """After v2.0 publishes, the dataset's entry is v2.0 with latest=true."""
+        search = self._fresh_search_client()
+        client = TestClient(app)
+
+        r1 = _submit(client)
+        source_id = r1["source_id"]
+        _approve(client, source_id, mint_doi=True)
+
+        # v1.0 owns the entry while it is the only published version
+        entry = search.get_entry(source_id)
+        assert entry is not None
+        assert entry["content"]["mdf"]["version"] == "1.0"
+        assert entry["content"]["mdf"]["latest"] is True
+
+        # Publish v2.0
+        r2 = _submit(client, extra={
+            "title": "Updated Dataset v2.0",
+            "update": True,
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r2["version"] == "2.0"
+        _approve(client, source_id, mint_doi=False, version="2.0")
+
+        # One entry per dataset, and it is the new version
+        assert len(search._entries) == 1
+        entry = search.get_entry(source_id)
+        assert entry["content"]["mdf"]["version"] == "2.0"
+        assert entry["content"]["mdf"]["latest"] is True
+        assert entry["content"]["dc"]["title"] == "Updated Dataset v2.0"
+
+        # The prior version is marked not-latest in the store
+        v10 = _status(client, source_id, version="1.0")
+        mdata10 = v10.get("dataset_mdata")
+        if isinstance(mdata10, str):
+            mdata10 = json.loads(mdata10)
+        assert mdata10["latest"] is False
+
+    def test_out_of_order_publish_does_not_clobber_entry(self, env):
+        """Publishing an older version later must not overwrite the entry."""
+        search = self._fresh_search_client()
+        client = TestClient(app)
+
+        r1 = _submit(client)
+        source_id = r1["source_id"]
+
+        r2 = _submit(client, extra={
+            "title": "Updated Dataset v2.0",
+            "update": True,
+            "extensions": {"mdf_source_id": source_id},
+        })
+        assert r2["version"] == "2.0"
+
+        # Approve the newer version first, then the older one
+        _approve(client, source_id, mint_doi=False, version="2.0")
+        _approve(client, source_id, mint_doi=False, version="1.0")
+
+        # v1.0 is published, but the index still describes v2.0
+        assert _status(client, source_id, version="1.0")["status"] == "published"
+        assert _status(client, source_id, version="2.0")["status"] == "published"
+
+        assert len(search._entries) == 1
+        entry = search.get_entry(source_id)
+        assert entry["content"]["mdf"]["version"] == "2.0"
+        assert entry["content"]["mdf"]["latest"] is True
+        assert entry["content"]["dc"]["title"] == "Updated Dataset v2.0"
+
+
 class TestVersioningMockDataCite:
     """Tests for MockDataCiteClient version-aware methods."""
 

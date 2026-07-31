@@ -15,22 +15,21 @@ The v2 backend lives in `aws/v2/` and is a complete rewrite: a single FastAPI ap
 
 - **Dataset submission**: submit → pending_curation → approved (DOI minted) → published (indexed to Globus Search)
 - **Versioning**: update existing datasets with automatic version incrementing, version history via `GET /versions/{source_id}`
-- **Streaming**: create stream → upload files to Globus HTTPS → snapshot to dataset → close with DOI
+- **Datasets by reference**: datasets are submitted and published by reference to existing Globus data sources (`data_sources`); the in-band file streaming/upload feature (create stream → upload files to Globus HTTPS → snapshot → close with DOI) is **disabled for the initial v2 release** — its router is unmounted (see `aws/v2/app/__init__.py`) and can be re-enabled later
 - **Curation**: pending list, approve/reject, curator guards
-- **Discovery**: search, dataset cards, citations (BibTeX/APA/RIS), file preview
+- **Discovery**: search, dataset cards, citations (BibTeX/APA/RIS), file preview (profile-based, from `data_sources`)
 - **Auth**: Globus token validation (prod) or `X-User-Id` headers (dev)
 
-### API endpoints (29 total)
+### API endpoints
 
 | Group | Endpoints |
 |-------|-----------|
 | **Submissions** | `POST /submit`, `GET /versions/{id}`, `GET /status/{id}`, `POST /status/update`, `GET /submissions` |
-| **Streams** | `POST /stream/create`, `POST ../append`, `GET /stream/{id}`, `POST ../close`, `POST ../snapshot` |
-| **Files** | `POST ../upload`, `POST ../upload-url`, `POST ../upload-confirm`, `POST ../download-url`, `GET ../files` |
+| **Streams / Files** *(disabled for initial v2 release)* | ~~`POST /stream/create`, `POST ../append`, `GET /stream/{id}`, `POST ../close`, `POST ../snapshot`~~, ~~`POST ../upload`, `POST ../upload-url`, `POST ../upload-confirm`, `POST ../download-url`, `GET ../files`~~ — routers unmounted; datasets are published by reference to Globus data sources instead |
 | **Curation** | `GET /curation/pending`, `GET /curation/{id}`, `POST ../approve`, `POST ../reject` |
 | **Search** | `GET /search` |
 | **Cards** | `GET /card/{id}`, `GET /citation/{id}` |
-| **Preview** | `GET /stream/../preview`, `GET /preview/{id}`, `GET ../files`, `GET ../files/{path}`, `GET ../sample` |
+| **Preview** | `GET /preview/{id}`, `GET ../files`, `GET ../files/{path}`, `GET ../sample` |
 | **Health** | `GET /health` |
 
 ### Deployment architecture
@@ -71,17 +70,17 @@ X-Globus-Token: data token                    │
 │  ┌─── Routers (v2/app/routers/) ─────────────────────────────────────────┐  │
 │  │                                                                       │  │
 │  │  submissions.py          streams.py           files.py                │  │
-│  │  ├ POST /submit          ├ POST /stream/create ├ POST ../upload       │  │
-│  │  ├ GET  /versions/{id}   ├ POST ../append      ├ POST ../upload-url   │  │
-│  │  ├ GET  /status/{id}     ├ GET  /stream/{id}   ├ POST ../upload-confirm│ │
-│  │  ├ POST /status/update   ├ POST ../close       ├ POST ../download-url │  │
-│  │  └ GET  /submissions     └ POST ../snapshot    └ GET  ../files        │  │
+│  │  ├ POST /submit          (disabled for v2 —    (disabled for v2 —      │  │
+│  │  ├ GET  /versions/{id}    router unmounted,      router unmounted,     │  │
+│  │  ├ GET  /status/{id}      see app/__init__.py)   see app/__init__.py) │  │
+│  │  ├ POST /status/update                                                │  │
+│  │  └ GET  /submissions                                                  │  │
 │  │                                                                       │  │
 │  │  curation.py             search.py    cards.py       preview.py       │  │
-│  │  ├ GET  /curation/pending├ GET /search├ GET /card/{id}├ GET stream..  │  │
-│  │  ├ GET  /curation/{id}   │            └ GET /cite/{id}├ GET dataset.. │  │
-│  │  ├ POST ../approve       │                            └ GET ../sample │  │
-│  │  └ POST ../reject        │                                            │  │
+│  │  ├ GET  /curation/pending├ GET /search├ GET /card/{id}├ GET dataset.. │  │
+│  │  ├ GET  /curation/{id}   │            └ GET /cite/{id}├ GET ../files  │  │
+│  │  ├ POST ../approve       │                            ├ GET ../files/{path}
+│  │  └ POST ../reject        │                            └ GET ../sample │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │         │                │                │                                  │
 │         ▼                ▼                ▼                                  │

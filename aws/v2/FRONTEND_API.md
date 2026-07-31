@@ -327,7 +327,7 @@ No auth required. Returns aggregate metrics across all published versions.
 
 **Counter sources:**
 - `view_count` — incremented on every `GET /card`, `GET /detail`, `GET /citation`, `GET /preview` hit
-- `download_count` — incremented on `POST /stream/{id}/download-url`
+- `download_count` — incremented on `POST /stream/{id}/download-url` *(disabled for the initial v2 release — the streams/files routers are unmounted, so this counter does not currently increment)*
 
 ---
 
@@ -540,7 +540,7 @@ Requires submitter group membership in production.
 **`data_sources` formats:**
 - `globus://{collection_uuid}/path/to/data` — Globus transfer
 - `https://...` — HTTP download
-- `stream://{stream_id}` — internal stream reference
+- `stream://{stream_id}` — internal stream reference *(disabled for the initial v2 release — the streams/files routers that create and populate streams are unmounted, so there is no way to obtain a `stream_id`; publish datasets by reference to a `globus://` or `https://` source instead)*
 
 **For updates** (new version of existing dataset), include:
 ```json
@@ -962,7 +962,7 @@ Authorization: Bearer <token>
 | `authors` | `[{name, orcid?, affiliations?}]` | At least one required |
 | `description` | string | Free-text description |
 | `keywords` | `[string]` | Subject keywords |
-| `data_sources` | `[string]` | URIs to the data (globus://, https://, stream://) |
+| `data_sources` | `[string]` | URIs to the data (`globus://`, `https://`; `stream://` disabled for the initial v2 release) |
 | `organization` | string | Publishing org (default: "Materials Data Facility") |
 | `doi` | string | DOI (assigned on approval) |
 | `download_url` | string | Direct download link |

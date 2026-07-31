@@ -303,6 +303,10 @@ class MockGlobusSearchClient:
         self.index_id = index_id
         self.test_mode = test_mode
         self._entries: Dict[str, Dict[str, Any]] = {}
+        # Test seam: make the next N ingest() calls fail, to exercise the
+        # publish pipeline's ingest-failure/retry path.
+        self.fail_next_ingests = 0
+        self.ingest_calls = 0
 
     def build_gmeta_entry(
         self, submission: Dict[str, Any], version_count: Optional[int] = None,
@@ -311,7 +315,23 @@ class MockGlobusSearchClient:
         real = GlobusSearchClient.__new__(GlobusSearchClient)
         return real.build_gmeta_entry(submission, version_count=version_count)
 
+    def get_entry(self, source_id: str) -> Optional[Dict[str, Any]]:
+        """Return the stored GMeta entry for a dataset, or None.
+
+        The index holds one entry per dataset, keyed on the version-less detail
+        URL subject, so this is the entry a search would return for source_id.
+        """
+        return self._entries.get(f"{MDF_DETAIL_BASE}/{source_id}")
+
     def ingest(self, submission: Dict[str, Any], version_count: Optional[int] = None) -> Dict[str, Any]:
+        self.ingest_calls += 1
+        if self.fail_next_ingests > 0:
+            self.fail_next_ingests -= 1
+            return {
+                "success": False,
+                "mock": True,
+                "error": "mock search ingest failure",
+            }
         entry = self.build_gmeta_entry(submission, version_count=version_count)
         self._entries[entry["subject"]] = entry
         return {"success": True, "mock": True, "subject": entry["subject"]}
@@ -542,6 +562,12 @@ def _format_facet_results(facet_results: List[Dict[str, Any]]) -> Dict[str, List
 
 # Singleton for mock client to persist in-memory state within a Lambda invocation
 _mock_client: Optional[MockGlobusSearchClient] = None
+
+
+def reset_search_client() -> None:
+    """Drop the cached mock client (test helper: gives each test a clean index)."""
+    global _mock_client
+    _mock_client = None
 
 
 def get_search_client(test_mode: bool = False) -> Any:
