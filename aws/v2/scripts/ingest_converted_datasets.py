@@ -50,6 +50,10 @@ _RELEVANT_ENV_KEYS = {
     "GLOBUS_CLIENT_ID",
     "GLOBUS_CLIENT_SECRET",
     "AWS_REGION",
+    # Needed so --backfill-embeddings can enqueue the rebuild onto the live
+    # async queue that the deployed worker consumes.
+    "ASYNC_DISPATCH_MODE",
+    "ASYNC_QUEUE_URL",
 }
 
 REGION = "us-east-1"
@@ -133,8 +137,9 @@ def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
     organization = metadata.get("organization") or ""
 
     # Store legacy_source_id in extensions for traceability
-    if converted.get("legacy_source_id"):
-        metadata.setdefault("extensions", {})["legacy_source_id"] = converted["legacy_source_id"]
+    legacy_source_id = converted.get("legacy_source_id")
+    if legacy_source_id:
+        metadata.setdefault("extensions", {})["legacy_source_id"] = legacy_source_id
 
     record = {
         "source_id": converted["source_id"],
@@ -149,6 +154,12 @@ def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": ingest_date,
         "published_at": ingest_date,
     }
+
+    # Top-level legacy_source_id powers the legacy-source-id GSI so old v1 ids
+    # resolve to this record. Omit when empty/equal — DynamoDB rejects empty
+    # strings as GSI key attributes and a self-redirect is pointless.
+    if legacy_source_id and legacy_source_id != converted["source_id"]:
+        record["legacy_source_id"] = legacy_source_id
 
     # DynamoDB rejects empty strings for GSI key attributes.
     # organization is the partition key of the org-submissions GSI,
@@ -305,6 +316,20 @@ def main():
         default=0,
         help="Only process first N records (0 = all)",
     )
+    parser.add_argument(
+        "--backfill-embeddings",
+        action="store_true",
+        help="After ingest, enqueue the embedding rebuild (generate embeddings "
+             "+ snapshot) so migrated datasets are semantically searchable. "
+             "Enqueues onto the deployed async queue; the worker does the scan.",
+    )
+    parser.add_argument(
+        "--embedding-limit",
+        type=int,
+        default=0,
+        help="Cap embedding generation to N records (0 = all). Useful for phased "
+             "backfills. Only meaningful with --backfill-embeddings.",
+    )
     args = parser.parse_args()
 
     # ── Resolve config from deployed stack ──
@@ -382,6 +407,27 @@ def main():
                 print(f"  Search errors:      {len(stats['search_errors'])}")
                 for e in stats["search_errors"][:3]:
                     print(f"    {e['source_id']}: {e['error'][:100]}")
+
+    # ── Embedding backfill ──
+    # Migrated records land published but are NOT yet in the semantic index;
+    # something must trigger embedding generation. Either do it here (opt-in)
+    # or remind the operator so it isn't forgotten.
+    ingested_anything = not args.dry_run and not args.skip_store and stats["store_inserted"] > 0
+    if args.backfill_embeddings and not args.dry_run and not args.skip_store:
+        try:
+            from v2.async_jobs import enqueue_rebuild_dispatch_job
+
+            limit = args.embedding_limit or None
+            result = enqueue_rebuild_dispatch_job(force=False, limit=limit, build_snapshot=True)
+            print(f"\n  Embedding backfill enqueued (dispatch={os.environ.get('ASYNC_DISPATCH_MODE', 'inline')}, "
+                  f"limit={limit or 'all'}): {result}")
+            print("  The async worker will generate embeddings and rebuild the snapshot.")
+        except Exception as exc:
+            print(f"\n  WARNING: embedding backfill enqueue failed: {exc}")
+            print("  Records are stored; run `mdf admin rebuild-embeddings --service <env>` manually.")
+    elif ingested_anything:
+        print("\n  NOTE: migrated records are NOT yet in the semantic index.")
+        print("  Run with --backfill-embeddings, or: mdf admin rebuild-embeddings --service <env>")
 
     # Exit with error code if any failures
     has_errors = (

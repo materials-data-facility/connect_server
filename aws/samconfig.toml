@@ -47,7 +47,10 @@ s3_bucket = "mdf-sam-deployments-staging"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=staging AuthMode=production AllowAllCurators=true DataCiteUsername=Globus.TEST DataCitePassword=NTroFAzElE DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+# DataCite credentials are NOT stored here — deploy.sh resolves them from SSM
+# (/mdf/staging/datacite-username, /mdf/staging/datacite-password) and refuses
+# to deploy without them while UseMockDatacite=false.
+parameter_overrides = "Environment=staging AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================
@@ -61,5 +64,9 @@ s3_bucket = "mdf-sam-deployments-prod"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
-parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
+# Curation is gated to members of the MDF curators Globus group
+# (AllowAllCurators=false + CuratorGroupIds). Add named break-glass admins via
+# CuratorUserIds=<sub>,<sub> if the group-membership path needs a fallback.
+# DataCite credentials are resolved from SSM by deploy.sh, never stored here.
+parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc"
 tags = "Project=mdf-connect Environment=prod Team=MDF"

@@ -194,10 +194,10 @@ aws sts get-caller-identity
 | Environment | Stack | Auth | DataCite | Search | Curators |
 |-------------|-------|------|----------|--------|----------|
 | **dev** | `mdf-connect-v2-dev` | `X-User-Id` headers | Mock | Mock | All users |
-| **staging** | `mdf-connect-v2-staging` | Globus tokens | Test API (`Globus.TEST`) | Test index | All users |
-| **prod** | `mdf-connect-v2-prod` | Globus tokens | Test API (switch to real later) | Test index (switch to real later) | All users (switch to group-based later) |
+| **staging** | `mdf-connect-v2-staging` | Globus tokens | Test API (creds from SSM) | Test index | All users |
+| **prod** | `mdf-connect-v2-prod` | Globus tokens | Real API (`api.datacite.org`, prefix `10.18126`) | Real index | MDF curators group (`CuratorGroupIds`; `CuratorUserIds` for break-glass) |
 
-All environments are fully separate CloudFormation stacks with their own DynamoDB tables, Lambda functions, API Gateway, and SQS queues.
+DataCite credentials for staging and prod live only in SSM (`/mdf/{env}/datacite-*`); `deploy.sh` refuses to deploy without them while `UseMockDatacite=false`. All environments are fully separate CloudFormation stacks with their own DynamoDB tables, Lambda functions, API Gateway, and SQS queues.
 
 ## Deploying
 
@@ -231,36 +231,39 @@ sam build && ./deploy.sh staging
 
 ### Production
 
-Same SSM prerequisites as staging. The prod config in `samconfig.toml` currently uses **test credentials** (DataCite test API, test search index) so the stack can be deployed and validated before switching to real credentials.
+Prod runs against **real** services: DataCite (`api.datacite.org`, prefix `10.18126`),
+the production Globus Search index, and group-gated curation
+(`AllowAllCurators=false`, `CuratorGroupIds`). Before the first deploy, store the real
+DataCite repository credentials in SSM (namespaced by environment) — `deploy.sh` will
+refuse to deploy without them:
+
+```bash
+aws ssm put-parameter --name /mdf/prod/datacite-username \
+  --value "REPOSITORY_ID" --type String --region us-east-1
+aws ssm put-parameter --name /mdf/prod/datacite-password \
+  --value "REPOSITORY_PASSWORD" --type SecureString --region us-east-1
+
+# Optional — otherwise the samconfig.toml [prod] values are used:
+aws ssm put-parameter --name /mdf/prod/datacite-api-url \
+  --value "https://api.datacite.org" --type String --region us-east-1
+aws ssm put-parameter --name /mdf/prod/datacite-prefix \
+  --value "10.18126" --type String --region us-east-1
+```
+
+Then deploy (Globus client id/secret must also be in SSM — see below):
 
 ```bash
 cd aws
 sam build && ./deploy.sh prod
 ```
 
-#### Switching prod to real credentials
+#### Curator access
 
-When ready to go live, update `samconfig.toml` `[prod]` section:
-
-```toml
-[prod.deploy.parameters]
-parameter_overrides = "Environment=prod AuthMode=production AllowAllCurators=false DataCiteUsername=REAL_USERNAME DataCitePassword=REAL_PASSWORD DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=REAL_INDEX_UUID TestSearchIndexUUID=TEST_INDEX_UUID"
-```
-
-Or store DataCite credentials in SSM (deploy.sh will pick them up automatically):
-
-```bash
-aws ssm put-parameter --name /mdf/datacite-username \
-  --value "REAL_USERNAME" --type String --region us-east-1
-aws ssm put-parameter --name /mdf/datacite-password \
-  --value "REAL_PASSWORD" --type SecureString --region us-east-1
-aws ssm put-parameter --name /mdf/datacite-api-url \
-  --value "https://api.datacite.org" --type String --region us-east-1
-aws ssm put-parameter --name /mdf/datacite-prefix \
-  --value "10.18126" --type String --region us-east-1
-```
-
-Then redeploy: `sam build && ./deploy.sh prod`
+Curators are members of the Globus group in `CuratorGroupIds`
+(default `3ce2c53e-3752-11e8-891c-0e00fd09bf20`). To grant a specific person curator
+rights without group membership — e.g. a break-glass admin if the groups-token path
+fails — add their Globus user id (`sub`) to `CuratorUserIds` in the `[prod]`
+`parameter_overrides` (comma-separated).
 
 ### Quick deploy (code only, skips CloudFormation)
 
@@ -298,14 +301,17 @@ curl https://YOUR_API_URL/health
 
 ## SSM Parameters
 
+DataCite parameters are namespaced by environment (`/mdf/{env}/...`); the Globus app
+credentials are shared across environments.
+
 | Parameter | Required for | Description |
 |-----------|-------------|-------------|
 | `/mdf/globus-client-id` | staging, prod | Globus confidential app client ID |
 | `/mdf/globus-client-secret` | staging, prod | Globus confidential app client secret |
-| `/mdf/datacite-username` | prod (optional) | DataCite repository ID — overrides samconfig |
-| `/mdf/datacite-password` | prod (optional) | DataCite repository password |
-| `/mdf/datacite-api-url` | prod (optional) | `https://api.datacite.org` for real DOIs |
-| `/mdf/datacite-prefix` | prod (optional) | DOI prefix (e.g., `10.18126`) |
+| `/mdf/{env}/datacite-username` | staging, prod (**required** when `UseMockDatacite=false`) | DataCite repository ID |
+| `/mdf/{env}/datacite-password` | staging, prod (**required** when `UseMockDatacite=false`) | DataCite repository password |
+| `/mdf/{env}/datacite-api-url` | optional | Overrides samconfig (`https://api.datacite.org` for real DOIs) |
+| `/mdf/{env}/datacite-prefix` | optional | DOI prefix (e.g., `10.18126`) |
 
 ## Running tests
 

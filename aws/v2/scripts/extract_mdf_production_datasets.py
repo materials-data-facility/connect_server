@@ -23,8 +23,10 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
+from datetime import datetime, timezone
 
 MDF_PRODUCTION_INDEX = "1a57bbe5-5272-477f-9d31-343b8258b7a5"
 NATIVE_APP_CLIENT_ID = "074cebcc-19ad-4332-bbf2-78402291b659"
@@ -32,6 +34,61 @@ SEARCH_SCOPE = "urn:globus:auth:scope:search.api.globus.org:all"
 
 # Globus Search max limit per request
 PAGE_SIZE = 100
+
+
+def _parse_dt(value):
+    """Parse an ISO-8601-ish timestamp into a tz-aware datetime, or None."""
+    if not value:
+        return None
+    s = str(value).strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = None
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _entry_contents(entry):
+    """Yield content dicts from a gmeta entry, handling both response shapes.
+
+    Modern Globus Search: entry['entries'][0]['content'].
+    Older/flattened:      entry['content'] (a dict or a list of dicts).
+    """
+    ents = entry.get("entries")
+    if isinstance(ents, list):
+        for e in ents:
+            c = e.get("content") if isinstance(e, dict) else None
+            if isinstance(c, dict):
+                yield c
+    c = entry.get("content")
+    if isinstance(c, list):
+        for item in c:
+            if isinstance(item, dict):
+                yield item
+    elif isinstance(c, dict):
+        yield c
+
+
+def _entry_ingest_date(entry):
+    """Return the mdf.ingest_date string for a gmeta entry, or None."""
+    for content in _entry_contents(entry):
+        mdf = content.get("mdf", {}) if isinstance(content, dict) else {}
+        ingest = mdf.get("ingest_date")
+        if ingest:
+            return ingest
+    return None
 
 
 def authenticate():
@@ -165,17 +222,69 @@ def main():
         action="store_true",
         help="Just count entries, don't save to file",
     )
+    parser.add_argument(
+        "--since",
+        default=None,
+        help="Only keep datasets with mdf.ingest_date >= this ISO timestamp "
+             "(delta sync). Entries without a parseable ingest_date are skipped.",
+    )
+    parser.add_argument(
+        "--since-file",
+        default=None,
+        help="Watermark file for ongoing-bridge sync. Read as --since if it "
+             "exists (and --since not given); after a successful save the newest "
+             "ingest_date seen is written back so the next run resumes from there.",
+    )
     args = parser.parse_args()
 
     print(f"MDF Production Index: {MDF_PRODUCTION_INDEX}")
     print(f"Query: resource_type=dataset\n")
+
+    # Resolve the delta watermark: explicit --since wins; else read --since-file.
+    since_raw = args.since
+    if not since_raw and args.since_file and os.path.exists(args.since_file):
+        with open(args.since_file) as f:
+            since_raw = f.read().strip() or None
+    since_dt = _parse_dt(since_raw) if since_raw else None
+    if since_raw and not since_dt:
+        print(f"ERROR: could not parse --since value: {since_raw!r}", file=sys.stderr)
+        sys.exit(1)
+    if since_dt:
+        print(f"Delta sync: keeping datasets with ingest_date >= {since_dt.isoformat()}\n")
 
     print("Authenticating with Globus...")
     search_client = authenticate()
     print("Authenticated.\n")
 
     print("Fetching datasets...")
-    gmeta_list, total = fetch_all_datasets(search_client, limit=args.limit)
+    fetched, total = fetch_all_datasets(search_client, limit=args.limit)
+
+    # Newest ingest_date across everything fetched — becomes the next watermark
+    # even if some entries are filtered out below.
+    max_dt = None
+    for entry in fetched:
+        dt = _parse_dt(_entry_ingest_date(entry))
+        if dt and (max_dt is None or dt > max_dt):
+            max_dt = dt
+
+    # Apply the --since delta filter. The index isn't sorted by date, so we scan
+    # all and keep the delta client-side (correct and simple at MDF's scale; a
+    # server-side range query would be the optimization for a very large index).
+    skipped_undated = 0
+    if since_dt:
+        kept = []
+        for entry in fetched:
+            dt = _parse_dt(_entry_ingest_date(entry))
+            if dt is None:
+                skipped_undated += 1
+                continue
+            if dt >= since_dt:
+                kept.append(entry)
+        gmeta_list = kept
+        print(f"Delta filter: {len(gmeta_list)} of {len(fetched)} fetched match "
+              f"(ingest_date >= since); {skipped_undated} skipped (no ingest_date)")
+    else:
+        gmeta_list = fetched
 
     summarize(gmeta_list)
 
@@ -188,7 +297,11 @@ def main():
         "source_index": MDF_PRODUCTION_INDEX,
         "query": 'mdf.resource_type:"dataset"',
         "total_in_index": total,
-        "fetched_count": len(gmeta_list),
+        "fetched_count": len(fetched),
+        "matched_count": len(gmeta_list),
+        "since": since_dt.isoformat() if since_dt else None,
+        "max_ingest_date": max_dt.isoformat() if max_dt else None,
+        "skipped_undated": skipped_undated,
         "gmeta": gmeta_list,
     }
 
@@ -196,6 +309,12 @@ def main():
         json.dump(output, f, indent=2, default=str)
 
     print(f"\nSaved {len(gmeta_list)} entries to {args.output}")
+
+    # Advance the watermark for the next ongoing-bridge run.
+    if args.since_file and max_dt:
+        with open(args.since_file, "w") as f:
+            f.write(max_dt.isoformat())
+        print(f"Watermark updated: {args.since_file} -> {max_dt.isoformat()}")
 
 
 if __name__ == "__main__":

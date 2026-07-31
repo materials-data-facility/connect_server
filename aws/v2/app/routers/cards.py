@@ -19,6 +19,26 @@ _VERSION_SUFFIX_RE = re.compile(r"^(.+)-(\d+\.\d+)$")
 _EDITABLE_STATUSES = {"pending_curation", "rejected", "published"}
 
 
+def _resolve_published(
+    store: SubmissionStore, source_id: str, version: Optional[str]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve a published record, falling back to a pre-migration (v1) id.
+
+    Returns (record, canonical_source_id). If ``source_id`` is an old v1 id that
+    was promoted during migration, the matching record is returned and the
+    canonical (current) source_id is reported so callers can surface a redirect.
+    """
+    record = store.get(source_id, version=version)
+    if record and record.get("status") == "published":
+        return record, record.get("source_id", source_id)
+
+    legacy = store.get_by_legacy_source_id(source_id)
+    if legacy and legacy.get("status") == "published":
+        return legacy, legacy.get("source_id")
+
+    return None, None
+
+
 def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> Dict[str, bool]:
     """Compute user permissions for a dataset record."""
     if not auth:
@@ -45,19 +65,24 @@ async def get_card(
     if version and version.lower() == "latest":
         version = None
 
-    record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    record, canonical = _resolve_published(store, source_id, version)
+    if not record:
         raise HTTPException(404, "Dataset not found")
 
     card = build_dataset_card(record)
 
-    # Fire-and-forget view count increment
+    # Fire-and-forget view count increment (use the canonical id in case the
+    # request came in on a legacy id).
     try:
-        store.increment_counter(source_id, record["version"], "view_count")
+        store.increment_counter(record["source_id"], record["version"], "view_count")
     except Exception:
-        logger.debug("Failed to increment view_count for %s", source_id, exc_info=True)
+        logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
-    return {"success": True, "card": card, "permissions": _build_permissions(auth, record)}
+    resp = {"success": True, "card": card, "permissions": _build_permissions(auth, record)}
+    if canonical and canonical != source_id:
+        resp["canonical_source_id"] = canonical
+        resp["redirected_from"] = source_id
+    return resp
 
 
 @router.get("/citation/{source_id}")
@@ -67,17 +92,19 @@ async def get_citation(
     format: Optional[str] = Query("all"),
     store: SubmissionStore = Depends(get_submission_store),
 ):
-    record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    record, canonical = _resolve_published(store, source_id, version)
+    if not record:
         raise HTTPException(404, "Dataset not found")
 
     fmt = (format or "all").lower()
 
     result = {
         "success": True,
-        "source_id": source_id,
+        "source_id": canonical or source_id,
         "version": record.get("version"),
     }
+    if canonical and canonical != source_id:
+        result["redirected_from"] = source_id
 
     if fmt == "bibtex":
         result["bibtex"] = generate_bibtex(record)
@@ -134,21 +161,24 @@ async def get_card_by_slug(
     if version and version.lower() == "latest":
         version = None
 
-    record = store.get(source_id, version=version)
-    if not record or record.get("status") != "published":
+    record, canonical = _resolve_published(store, source_id, version)
+    if not record:
         raise HTTPException(404, "Dataset not found")
 
     card = build_dataset_card(record)
 
     try:
-        store.increment_counter(source_id, record["version"], "view_count")
+        store.increment_counter(record["source_id"], record["version"], "view_count")
     except Exception:
-        logger.debug("Failed to increment view_count for %s", source_id, exc_info=True)
+        logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
-    return {
+    resp = {
         "success": True,
-        "source_id": source_id,
+        "source_id": canonical or source_id,
         "version": record.get("version"),
         "card": card,
         "permissions": _build_permissions(auth, record),
     }
+    if canonical and canonical != source_id:
+        resp["redirected_from"] = source_id
+    return resp

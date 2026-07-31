@@ -12,5 +12,6 @@ TEST_SEARCH_INDEX_UUID = os.environ.get("TEST_SEARCH_INDEX_UUID")
 
 GSI_USER_INDEX = os.environ.get("GSI_USER_INDEX", "user-submissions")
 GSI_ORG_INDEX = os.environ.get("GSI_ORG_INDEX", "org-submissions")
+GSI_LEGACY_INDEX = os.environ.get("GSI_LEGACY_INDEX", "legacy-source-id-index")
 
 DEFAULT_ORGANIZATION = os.environ.get("DEFAULT_ORGANIZATION", "MDF Open")

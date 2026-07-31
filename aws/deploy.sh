@@ -176,8 +176,23 @@ deploy_prod() {
         || error "SSM parameter /mdf/globus-client-secret not found. Create it first."
     log "Globus credentials resolved from SSM"
 
-    # Resolve DataCite credentials from SSM (optional — falls back to env/defaults)
-    # Parameters are namespaced by environment: /mdf/{env}/datacite-*
+    # Read base parameter_overrides from samconfig.toml up front so required
+    # secrets can be validated against the resolved configuration before we
+    # spend time building. CLI --parameter-overrides fully replaces samconfig
+    # values, so we must pass the complete set when deploying.
+    local base_params
+    base_params=$(python3 -c "
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+with open('samconfig.toml', 'rb') as f:
+    cfg = tomllib.load(f)
+print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('parameter_overrides', ''))
+" 2>/dev/null || echo "Environment=$env AuthMode=production")
+
+    # Resolve DataCite credentials from SSM (namespaced /mdf/{env}/datacite-*).
+    # Secrets are NEVER committed to samconfig.toml — they live in SSM only.
     log "Resolving DataCite credentials from SSM (/mdf/$env/datacite-*)..."
     local datacite_user datacite_pass datacite_url datacite_prefix
     datacite_user=$(aws ssm get-parameter \
@@ -197,29 +212,30 @@ deploy_prod() {
         --name "/mdf/$env/datacite-prefix" \
         --region "$REGION" \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
-    if [[ -n "$datacite_user" ]]; then
+
+    # When DOIs are minted for real (UseMockDatacite=false — staging and prod),
+    # DataCite credentials are mandatory. Refuse to deploy with the template's
+    # "not-configured" placeholder, which would silently break DOI minting at
+    # publish time instead of failing fast here.
+    if echo "$base_params" | grep -q "UseMockDatacite=false"; then
+        if [[ -z "$datacite_user" || -z "$datacite_pass" ]]; then
+            error "DataCite credentials required for '$env' (UseMockDatacite=false) but missing from SSM.
+  Store them first (test repository creds for staging, real creds for prod):
+    aws ssm put-parameter --name /mdf/$env/datacite-username --value 'REPOSITORY_ID' --type String --region $REGION
+    aws ssm put-parameter --name /mdf/$env/datacite-password --value 'REPOSITORY_PASSWORD' --type SecureString --region $REGION
+  Optional overrides (otherwise samconfig.toml values are used):
+    aws ssm put-parameter --name /mdf/$env/datacite-api-url --value 'https://api.datacite.org' --type String --region $REGION
+    aws ssm put-parameter --name /mdf/$env/datacite-prefix --value '10.18126' --type String --region $REGION"
+        fi
+        log "DataCite credentials resolved from SSM"
+    elif [[ -n "$datacite_user" ]]; then
         log "DataCite credentials resolved from SSM"
     else
-        warn "DataCite SSM parameters not found — using defaults from samconfig.toml"
+        warn "DataCite SSM parameters not found — relying on mock/default DataCite behavior"
     fi
 
     ensure_s3_bucket "mdf-sam-deployments-$env"
     build
-
-    # Read base parameter_overrides from samconfig.toml and append credentials.
-    # CLI --parameter-overrides fully replaces samconfig values, so we must
-    # pass the complete set here.
-    local base_params
-    base_params=$(python3 -c "
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-import sys
-with open('samconfig.toml', 'rb') as f:
-    cfg = tomllib.load(f)
-print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('parameter_overrides', ''))
-" 2>/dev/null || echo "Environment=$env AuthMode=production")
 
     local all_params="$base_params GlobusClientId=$globus_id GlobusClientSecret=$globus_secret"
 

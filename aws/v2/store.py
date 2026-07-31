@@ -28,6 +28,18 @@ class SubmissionStore:
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
         raise NotImplementedError
 
+    def get_by_legacy_source_id(self, legacy_source_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve a record by its pre-migration (v1) source_id.
+
+        Datasets migrated from the legacy MDF index carry a top-level
+        ``legacy_source_id`` (the original versioned v1 id, e.g. ``foo_v2``)
+        while their canonical v2 ``source_id`` is the version-independent name.
+        This lets old links/DOIs that reference a v1 id keep resolving after the
+        source_name→source_id promotion. Returns the single matching record (a
+        v1 id maps to exactly one record) or None.
+        """
+        raise NotImplementedError
+
     def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
@@ -99,6 +111,30 @@ class DynamoSubmissionStore(SubmissionStore):
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
         resp = self.table.get_item(Key={"source_id": source_id, "version": version})
         return resp.get("Item")
+
+    def get_by_legacy_source_id(self, legacy_source_id: str) -> Optional[Dict[str, Any]]:
+        if not legacy_source_id:
+            return None
+        from v2.config import GSI_LEGACY_INDEX
+
+        try:
+            resp = self.table.query(
+                IndexName=os.environ.get("GSI_LEGACY_INDEX", GSI_LEGACY_INDEX),
+                KeyConditionExpression=self._key("legacy_source_id").eq(legacy_source_id),
+                Limit=1,
+            )
+            items = resp.get("Items", [])
+        except Exception:
+            # GSI may not exist yet (table created before the index was added)
+            # — fall back to a filtered scan on the top-level attribute.
+            from boto3.dynamodb.conditions import Attr
+
+            resp = self.table.scan(
+                FilterExpression=Attr("legacy_source_id").eq(legacy_source_id),
+                Limit=1000,
+            )
+            items = resp.get("Items", [])
+        return items[0] if items else None
 
     def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
         resp = self.table.query(KeyConditionExpression=self._key("source_id").eq(source_id))
@@ -303,6 +339,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     action_id TEXT,
                     doi TEXT,
                     dataset_doi TEXT,
+                    legacy_source_id TEXT,
                     metadata_updated_at TEXT,
                     published_at TEXT,
                     approved_at TEXT,
@@ -330,6 +367,12 @@ class SqliteSubmissionStore(SubmissionStore):
             col_names = {row["name"] for row in cur.fetchall()}
             if "dataset_profile" not in col_names:
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_profile TEXT")
+            if "legacy_source_id" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN legacy_source_id TEXT")
+            # Index created after the column is guaranteed to exist (above).
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_submissions_legacy ON submissions(legacy_source_id)"
+            )
             if "dataset_doi" not in col_names:
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_doi TEXT")
             if "view_count" not in col_names:
@@ -386,6 +429,16 @@ class SqliteSubmissionStore(SubmissionStore):
         row = cur.fetchone()
         return self._row_to_dict(row) if row else None
 
+    def get_by_legacy_source_id(self, legacy_source_id: str) -> Optional[Dict[str, Any]]:
+        if not legacy_source_id:
+            return None
+        cur = self.conn.execute(
+            "SELECT * FROM submissions WHERE legacy_source_id = ? LIMIT 1",
+            (legacy_source_id,),
+        )
+        row = cur.fetchone()
+        return self._row_to_dict(row) if row else None
+
     def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
         cur = self.conn.execute(
             "SELECT * FROM submissions WHERE source_id = ?",
@@ -416,10 +469,10 @@ class SqliteSubmissionStore(SubmissionStore):
                 INSERT OR REPLACE INTO submissions (
                     source_id, version, versioned_source_id, user_id, user_email,
                     organization, status, dataset_mdata, test, created_at, updated_at, action_id,
-                    doi, dataset_doi, published_at, approved_at, approved_by, rejected_at, rejected_by,
+                    doi, dataset_doi, legacy_source_id, published_at, approved_at, approved_by, rejected_at, rejected_by,
                     rejection_reason, curation_history, dataset_profile, metadata_updated_at,
                     title_description_embedding, embedding_model, embedding_generated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -436,6 +489,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("action_id"),
                     record.get("doi"),
                     record.get("dataset_doi"),
+                    record.get("legacy_source_id"),
                     record.get("published_at"),
                     record.get("approved_at"),
                     record.get("approved_by"),
