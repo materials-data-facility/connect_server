@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 import extract_mdf_production_datasets as extract  # noqa: E402
 import ingest_converted_datasets as ingest  # noqa: E402
 import legacy_auth  # noqa: E402
+import purge_stale_search_entries as purge_search  # noqa: E402
 import reconcile_migration as reconcile_script  # noqa: E402
 import sync_prod_to_v2 as sync_script  # noqa: E402
 from v2.store import SqliteSubmissionStore  # noqa: E402
@@ -72,6 +73,108 @@ def converted_record(
             "root_version": source_id,
         },
     }
+
+
+def test_purge_search_classifier_kept_superseded_orphan_and_test():
+    class Store:
+        records = {
+            "kept-dataset": [{"source_id": "kept-dataset", "version": "1.0"}],
+            "versioned-family": [
+                {"source_id": "versioned-family", "version": "1.1"}
+            ],
+            "subject-family": [
+                {"source_id": "subject-family", "version": "3.2"}
+            ],
+            "mdf-resolvable-test": [
+                {"source_id": "mdf-resolvable-test", "version": "1.0"}
+            ],
+        }
+
+        def list_versions(self, source_id):
+            return self.records.get(source_id, [])
+
+    def gmeta(subject_id, source_id=None, title="Dataset"):
+        mdf = {} if source_id is None else {"source_id": source_id}
+        return {
+            "subject": "https://materialsdatafacility.org/detail/{}".format(
+                subject_id
+            ),
+            "entries": [
+                {"content": {"mdf": mdf, "dc": {"title": title}}}
+            ],
+        }
+
+    canned = [
+        gmeta("kept-dataset", "kept-dataset", "Kept"),
+        gmeta("versioned-family_v1.1", "versioned-family_v1.1", "Old"),
+        gmeta("missing_v2.0", "missing_v2.0", "Orphan"),
+        gmeta("mdf-resolvable-test", "mdf-resolvable-test", "Test"),
+        # No mdf.source_id: exercise the subject-segment fallback as well as
+        # multi-component version stripping.
+        gmeta("subject-family_v3.2", None, "Subject fallback"),
+    ]
+
+    result = purge_search.classify_entries(canned, Store())
+
+    assert result["enumerated"] == 5
+    assert {record["source_id"] for record in result["kept"]} == {
+        "kept-dataset",
+        "mdf-resolvable-test",
+    }
+    assert result["test_records_resolvable"] == 1
+    assert {
+        (record["source_id"], record["canonical_source_id"])
+        for record in result["stale_superseded"]
+    } == {
+        ("versioned-family_v1.1", "versioned-family"),
+        ("subject-family_v3.2", "subject-family"),
+    }
+    assert [record["source_id"] for record in result["stale_orphan"]] == [
+        "missing_v2.0"
+    ]
+    assert result["store_errors"] == []
+    assert purge_search.strip_version_suffix("family_v1.1") == "family"
+    assert purge_search.strip_version_suffix("family") is None
+
+
+def test_purge_search_legacy_index_guard_returns_two(monkeypatch):
+    monkeypatch.setattr(
+        purge_search,
+        "apply_env",
+        lambda resolved: [
+            monkeypatch.setenv(key, value) for key, value in resolved.items()
+        ],
+    )
+    monkeypatch.setattr(
+        purge_search,
+        "resolve_env_from_stack",
+        lambda env: {
+            "SEARCH_INDEX_UUID": purge_search.LEGACY_SEARCH_INDEX_UUID,
+            "DYNAMO_SUBMISSIONS_TABLE": "staging-table",
+        },
+    )
+
+    assert purge_search.main(["--env", "staging"]) == 2
+
+
+def test_purge_search_prod_execute_requires_allow_prod(monkeypatch):
+    monkeypatch.setattr(
+        purge_search,
+        "apply_env",
+        lambda resolved: [
+            monkeypatch.setenv(key, value) for key, value in resolved.items()
+        ],
+    )
+    monkeypatch.setattr(
+        purge_search,
+        "resolve_env_from_stack",
+        lambda env: {
+            "SEARCH_INDEX_UUID": "00000000-0000-4000-8000-000000000001",
+            "DYNAMO_SUBMISSIONS_TABLE": "prod-table",
+        },
+    )
+
+    assert purge_search.main(["--env", "prod", "--execute"]) == 2
 
 
 def test_create_unchanged_update_conflict_matrix(sync_runtime):
