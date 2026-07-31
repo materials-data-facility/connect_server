@@ -37,9 +37,11 @@ import sys
 import time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(__file__))
+
+from legacy_auth import get_legacy_search_client  # noqa: E402
+
 MDF_PRODUCTION_INDEX = "1a57bbe5-5272-477f-9d31-343b8258b7a5"
-NATIVE_APP_CLIENT_ID = "074cebcc-19ad-4332-bbf2-78402291b659"
-SEARCH_SCOPE = "urn:globus:auth:scope:search.api.globus.org:all"
 
 # Globus Search max limit per request
 PAGE_SIZE = 100
@@ -117,34 +119,21 @@ def _candidate_watermark_fields(max_dt, limit):
     }
 
 
-def authenticate():
-    """Authenticate via interactive Globus OAuth login. Returns a SearchClient."""
-    import globus_sdk
+def authenticate(interactive_ok=True):
+    """Return the shared legacy Search client (compatibility wrapper)."""
+    return get_legacy_search_client(interactive_ok=interactive_ok)
 
-    client = globus_sdk.NativeAppAuthClient(NATIVE_APP_CLIENT_ID)
-    client.oauth2_start_flow(requested_scopes=SEARCH_SCOPE)
 
-    authorize_url = client.oauth2_get_authorize_url()
-    print(f"Go to this URL and login:\n\n  {authorize_url}\n")
-    auth_code = input("Paste the authorization code here: ").strip()
-
-    token_response = client.oauth2_exchange_code_for_tokens(auth_code)
-    search_token_data = token_response.by_resource_server.get("search.api.globus.org")
-    if not search_token_data:
-        print("ERROR: No search token in response. Check app scopes.")
-        sys.exit(1)
-
-    access_token = (
-        search_token_data.get("access_token")
-        if isinstance(search_token_data, dict)
-        else getattr(search_token_data, "access_token", None)
+def _is_forbidden(exc):
+    """Return True when a Globus/API exception represents HTTP 403."""
+    return (
+        getattr(exc, "http_status", None) == 403
+        or getattr(exc, "status_code", None) == 403
+        or (
+            isinstance(getattr(exc, "response", None), dict)
+            and exc.response.get("status_code") == 403
+        )
     )
-    if not access_token:
-        print("ERROR: access_token is None")
-        sys.exit(1)
-
-    authorizer = globus_sdk.AccessTokenAuthorizer(access_token)
-    return globus_sdk.SearchClient(authorizer=authorizer)
 
 
 def fetch_all_datasets(search_client, limit=None):
@@ -168,13 +157,23 @@ def fetch_all_datasets(search_client, limit=None):
 
         print(f"  Fetching offset={offset}, limit={fetch_limit} ...", end=" ", flush=True)
 
-        result = search_client.search(
-            MDF_PRODUCTION_INDEX,
-            query,
-            limit=fetch_limit,
-            offset=offset,
-            advanced=True,
-        )
+        try:
+            result = search_client.search(
+                MDF_PRODUCTION_INDEX,
+                query,
+                limit=fetch_limit,
+                offset=offset,
+                advanced=True,
+            )
+        except Exception as exc:
+            if _is_forbidden(exc):
+                print(
+                    "\nERROR: Legacy Search returned 403. Grant this Globus "
+                    "confidential client read permission on legacy index {}."
+                    .format(MDF_PRODUCTION_INDEX),
+                    file=sys.stderr,
+                )
+            raise
         data = result.data if hasattr(result, "data") else result
 
         if total is None:
@@ -267,6 +266,11 @@ def main():
         help="Immediately write the candidate watermark to --since-file after "
              "a successful extract (legacy behavior; default: do not advance).",
     )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Require GLOBUS_CLIENT_ID and GLOBUS_CLIENT_SECRET; never prompt.",
+    )
     args = parser.parse_args()
 
     if args.advance_watermark and not args.since_file:
@@ -290,7 +294,11 @@ def main():
         print(f"Delta sync: keeping datasets with ingest_date >= {since_dt.isoformat()}\n")
 
     print("Authenticating with Globus...")
-    search_client = authenticate()
+    try:
+        search_client = authenticate(interactive_ok=not args.non_interactive)
+    except RuntimeError as exc:
+        print("ERROR: {}".format(exc), file=sys.stderr)
+        sys.exit(1)
     print("Authenticated.\n")
 
     print("Fetching datasets...")

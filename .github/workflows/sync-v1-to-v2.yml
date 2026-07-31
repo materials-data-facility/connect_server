@@ -1,0 +1,67 @@
+# Required secrets: AWS_SYNC_ROLE_ARN, GLOBUS_CLIENT_ID, GLOBUS_CLIENT_SECRET.
+# The AWS role needs ssm:GetParameter/PutParameter/DeleteParameter on
+# /mdf/*/sync-*, cloudformation:DescribeStacks/DescribeStackResources plus
+# lambda:GetFunctionConfiguration for ingest environment resolution, and
+# DynamoDB read/write access to the submissions table. The Globus confidential
+# client needs read permission on the legacy index and an ingest role on the v2
+# index.
+name: Sync MDF v1 to v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target v2 environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+        default: staging
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GLOBUS_CLIENT_ID: ${{ secrets.GLOBUS_CLIENT_ID }}
+      GLOBUS_CLIENT_SECRET: ${{ secrets.GLOBUS_CLIENT_SECRET }}
+      # CUTOVER: SCHEDULED RUNS USE STAGING. FLIP THIS FALLBACK TO PROD AT CUTOVER.
+      SYNC_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r aws/requirements.txt boto3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_SYNC_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Run delta synchronization
+        run: |
+          python aws/v2/scripts/sync_prod_to_v2.py \
+            --env "$SYNC_ENV" \
+            --run-source github-actions
+
+      - name: Gate on live legacy parity
+        run: |
+          python aws/v2/scripts/reconcile_migration.py \
+            --env "$SYNC_ENV" \
+            --legacy-check \
+            --json

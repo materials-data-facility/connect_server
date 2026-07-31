@@ -177,6 +177,15 @@ Parameters:
     Type: String
     Default: ""
     Description: "Optional public HTTPS base URL (CloudFront) for the embeddings snapshot bucket. Leave blank to skip public URLs."
+  GitHubSyncToken:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: "GitHub token with actions:write on GitHubSyncRepo, used by POST /admin/sync to dispatch the v1->v2 sync workflow. Leave blank to disable the trigger (endpoint returns 501)."
+  GitHubSyncRepo:
+    Type: String
+    Default: ""
+    Description: "owner/repo hosting the sync workflow, e.g. 'materials-data-facility/connect_server'. Leave blank to disable the POST /admin/sync trigger."
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
@@ -262,6 +271,8 @@ Resources:
           EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
           EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
           EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
+          GITHUB_SYNC_TOKEN: !Ref GitHubSyncToken
+          GITHUB_SYNC_REPO: !Ref GitHubSyncRepo
       Events:
         CatchAll:
           Type: HttpApi
@@ -294,6 +305,13 @@ Resources:
             Action:
               - ses:SendEmail
             Resource: "*"
+        # Read-only view of the v1->v2 sync state for /admin/stats and
+        # /admin/sync. The GitHub Actions runner is the only writer.
+        - Statement:
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mdf/${Environment}/sync-*"
 
   AsyncWorkerFunction:
     Type: AWS::Serverless::Function
