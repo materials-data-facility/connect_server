@@ -28,7 +28,7 @@ disable_rollback = false
 [dev]
 [dev.deploy.parameters]
 stack_name = "mdf-connect-v2-dev"
-s3_bucket = "mdf-sam-deployments-dev"
+s3_bucket = "mdf-sam-deployments-dev-557062710055"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
@@ -44,7 +44,7 @@ tags = "Project=mdf-connect Environment=dev Team=MDF"
 [staging]
 [staging.deploy.parameters]
 stack_name = "mdf-connect-v2-staging"
-s3_bucket = "mdf-sam-deployments-staging"
+s3_bucket = "mdf-sam-deployments-staging-557062710055"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
@@ -60,7 +60,14 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 #   ApiCustomDomainCertArn="arn:aws:acm:us-east-1:<account>:certificate/<uuid>"
 #   AlarmEmail="mdf-ops@uchicago.edu"
 # Then point DNS at the ApiCustomDomainRegionalDomainName stack output.
-parameter_overrides = 'Environment=staging AuthMode=production AllowAllCurators=true DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
+# UseMockDatacite=true until the DataCite TEST repository credentials are
+# stored in SSM (/mdf/staging/datacite-username|password) — the previous
+# staging deploy only ever carried the "not-configured" placeholder, so no
+# real test-DOI behavior is being given up. Flip back to false once stored.
+# ApiReservedConcurrency must be EXPLICIT here: changing a template default
+# does nothing on stack updates (CloudFormation keeps the previous value for
+# any parameter not listed in the overrides).
+parameter_overrides = 'Environment=staging AuthMode=production AllowAllCurators=true ApiReservedConcurrency=50 AsyncWorkerBatchWindowSeconds=0 DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=true SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================
@@ -70,7 +77,7 @@ tags = "Project=mdf-connect Environment=staging Team=MDF"
 [prod]
 [prod.deploy.parameters]
 stack_name = "mdf-connect-v2-prod"
-s3_bucket = "mdf-sam-deployments-prod"
+s3_bucket = "mdf-sam-deployments-prod-557062710055"
 s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"

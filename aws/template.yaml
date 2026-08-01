@@ -81,9 +81,9 @@ Parameters:
     Description: "Async worker Lambda memory size in MB."
   ApiReservedConcurrency:
     Type: Number
-    Default: 10
+    Default: 50
     MinValue: 1
-    Description: "Reserved concurrency cap for API Lambda to control runaway spend."
+    Description: "Reserved concurrency cap for API Lambda to control runaway spend. A single signed-in detail-page load bursts ~5 concurrent calls; 10 was low enough that one save + refetch could throttle real traffic."
   AsyncWorkerReservedConcurrency:
     Type: Number
     Default: 3
@@ -97,10 +97,10 @@ Parameters:
     Description: "SQS batch size for async worker event source."
   AsyncWorkerBatchWindowSeconds:
     Type: Number
-    Default: 5
+    Default: 0
     MinValue: 0
     MaxValue: 300
-    Description: "SQS maximum batching window to reduce Lambda invoke count."
+    Description: "SQS maximum batching window to reduce Lambda invoke count. 0 = invoke immediately; at MDF's event volume (O(1000) publishes/year) batching only adds user-visible publish latency."
   AsyncQueueMessageRetentionSeconds:
     Type: Number
     Default: 345600
@@ -244,7 +244,7 @@ Resources:
             - !If [IsDevAuth, "local", "globus"]
             - !Ref StorageBackend
           GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
-          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
           S3_PREFIX: "streams/"
           GLOBUS_CLIENT_ID: !Ref GlobusClientId
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
@@ -282,7 +282,7 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
           EMBEDDING_DIMS: !Ref EmbeddingDims
-          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
           EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
           EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
           GITHUB_SYNC_TOKEN: !Ref GitHubSyncToken
@@ -306,9 +306,9 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-stream-files-${Environment}"
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-embeddings-${Environment}"
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
         - Statement:
             Effect: Allow
             Action:
@@ -349,7 +349,7 @@ Resources:
             - !If [IsDevAuth, "local", "globus"]
             - !Ref StorageBackend
           GLOBUS_BASE_PATH: !If [IsDevAuth, "/tmp/testing", !Sub "/tmp/${Environment}"]
-          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}"]
+          S3_BUCKET: !If [IsDevAuth, "", !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"]
           S3_PREFIX: "streams/"
           GLOBUS_CLIENT_ID: !Ref GlobusClientId
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
@@ -380,7 +380,7 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
           EMBEDDING_DIMS: !Ref EmbeddingDims
-          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}"
+          EMBEDDING_SNAPSHOT_BUCKET: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
           EMBEDDING_SNAPSHOT_PREFIX: "embeddings/v1/"
           EMBEDDING_SNAPSHOT_PUBLIC_URL: !Ref EmbeddingSnapshotPublicUrl
       Events:
@@ -404,9 +404,9 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref StreamsTable
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-stream-files-${Environment}"
+            BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
         - S3CrudPolicy:
-            BucketName: !Sub "mdf-embeddings-${Environment}"
+            BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
         - SQSPollerPolicy:
             QueueName: !GetAtt AsyncJobsQueue.QueueName
         - Statement:
@@ -427,12 +427,18 @@ Resources:
       DefaultRouteSettings:
         ThrottlingRateLimit: !Ref HttpApiThrottleRate
         ThrottlingBurstLimit: !Ref HttpApiThrottleBurst
+      # Literals only: SAM's transform mangles intrinsics (!If) inside
+      # CorsConfiguration into an invalid x-amazon-apigateway-cors body that
+      # API Gateway silently ignores — the deployed API ends up with NO
+      # gateway CORS at all. Gateway-level CORS matters twice over: it answers
+      # preflights at the edge (they stop consuming Lambda concurrency), and
+      # it puts CORS headers on gateway-generated errors (throttles/timeouts),
+      # which otherwise surface in browsers as an unreadable network error
+      # ("TypeError: Load failed"). Auth is Bearer-token (no cookies), so
+      # wildcard origins without credentials is safe in every environment.
       CorsConfiguration:
-        AllowOrigins: !If
-          - IsProd
-          - - "https://materialsdatafacility.org"
-            - "https://app.materialsdatafacility.org"
-          - - "*"
+        AllowOrigins:
+          - "*"
         AllowMethods:
           - GET
           - POST
@@ -446,7 +452,7 @@ Resources:
           - X-Globus-Token
           - X-MDF-Token
           - X-Groups-Token
-        AllowCredentials: !If [IsProd, true, false]
+        MaxAge: 600
 
   # ===========================================================================
   # Custom domain (optional, additive)
@@ -497,7 +503,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "mdf-stream-files-${Environment}"
+      BucketName: !Sub "mdf-stream-files-${Environment}-${AWS::AccountId}"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -517,7 +523,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "mdf-embeddings-${Environment}"
+      BucketName: !Sub "mdf-embeddings-${Environment}-${AWS::AccountId}"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:

@@ -260,7 +260,12 @@ PY
 # ---------------------------------------------------------------------------
 deploy_dev() {
     local stack_name="mdf-connect-v2-dev"
-    local s3_bucket="mdf-sam-deployments-dev"
+    # Bucket names are global across ALL AWS accounts; the bare name is owned
+    # by another account, so ours are suffixed with the account id (must match
+    # s3_bucket in samconfig.toml).
+    local account
+    account=$(aws sts get-caller-identity --query Account --output text)
+    local s3_bucket="mdf-sam-deployments-dev-$account"
 
     echo ""
     info "═══════════════════════════════════════════════════"
@@ -402,7 +407,9 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
         warn "DataCite SSM parameters not found — relying on mock/default DataCite behavior"
     fi
 
-    ensure_s3_bucket "mdf-sam-deployments-$env"
+    # Account-suffixed: the bare name is owned by another AWS account (bucket
+    # names are global). Must match s3_bucket in samconfig.toml.
+    ensure_s3_bucket "mdf-sam-deployments-$env-$(aws sts get-caller-identity --query Account --output text)"
     build
 
     local all_params="$base_params GlobusClientId=$globus_id GlobusClientSecret=$globus_secret"
@@ -469,7 +476,8 @@ teardown() {
     [[ -z "$env" ]] && error "Environment required: ./deploy.sh teardown dev"
 
     local stack_name="mdf-connect-v2-$env"
-    local s3_bucket="mdf-sam-deployments-$env"
+    local s3_bucket
+    s3_bucket="mdf-sam-deployments-$env-$(aws sts get-caller-identity --query Account --output text)"
 
     echo ""
     warn "═══════════════════════════════════════════════════"
