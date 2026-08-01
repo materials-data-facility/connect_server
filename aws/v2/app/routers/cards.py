@@ -10,6 +10,7 @@ from v2.app.models import AuthContext
 from v2.citation import generate_apa, generate_bibtex, generate_datacite_xml, generate_ris
 from v2.dataset_card import build_dataset_card
 from v2.store import SubmissionStore
+from v2.submission_utils import latest_version
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +41,41 @@ def _resolve_published(
     if can_view_dataset(auth, record):
         return record, record.get("source_id", source_id)
 
+    # "Latest" means the newest version the CALLER may see. The absolute
+    # newest row is not viewable whenever a version is mid-publish (status
+    # "approved" for the seconds-to-minutes the queue takes) or an update is
+    # pending curation — an in-flight version must never 404 the whole
+    # dataset for everyone else. Fall back to the newest viewable version:
+    # owners get their in-flight version, anonymous callers get the newest
+    # published one.
+    if version is None and record is not None:
+        fallback = _newest_visible(store, source_id, auth)
+        if fallback is not None:
+            return fallback, fallback.get("source_id", source_id)
+
     legacy = store.get_by_legacy_source_id(source_id)
     if can_view_dataset(auth, legacy):
         return legacy, legacy.get("source_id")
 
     return None, None
+
+
+def _newest_visible(
+    store: SubmissionStore,
+    source_id: str,
+    auth: Optional[AuthContext],
+) -> Optional[Dict[str, Any]]:
+    """The newest version of a dataset that the caller is allowed to view."""
+    viewable = [
+        r for r in store.list_versions(source_id) if can_view_dataset(auth, r)
+    ]
+    if not viewable:
+        return None
+    target = latest_version(viewable)
+    for r in viewable:
+        if r.get("version") == target:
+            return r
+    return None
 
 
 def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> Dict[str, bool]:

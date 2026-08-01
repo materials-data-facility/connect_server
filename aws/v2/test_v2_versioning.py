@@ -515,6 +515,193 @@ class TestVersioningCurationLogic:
         assert result["dataset_doi"] == "10.99999/test-ds"
         assert result["doi"] != result["dataset_doi"]
 
+    def _mint_with_shared_mock(self, monkeypatch, mint_doi):
+        """Run a subsequent-version mint against one inspectable mock client.
+
+        The dataset DOI starts registered against a version-pinned landing URL
+        (how every v1-migrated DOI arrives); the publish must repoint it at the
+        unversioned detail page so the DOI resolves to the latest version.
+        """
+        import v2.datacite as datacite
+        from v2.curation import _mint_doi_for_submission
+
+        mock = datacite.MockDataCiteClient()
+        mock._dois["10.99999/test-ds"] = {
+            "doi": "10.99999/test-ds",
+            "url": "https://materialsdatafacility.org/detail/test-ds-1.0",
+        }
+        monkeypatch.setattr(datacite, "get_datacite_client", lambda **kw: mock)
+
+        prior_versions = [
+            {"version": "1.0", "status": "published", "doi": "10.99999/test-ds", "dataset_doi": "10.99999/test-ds"},
+        ]
+        submission = {
+            "source_id": "test-ds",
+            "version": "1.1",
+            "dataset_mdata": json.dumps({
+                "title": "Updated Dataset",
+                "authors": [{"name": "Author"}],
+                "data_sources": [],
+            }),
+        }
+        result = _mint_doi_for_submission(
+            submission, all_versions=prior_versions, mint_doi=mint_doi
+        )
+        assert result["success"]
+        return mock
+
+    def test_metadata_edit_repoints_dataset_doi_to_latest(self, env, monkeypatch):
+        """mint_doi=False publish repoints the concept DOI's landing URL."""
+        mock = self._mint_with_shared_mock(monkeypatch, mint_doi=False)
+        assert (
+            mock._dois["10.99999/test-ds"]["url"]
+            == "https://materialsdatafacility.org/detail/test-ds"
+        )
+
+    def test_version_mint_repoints_dataset_doi_to_latest(self, env, monkeypatch):
+        """mint_doi=True publish also repoints the concept DOI's landing URL."""
+        mock = self._mint_with_shared_mock(monkeypatch, mint_doi=True)
+        assert (
+            mock._dois["10.99999/test-ds"]["url"]
+            == "https://materialsdatafacility.org/detail/test-ds"
+        )
+
+
+class TestCardDatasetDOIFallback:
+    """The card serves the concept DOI when a version has no per-version DOI."""
+
+    def test_card_doi_falls_back_to_dataset_doi(self, env):
+        from v2.dataset_card import build_dataset_card as build_card
+
+        record = {
+            "source_id": "test-ds",
+            "version": "1.1",
+            "status": "published",
+            "dataset_doi": "10.99999/test-ds",
+            "dataset_mdata": json.dumps({
+                "title": "Edited Dataset",
+                "authors": [{"name": "Author"}],
+                "data_sources": [],
+            }),
+        }
+        card = build_card(record)
+        assert card["doi"] == "10.99999/test-ds"
+        assert card["dataset_doi"] == "10.99999/test-ds"
+        assert card["links"]["doi"] == "https://doi.org/10.99999/test-ds"
+
+    def test_card_prefers_version_doi(self, env):
+        from v2.dataset_card import build_dataset_card as build_card
+
+        record = {
+            "source_id": "test-ds",
+            "version": "1.2",
+            "status": "published",
+            "doi": "10.99999/test-ds-v1.2",
+            "dataset_doi": "10.99999/test-ds",
+            "dataset_mdata": json.dumps({
+                "title": "Dataset",
+                "authors": [{"name": "Author"}],
+                "data_sources": [],
+            }),
+        }
+        card = build_card(record)
+        assert card["doi"] == "10.99999/test-ds-v1.2"
+        assert card["dataset_doi"] == "10.99999/test-ds"
+
+    def test_card_serves_full_author_objects(self, env):
+        """Cards keep affiliations/ORCID/name parts — the edit form loads
+        authors from the card and replaces the array wholesale on save."""
+        from v2.dataset_card import build_dataset_card as build_card
+
+        record = {
+            "source_id": "test-ds",
+            "version": "1.0",
+            "status": "published",
+            "dataset_mdata": json.dumps({
+                "title": "Dataset",
+                "authors": [
+                    {
+                        "name": "Jane Scientist",
+                        "given_name": "Jane",
+                        "family_name": "Scientist",
+                        "orcid": "0000-0001-2345-6789",
+                        "affiliations": ["University of Chicago"],
+                    },
+                    {"name": "Plain Name"},
+                ],
+                "data_sources": [],
+            }),
+        }
+        card = build_card(record)
+        assert card["authors"][0] == {
+            "name": "Jane Scientist",
+            "given_name": "Jane",
+            "family_name": "Scientist",
+            "orcid": "0000-0001-2345-6789",
+            "affiliations": ["University of Chicago"],
+        }
+        # Empty optional fields are dropped, name always present
+        assert card["authors"][1] == {"name": "Plain Name"}
+
+
+class TestNewestVisibleResolution:
+    """An in-flight version must never 404 the whole dataset.
+
+    While a new version is mid-publish (status "approved" for as long as the
+    SQS publish job takes) or pending curation, the absolute-newest row is
+    not anonymously viewable. GET /card without a version must fall back to
+    the newest version the caller may see instead of returning 404.
+    """
+
+    def _publish_v10_with_pending_update(self, client):
+        result = _submit(client)
+        source_id = result["source_id"]
+        _approve(client, source_id, mint_doi=True)
+        # A data update goes through curation: the new latest version sits in
+        # pending_curation until approved — exactly like the mid-publish
+        # window, the newest row is not anonymously viewable.
+        r2 = _submit(client, extra={
+            "title": "In-flight update",
+            "update": True,
+            "extensions": {"mdf_source_id": source_id},
+        })
+        return source_id, r2["version"]
+
+    def test_anonymous_gets_newest_published_version(self, env):
+        client = TestClient(app)
+        source_id, pending_version = self._publish_v10_with_pending_update(client)
+
+        # No auth headers: anonymous view during the in-flight window.
+        resp = client.get(f"/card/{source_id}")
+        assert resp.status_code == 200, resp.json()
+        card = resp.json()["card"]
+        assert card["version"] == "1.0"
+        assert card["status"] == "published"
+        assert card["version"] != pending_version
+
+    def test_owner_also_gets_newest_published_version(self, env):
+        """Cards serve only published content, owner or not (can_view_dataset
+        is deliberately status-gated). The guarantee here is that the owner's
+        refresh during the publish window gets the previous version with a
+        200 — never a 404. The owner sees their in-flight content via the
+        card returned by the save response, not via a card refetch."""
+        client = TestClient(app)
+        source_id, pending_version = self._publish_v10_with_pending_update(client)
+
+        resp = client.get(f"/card/{source_id}", headers=HEADERS)
+        assert resp.status_code == 200, resp.json()
+        card = resp.json()["card"]
+        assert card["version"] == "1.0"
+        assert card["status"] == "published"
+
+    def test_explicit_version_requests_are_not_widened(self, env):
+        """Asking for the pending version explicitly still respects visibility."""
+        client = TestClient(app)
+        source_id, pending_version = self._publish_v10_with_pending_update(client)
+
+        resp = client.get(f"/card/{source_id}", params={"version": pending_version})
+        assert resp.status_code == 404
+
 
 class TestMajorMinorVersioning:
     """Major/minor version detection: new data → major bump, metadata-only → minor bump."""

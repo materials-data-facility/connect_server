@@ -46,7 +46,24 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
         "source_id": record.get("source_id"),
         "version": record.get("version"),
         "title": meta.title,
-        "authors": [a.name for a in meta.authors],
+        # Full author objects, not just names: the metadata edit form loads
+        # authors from the card and the backend replaces the array wholesale
+        # on save — serving names only made every edit strip affiliations,
+        # ORCIDs and given/family names from the record.
+        "authors": [
+            {
+                key: value
+                for key, value in {
+                    "name": a.name,
+                    "given_name": a.given_name,
+                    "family_name": a.family_name,
+                    "orcid": a.orcid,
+                    "affiliations": a.affiliations,
+                }.items()
+                if value
+            }
+            for a in meta.authors
+        ],
         "description": description,
         "keywords": meta.keywords,
         "publisher": meta.publisher,
@@ -105,11 +122,14 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
     if meta.license:
         card["license"] = meta.license.name
 
-    # DOI
-    doi = record.get("doi")
+    # DOI — versions created by a metadata edit carry only the inherited
+    # dataset (concept) DOI, never a per-version one.
+    doi = record.get("doi") or record.get("dataset_doi")
     if doi:
         card["doi"] = doi
         card["links"]["doi"] = f"https://doi.org/{doi}"
+    if record.get("dataset_doi"):
+        card["dataset_doi"] = record["dataset_doi"]
 
     # External provenance (cross-published datasets)
     if meta.external:

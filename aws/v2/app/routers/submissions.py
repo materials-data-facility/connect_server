@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from v2.async_jobs import dispatch_publish_job, enqueue_profile_job, enqueue_transfer_job
+from v2.dataset_card import build_dataset_card
 from v2.transfer import check_transfer_status, cleanup_transfer_acl
 from v2.app.auth import (
     ensure_submission_owner_or_curator,
@@ -343,6 +344,13 @@ async def edit_metadata(
 
     status = submission.get("status")
     if status not in ("pending_curation", "rejected", "published"):
+        if status == "approved":
+            # Approved = the publish job is still running (seconds). Say so
+            # instead of presenting a dead end.
+            raise HTTPException(
+                409,
+                "This version is still publishing — try again in a few seconds.",
+            )
         raise HTTPException(400, f"Cannot edit metadata when status is '{status}'")
 
     # Build updates from non-None payload fields (excluding version)
@@ -427,6 +435,11 @@ async def edit_metadata(
         # POST /curation/{source_id}/approve on the new version.
         published = _publish_via_job(store, source_id, new_version, mint_doi=False)
 
+        # Hand the caller the finished card so it never has to race a refetch
+        # against replication: the record is in hand right here. Built from a
+        # consistent re-read because the publish job just stamped status/DOI
+        # onto the row.
+        fresh = store.get_submission(source_id, new_version) or new_record
         return {
             "success": True,
             "source_id": source_id,
@@ -435,6 +448,7 @@ async def edit_metadata(
             "status": published["status"],
             "publish_job": published["publish_job"],
             "updated_fields": list(updates.keys()),
+            "card": build_dataset_card(fresh),
         }
 
     # pending_curation or rejected: update in-place
@@ -448,6 +462,7 @@ async def edit_metadata(
         "source_id": source_id,
         "version": version,
         "updated_fields": list(updates.keys()),
+        "card": build_dataset_card(submission),
     }
 
 

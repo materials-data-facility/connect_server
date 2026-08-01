@@ -177,7 +177,10 @@ def _mint_doi_for_submission(
             )
 
             # Also update the dataset DOI metadata to reflect latest version
-            # and add HasVersion pointing to the new version DOI
+            # and add HasVersion pointing to the new version DOI. Repointing
+            # the landing URL to the unversioned detail page keeps the concept
+            # DOI resolving to the latest version — including DOIs migrated
+            # from v1, whose registered URLs pin a specific version.
             if result.get("success"):
                 version_doi = result["doi"]
                 has_version = [
@@ -190,6 +193,7 @@ def _mint_doi_for_submission(
                 client.update_metadata(
                     doi=dataset_doi,
                     metadata=doi_metadata,
+                    url=f"https://materialsdatafacility.org/detail/{source_id}",
                     related_identifiers=has_version,
                 )
                 result["dataset_doi"] = dataset_doi
@@ -197,10 +201,14 @@ def _mint_doi_for_submission(
             client.close()
             return result
         else:
-            # No new DOI — just update the dataset DOI metadata on DataCite
+            # No new DOI — update the dataset DOI metadata on DataCite and
+            # repoint its landing URL at the unversioned detail page so the
+            # concept DOI resolves to the latest version (v1-era DOIs are
+            # registered against version-pinned URLs).
             update_result = client.update_metadata(
                 doi=dataset_doi,
                 metadata=doi_metadata,
+                url=f"https://materialsdatafacility.org/detail/{source_id}",
             )
             client.close()
             return {

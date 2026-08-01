@@ -1,12 +1,62 @@
+import hashlib
 import logging
 import os
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Depends, Header, HTTPException, Request
 
 from v2.app.models import AuthContext
 
 logger = logging.getLogger(__name__)
+
+# Validated-token cache. Every authenticated request otherwise costs two
+# Globus Auth round-trips (userinfo + dependent-token exchange), and a single
+# signed-in detail-page load fires ~5 authenticated requests — enough
+# sustained traffic to hit Globus Auth rate limits and hold Lambda
+# concurrency slots for seconds per request. Entries are keyed by token hash
+# (never the raw token) and expire after AUTH_CACHE_TTL_SECONDS; a revoked
+# token therefore stays usable for at most the TTL, which matches common
+# introspection-cache practice.
+AUTH_CACHE_TTL_SECONDS = int(os.environ.get("AUTH_CACHE_TTL_SECONDS", "300"))
+_AUTH_CACHE_MAX_ENTRIES = 256
+_auth_cache: Dict[str, Tuple[float, AuthContext]] = {}
+
+# The dependent-token grant fails deterministically when the Globus client
+# isn't configured for it (UNAUTHORIZED_CLIENT). Without this flag every
+# request re-attempts the doomed exchange — one guaranteed-400 Globus Auth
+# call per request. Set once per container, cleared only on cold start.
+_dependent_grant_unsupported = False
+
+
+def _token_cache_key(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _auth_cache_get(token: str) -> Optional[AuthContext]:
+    entry = _auth_cache.get(_token_cache_key(token))
+    if not entry:
+        return None
+    expires_at, ctx = entry
+    if time.monotonic() >= expires_at:
+        _auth_cache.pop(_token_cache_key(token), None)
+        return None
+    return ctx
+
+
+def _auth_cache_put(token: str, ctx: AuthContext) -> None:
+    if AUTH_CACHE_TTL_SECONDS <= 0:
+        return
+    if len(_auth_cache) >= _AUTH_CACHE_MAX_ENTRIES:
+        # Drop the soonest-to-expire entries rather than clearing everything.
+        for key in sorted(_auth_cache, key=lambda k: _auth_cache[k][0])[
+            : _AUTH_CACHE_MAX_ENTRIES // 4
+        ]:
+            _auth_cache.pop(key, None)
+    _auth_cache[_token_cache_key(token)] = (
+        time.monotonic() + AUTH_CACHE_TTL_SECONDS,
+        ctx,
+    )
 
 
 def _env_truthy(name: str) -> bool:
@@ -56,6 +106,10 @@ async def get_auth(
     if not token:
         raise HTTPException(status_code=401, detail="Missing Bearer token")
 
+    cached = _auth_cache_get(token)
+    if cached is not None:
+        return cached
+
     try:
         import globus_sdk
 
@@ -87,13 +141,31 @@ async def get_auth(
         dependent_token = {}
         groups_token = x_groups_token  # Direct token from CLI
 
-        # Fallback: dependent token exchange
-        if not groups_token and client_id and client_secret:
+        # Fallback: dependent token exchange. Skipped for the container's
+        # lifetime once Globus reports the client isn't configured for the
+        # grant — that failure is deterministic, and retrying it per request
+        # adds a guaranteed-400 Globus Auth call to every authed request.
+        global _dependent_grant_unsupported
+        if (
+            not groups_token
+            and client_id
+            and client_secret
+            and not _dependent_grant_unsupported
+        ):
             exchange_token = x_mdf_token or token
             try:
                 conf_client = globus_sdk.ConfidentialAppAuthClient(client_id, client_secret)
                 dependent_token = conf_client.oauth2_get_dependent_tokens(exchange_token).by_resource_server
                 groups_token = dependent_token.get("groups.api.globus.org", {}).get("access_token")
+            except globus_sdk.AuthAPIError as exc:
+                if getattr(exc, "code", "") == "UNAUTHORIZED_CLIENT":
+                    _dependent_grant_unsupported = True
+                    logger.warning(
+                        "Globus client not configured for dependent-token grant; "
+                        "disabling groups exchange for this container"
+                    )
+                else:
+                    logger.warning("Failed dependent token exchange for groups", exc_info=True)
             except Exception:
                 logger.warning("Failed dependent token exchange for groups", exc_info=True)
 
@@ -110,7 +182,7 @@ async def get_auth(
             except Exception:
                 logger.warning("Failed to fetch group memberships", exc_info=True)
 
-        return AuthContext(
+        ctx = AuthContext(
             user_id=user_id,
             name=userinfo.get("name"),
             user_email=userinfo.get("email"),
@@ -118,6 +190,8 @@ async def get_auth(
             group_info=group_info,
             dependent_token=dependent_token,
         )
+        _auth_cache_put(token, ctx)
+        return ctx
     except HTTPException:
         raise
     except Exception as e:

@@ -109,7 +109,16 @@ class DynamoSubmissionStore(SubmissionStore):
         self._key = Key
 
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
-        resp = self.table.get_item(Key={"source_id": source_id, "version": version})
+        # ConsistentRead on the base-table reads: a metadata edit reads its own
+        # write immediately (new version row -> card refetch), and the default
+        # eventually-consistent read can miss it for seconds, serving the OLD
+        # latest right after a successful save. Write volume is tiny (O(1000)
+        # edits/year), so the doubled read cost is irrelevant. GSI queries
+        # (user/org/status/legacy) cannot be consistent and stay as they are.
+        resp = self.table.get_item(
+            Key={"source_id": source_id, "version": version},
+            ConsistentRead=True,
+        )
         return resp.get("Item")
 
     def get_by_legacy_source_id(self, legacy_source_id: str) -> Optional[Dict[str, Any]]:
@@ -137,7 +146,11 @@ class DynamoSubmissionStore(SubmissionStore):
         return items[0] if items else None
 
     def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
-        resp = self.table.query(KeyConditionExpression=self._key("source_id").eq(source_id))
+        # ConsistentRead: this resolves "latest" for the card — see get_submission.
+        resp = self.table.query(
+            KeyConditionExpression=self._key("source_id").eq(source_id),
+            ConsistentRead=True,
+        )
         return resp.get("Items", [])
 
     def put_submission(self, record: Dict[str, Any]) -> None:

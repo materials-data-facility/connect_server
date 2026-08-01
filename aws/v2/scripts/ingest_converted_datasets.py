@@ -90,6 +90,9 @@ _PRESERVED_SYSTEM_FIELDS = {
     "created_at",
     "published_at",
     "status",
+    # Ownership can be granted manually after migration (v1 records carry no
+    # submitter identity); a later sync update must not revert it.
+    "user_id",
     "view_count",
     "download_count",
     "action_id",

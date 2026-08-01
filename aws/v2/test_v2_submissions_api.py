@@ -130,6 +130,8 @@ class TestMetadataEdit:
         assert "title" in data["updated_fields"]
         assert "keywords" in data["updated_fields"]
         assert "new_version" not in data
+        # In-place edits also return the updated card
+        assert data["card"]["title"] == "Updated Title"
 
         # Verify the metadata was actually updated
         sub = _status(client, source_id)
@@ -177,6 +179,14 @@ class TestMetadataEdit:
         data = resp.json()
         assert data["success"]
         assert data["new_version"] == "1.1"
+
+        # The response carries the finished card so clients never race a
+        # refetch against replication: it must already describe the NEW
+        # version with the edited fields and published status.
+        card = data["card"]
+        assert card["version"] == "1.1"
+        assert card["title"] == "Published Edit"
+        assert card["status"] == "published"
 
         # Verify v1.1 exists and is published
         v11 = _status(client, source_id, version="1.1")
