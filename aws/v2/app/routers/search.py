@@ -27,6 +27,19 @@ FILTER_FIELD_MAP = {
     "domain": "mdf.domains",
 }
 
+# Filter params whose values may be comma-separated inside a single occurrence.
+#
+# Multi-select is expressed by REPEATING a param (?keyword=a&keyword=b), which is
+# delimiter-safe. Comma splitting is kept only as backward compatibility for the
+# params whose facet values provably never contain a comma. Measured against the
+# production index (935 datasets): dc.year, mdf.organization, dc.subjects and
+# mdf.domains have zero comma-bearing facet values, while 476 of 500
+# dc.creators.name values contain one, because authors are indexed as
+# "Family, Given" ("Blaiszik, Ben"). Comma-splitting an author therefore shredded
+# one name into two non-matching terms, which is why the Authors filter selected
+# nothing. Author values are always taken verbatim.
+COMMA_SPLIT_PARAMS = frozenset({"year", "organization", "keyword", "domain"})
+
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
     value = os.environ.get(name)
@@ -41,15 +54,47 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 
 MAX_SEARCH_RESULTS = _env_int("SEARCH_MAX_RESULTS", 50)
 
+# Result orderings the API accepts. Ranking strategies are named here and
+# resolved to a concrete backend ordering in v2.search.resolve_sort, so a new
+# ranking (e.g. a real most-viewed index) is a change in one place.
+SORT_RELEVANCE = "relevance"
+SORT_NEWEST = "newest"
+SORT_MOST_VIEWED = "most_viewed"
+
+# What an empty query browses by. Relevance is meaningless with no query terms,
+# so landing on /search without one shows the most recently published datasets.
+DEFAULT_BROWSE_SORT = SORT_NEWEST
+
+
+def _resolve_sort(sort: Optional[str], has_query: bool) -> str:
+    """Pick the effective sort for a request.
+
+    Unknown values fall back rather than erroring: sort is a display preference,
+    not something worth failing a search over.
+    """
+    requested = (sort or "").strip().lower()
+    if requested not in (SORT_RELEVANCE, SORT_NEWEST, SORT_MOST_VIEWED):
+        requested = SORT_RELEVANCE if has_query else DEFAULT_BROWSE_SORT
+    # Relevance needs query terms to rank against; without them every entry ties
+    # and the order is arbitrary, so browse mode always uses the browse ordering.
+    if requested == SORT_RELEVANCE and not has_query:
+        return DEFAULT_BROWSE_SORT
+    return requested
+
 
 def _parse_filters(
-    year: Optional[str],
-    organization: Optional[str],
-    author: Optional[str],
-    keyword: Optional[str],
-    domain: Optional[str],
+    year: Optional[List[str]],
+    organization: Optional[List[str]],
+    author: Optional[List[str]],
+    keyword: Optional[List[str]],
+    domain: Optional[List[str]],
 ) -> Optional[Dict[str, List[str]]]:
-    """Parse comma-separated filter query params into a filters dict."""
+    """Parse repeated filter query params into a filters dict.
+
+    Multi-select uses repeated params (``?author=A&author=B``). Params in
+    COMMA_SPLIT_PARAMS additionally split each occurrence on commas for
+    backward compatibility; see that constant for why author does not.
+    """
     raw = {
         "year": year,
         "organization": organization,
@@ -57,12 +102,21 @@ def _parse_filters(
         "keyword": keyword,
         "domain": domain,
     }
-    filters = {}
-    for param, value in raw.items():
-        if value:
-            values = [v.strip() for v in value.split(",") if v.strip()]
-            if values:
-                filters[FILTER_FIELD_MAP[param]] = values
+    filters: Dict[str, List[str]] = {}
+    for param, occurrences in raw.items():
+        if not occurrences:
+            continue
+        values: List[str] = []
+        for occurrence in occurrences:
+            if occurrence is None:
+                continue
+            parts = occurrence.split(",") if param in COMMA_SPLIT_PARAMS else [occurrence]
+            for part in parts:
+                part = part.strip()
+                if part and part not in values:
+                    values.append(part)
+        if values:
+            filters[FILTER_FIELD_MAP[param]] = values
     return filters or None
 
 
@@ -73,16 +127,25 @@ async def search_endpoint(
     type: Optional[str] = Query("all"),
     limit: Optional[int] = Query(20),
     offset: Optional[int] = Query(0),
-    year: Optional[str] = Query(None),
-    organization: Optional[str] = Query(None),
-    author: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
-    domain: Optional[str] = Query(None),
+    sort: Optional[str] = Query(
+        None, description="relevance | newest | most_viewed. Defaults to newest when no query."
+    ),
+    year: Optional[List[str]] = Query(None),
+    organization: Optional[List[str]] = Query(None),
+    author: Optional[List[str]] = Query(None),
+    keyword: Optional[List[str]] = Query(None),
+    domain: Optional[List[str]] = Query(None),
     auth: Optional[AuthContext] = Depends(get_optional_auth),
 ):
-    search_query = q or query
-    if not search_query:
-        raise HTTPException(400, "query (q) is required")
+    """Keyword search, and browse when no query is given.
+
+    ``q`` is optional. Landing on /search without one is a browse request: it
+    returns the newest published datasets in the same response shape as a
+    keyword search, so the client renders both identically.
+    """
+    search_query = (q or query or "").strip()
+    has_query = bool(search_query)
+    sort_val = _resolve_sort(sort, has_query)
 
     search_type = type or "all"
     include_datasets = search_type in ("all", "datasets", "dataset")
@@ -109,6 +172,7 @@ async def search_endpoint(
         limit=limit_val,
         offset=offset_val,
         filters=filters,
+        sort=sort_val,
         auth=auth,
     )
 

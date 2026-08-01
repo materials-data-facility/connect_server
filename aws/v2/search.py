@@ -43,6 +43,50 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 SEARCH_MAX_DATASET_SCAN = _env_int("SEARCH_MAX_DATASET_SCAN", 1000)
 SEARCH_MAX_STREAM_SCAN = _env_int("SEARCH_MAX_STREAM_SCAN", 2000)
 
+# Globus Search's "match every entry" query. Used for browse requests, where the
+# caller supplied no query terms and just wants the newest datasets.
+BROWSE_QUERY = "*"
+
+# --- Result ranking ---------------------------------------------------------
+#
+# One place defines every ordering the API can serve. A strategy says how Globus
+# Search should sort (None = leave the engine's own relevance scoring alone) and
+# the DynamoDB fallback mirrors it via _record_recency, so both paths agree on
+# what "newest" means. Adding a ranking is a new entry here plus its backing
+# field — the router, search_all and the clients need no changes.
+_RECENCY_SORT = [{"field_name": "mdf.ingest_date", "order": "desc"}]
+
+SORT_STRATEGIES: Dict[str, Optional[List[Dict[str, str]]]] = {
+    "relevance": None,
+    "newest": _RECENCY_SORT,
+    # Seam for most-viewed. Per-dataset view counts already exist in the store
+    # (submissions.view_count), but they are not mirrored into the search index,
+    # so there is no field to sort on there yet. Falling back to recency keeps
+    # the option selectable and honest instead of returning an arbitrary order.
+    # To implement: write the counter into the GMeta entry, then point this
+    # entry at [{"field_name": "mdf.view_count", "order": "desc"}].
+    "most_viewed": _RECENCY_SORT,
+}
+
+DEFAULT_SORT = "relevance"
+
+
+def resolve_sort(sort: Optional[str]) -> Optional[List[Dict[str, str]]]:
+    """Translate an API sort name into a Globus Search sort clause."""
+    return SORT_STRATEGIES.get(sort or DEFAULT_SORT, SORT_STRATEGIES[DEFAULT_SORT])
+
+
+def _record_recency(record: Dict[str, Any]) -> str:
+    """Recency key for a stored submission, mirroring mdf.ingest_date.
+
+    ISO-8601 timestamps sort correctly as strings. Missing timestamps sort last.
+    """
+    for field in ("published_at", "created_at", "updated_at"):
+        value = record.get(field)
+        if value:
+            return str(value)
+    return ""
+
 
 def _is_searchable_dataset(record: Dict[str, Any]) -> bool:
     """Only published datasets are eligible for public search fallback."""
@@ -190,7 +234,7 @@ def _format_dataset_result(record: Dict[str, Any], score: float) -> Dict[str, An
         "publication_year": meta.publication_year,
         "organization": record.get("organization"),
         "domains": meta.domains,
-        "doi": record.get("doi"),
+        "doi": record.get("doi") or record.get("dataset_doi"),
         "license": meta.license.identifier or meta.license.name if meta.license else None,
         "size_bytes": record.get("total_bytes"),
         "file_count": record.get("file_count"),
@@ -218,18 +262,28 @@ def search_datasets(
     limit: int = 20,
     offset: int = 0,
     filters: Optional[Dict[str, list]] = None,
+    sort: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search across all datasets, returning results and facets.
+
+    An empty ``query`` is a browse request: every published dataset matches and
+    the ordering comes entirely from ``sort``.
 
     Tries Globus Search faceted_search first. Falls back to local DynamoDB
     scan if Globus Search is not configured or the query fails. The fallback
     only returns published datasets and does not support facets.
     """
+    browsing = not (query or "").strip()
+    engine_query = BROWSE_QUERY if browsing else query
+
     # Try Globus Search first (faceted)
     try:
         from v2.search_client import get_search_client
         client = get_search_client()
-        result = client.faceted_search(query, limit=limit, offset=offset, filters=filters)
+        result = client.faceted_search(
+            engine_query, limit=limit, offset=offset, filters=filters,
+            sort=resolve_sort(sort),
+        )
         if result.get("success"):
             # For mock clients (no data ingested), fall through to DynamoDB
             # so dev/test can search SQLite records. For real Globus Search,
@@ -258,12 +312,19 @@ def search_datasets(
         # fallback must not surface non-public datasets either.
         if not _is_public_dataset(record):
             continue
+        if browsing:
+            # No query terms to score against — every published dataset matches.
+            results.append((0.0, record))
+            continue
         text = _extract_searchable_text(record)
         score = _simple_match(text, query)
         if score > 0:
             results.append((score, record))
 
-    results.sort(key=lambda x: x[0], reverse=True)
+    if browsing or resolve_sort(sort) is _RECENCY_SORT:
+        results.sort(key=lambda x: _record_recency(x[1]), reverse=True)
+    else:
+        results.sort(key=lambda x: x[0], reverse=True)
     total = len(results)
     page = results[offset:offset + limit]
 
@@ -648,24 +709,35 @@ def search_all(
     limit: int = 20,
     offset: int = 0,
     filters: Optional[Dict[str, list]] = None,
+    sort: Optional[str] = None,
     auth: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Search across datasets and streams, with faceted results."""
+    """Search across datasets and streams, with faceted results.
+
+    An empty ``query`` browses: it returns every published dataset ordered by
+    ``sort`` (newest first by default) in the same shape as a keyword search.
+    """
     results = []
     facets: Dict[str, Any] = {}
     total = 0
+    browsing = not (query or "").strip()
 
     if include_datasets:
-        ds = search_datasets(query, limit=limit, offset=offset, filters=filters)
+        ds = search_datasets(query, limit=limit, offset=offset, filters=filters, sort=sort)
         results.extend(ds["results"])
         facets = ds.get("facets", {})
         total += ds.get("total", 0)
 
-    if include_streams:
+    if include_streams and not browsing:
+        # Browse has no query terms for _simple_match to score streams against,
+        # and streams are owner/curator-only, so browsing stays datasets-only.
         streams = search_streams(query, limit=limit, auth=auth)
         results.extend(streams)
 
-    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    if not browsing and resolve_sort(sort) is None:
+        # Relevance: re-rank the merged dataset+stream list by score. Any other
+        # strategy already came back ordered, so re-sorting would undo it.
+        results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     return {
         "query": query,

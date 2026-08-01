@@ -272,11 +272,20 @@ class GlobusSearchClient:
 
     def faceted_search(
         self, query: str, limit: int = 20, offset: int = 0, filters: Optional[Dict[str, List]] = None,
+        sort: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Search with facets and optional filters.
 
         filters: dict mapping facet field_name → list of selected values
                  e.g. {"mdf.organization": ["MDF Open"], "dc.year": [2024, 2025]}
+        sort:    Globus Search sort clause, e.g.
+                 [{"field_name": "mdf.ingest_date", "order": "desc"}].
+                 None leaves the engine's own relevance ordering in place.
+
+        Filter values must be the *whole* facet value. These fields are indexed
+        as exact keywords — verified against the production index, where a
+        match_any on "Blaiszik, Ben" returns 20 datasets while "Blaiszik" alone
+        returns 0 — so callers must never pre-split a value on punctuation.
         """
         from globus_sdk import SearchQuery
 
@@ -289,6 +298,9 @@ class GlobusSearchClient:
         if filters:
             for field_name, values in filters.items():
                 sq.add_filter(field_name, values, type="match_any")
+
+        if sort:
+            sq["sort"] = sort
 
         sq["limit"] = limit
         sq["offset"] = offset
@@ -385,36 +397,47 @@ class MockGlobusSearchClient:
                 matches.append(entry)
 
         paginated = matches[offset:offset + limit]
-        results = []
-        for entry in paginated:
-            content = entry.get("content", {})
-            dc = content.get("dc", {})
-            mdf = content.get("mdf", {})
-            data_block = content.get("data", {})
-            description = dc.get("description", "") or ""
-            results.append({
-                "type": "dataset",
-                "source_id": mdf.get("source_id"),
-                "title": dc.get("title"),
-                "authors": [c.get("name", "") for c in dc.get("creators", [])],
-                "keywords": dc.get("subjects", []),
-                "description": description[:300] if len(description) > 300 else description,
-                "publication_year": dc.get("year"),
-                "organization": mdf.get("organization"),
-                "domains": mdf.get("domains") or [],
-                "doi": dc.get("doi") or mdf.get("dataset_doi"),
-                "license": dc.get("license") or None,
-                "size_bytes": data_block.get("size_bytes"),
-                "file_count": data_block.get("file_count"),
-                "score": 1.0,
-            })
+        results = [self._format_entry(entry) for entry in paginated]
 
         return {"success": True, "total": len(matches), "results": results, "mock": True}
 
+    @staticmethod
+    def _format_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Format a stored entry the way the real client formats a Globus hit.
+
+        Shared by search() and faceted_search() so the mock cannot drift into
+        returning a shape the real backend never produces.
+        """
+        content = entry.get("content", {})
+        dc = content.get("dc", {})
+        mdf = content.get("mdf", {})
+        data_block = content.get("data", {})
+        description = dc.get("description", "") or ""
+        return {
+            "type": "dataset",
+            "source_id": mdf.get("source_id"),
+            "version": mdf.get("version"),
+            "title": dc.get("title"),
+            "authors": [c.get("name", "") for c in dc.get("creators", [])],
+            "keywords": dc.get("subjects", []),
+            "description": description[:300] if len(description) > 300 else description,
+            "publication_year": dc.get("year"),
+            "organization": mdf.get("organization"),
+            "domains": mdf.get("domains") or [],
+            "doi": dc.get("doi") or mdf.get("dataset_doi"),
+            "license": dc.get("license") or None,
+            "size_bytes": data_block.get("size_bytes"),
+            "file_count": data_block.get("file_count"),
+            "status": "published",
+            "score": 1.0,
+            "latest": mdf.get("latest", True),
+        }
+
     def faceted_search(
         self, query: str, limit: int = 20, offset: int = 0, filters: Optional[Dict[str, List]] = None,
+        sort: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Faceted search over in-memory entries with filter support."""
+        """Faceted search over in-memory entries with filter and sort support."""
         query_lower = query.lower()
         matches = []
         for subject, entry in self._entries.items():
@@ -430,17 +453,10 @@ class MockGlobusSearchClient:
                     continue
                 matches.append(entry)
 
+        matches = self._apply_sort(matches, sort)
+
         paginated = matches[offset:offset + limit]
-        results = []
-        for entry in paginated:
-            content = entry.get("content", {})
-            results.append({
-                "type": "dataset",
-                "source_id": content.get("mdf", {}).get("source_id"),
-                "title": content.get("dc", {}).get("title"),
-                "authors": [c.get("name", "") for c in content.get("dc", {}).get("creators", [])],
-                "score": 1.0,
-            })
+        results = [self._format_entry(entry) for entry in paginated]
 
         return {
             "success": True,
@@ -450,8 +466,38 @@ class MockGlobusSearchClient:
             "mock": True,
         }
 
+    @staticmethod
+    def _apply_sort(
+        entries: List[Dict[str, Any]], sort: Optional[List[Dict[str, str]]],
+    ) -> List[Dict[str, Any]]:
+        """Order entries by a Globus-style sort clause (dotted field paths)."""
+        if not sort:
+            return entries
+        ordered = list(entries)
+        # Applied last-key-first so the first clause wins, matching a stable
+        # multi-key sort.
+        for clause in reversed(sort):
+            field = clause.get("field_name") or ""
+            descending = clause.get("order", "asc") == "desc"
+
+            def key(entry: Dict[str, Any], field=field) -> str:
+                value: Any = entry.get("content", {})
+                for part in field.split("."):
+                    if not isinstance(value, dict):
+                        return ""
+                    value = value.get(part)
+                return "" if value is None else str(value)
+
+            ordered.sort(key=key, reverse=descending)
+        return ordered
+
     def _matches_filters(self, content: Dict[str, Any], filters: Dict[str, List]) -> bool:
-        """Check if a content entry matches all active filters."""
+        """Check if a content entry matches all active filters.
+
+        Values compare as whole strings, never tokenized. This mirrors the real
+        index: these fields are keyword-mapped, so a match_any on the full
+        "Blaiszik, Ben" matches and the bare token "Blaiszik" does not.
+        """
         field_map = {
             "dc.year": lambda c: [c.get("dc", {}).get("year")],
             "mdf.organization": lambda c: [c.get("mdf", {}).get("organization")],

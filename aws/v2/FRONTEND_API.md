@@ -90,24 +90,44 @@ GET /health
 ### Search
 
 ```
-GET /search?q={query}&limit={20}&offset={0}&type={all|datasets}
+GET /search?q={query}&limit={20}&offset={0}&type={all|datasets}&sort={relevance}
 ```
 
 No auth required. Returns published datasets only. Supports faceted filtering.
+
+`q` is **optional**. Omitting it is a *browse* request: the newest published
+datasets, in exactly the same response shape as a keyword search (with
+`"query": ""`), so a client renders both identically.
 
 **Query params:**
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `q` (or `query`) | string | Search query (required) |
+| `q` (or `query`) | string | Search query. Omit to browse the newest datasets. |
 | `limit` | int | Page size (default 20, max 50) |
 | `offset` | int | Pagination offset (default 0) |
 | `type` | string | `all`, `datasets`, or `streams` (default `all`) |
-| `year` | string | Filter by publication year, comma-separated (e.g. `2024,2025`) |
-| `organization` | string | Filter by organization, comma-separated (e.g. `MDF Open`) |
-| `author` | string | Filter by author name, comma-separated (e.g. `Wolverton`) |
-| `keyword` | string | Filter by keyword/subject, comma-separated (e.g. `perovskite,DFT`) |
-| `domain` | string | Filter by scientific domain, comma-separated (e.g. `batteries`) |
+| `sort` | string | `relevance` (default), `newest`, or `most_viewed`. Without a `q` this is always `newest` — relevance has nothing to rank. `most_viewed` currently falls back to `newest`. |
+| `year` | string | Filter by publication year (e.g. `2024`) |
+| `organization` | string | Filter by organization (e.g. `MDF Open`) |
+| `author` | string | Filter by author name (e.g. `Blaiszik, Ben`) |
+| `keyword` | string | Filter by keyword/subject (e.g. `perovskite`) |
+| `domain` | string | Filter by scientific domain (e.g. `batteries`) |
+
+**Multi-select filters — repeat the param:**
+
+```
+GET /search?author=Blaiszik%2C%20Ben&author=Ward%2C%20Logan
+```
+
+Filter values must be a **whole facet value** as returned in `facets`; these
+fields are indexed as exact keywords, so a fragment matches nothing.
+
+`year`, `organization`, `keyword` and `domain` additionally accept a legacy
+comma-separated single occurrence (`?keyword=perovskite,DFT`) — no value of
+those fields contains a comma. **`author` never splits on commas**: authors are
+indexed `"Family, Given"` (`Blaiszik, Ben`, `Hersam, Mark C.`), so the comma is
+part of the name. Use repeated `author` params to select several.
 
 **Response:**
 ```json
