@@ -93,6 +93,16 @@ class StreamSnapshotRequest(BaseModel):
     test: Optional[bool] = False
 
 
+class ExternalSourceEdit(BaseModel):
+    """Partial update for an existing external-source provenance object."""
+
+    source: Optional[str] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    identifier: Optional[str] = None
+    doi_relation: Optional[str] = None
+
+
 class MetadataEditRequest(BaseModel):
     title: Optional[str] = None
     authors: Optional[List[dict]] = None
@@ -109,6 +119,11 @@ class MetadataEditRequest(BaseModel):
     geo_locations: Optional[List[dict]] = None
     tags: Optional[List[str]] = None
     extensions: Optional[Dict[str, Any]] = None
+    external: Optional[ExternalSourceEdit] = None
+    download_url: Optional[str] = None
+    data_sources: Optional[List[str]] = None
+    publisher: Optional[str] = None
+    publication_year: Optional[int] = None
     version: Optional[str] = None
 
 

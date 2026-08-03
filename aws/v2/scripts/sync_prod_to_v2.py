@@ -361,11 +361,16 @@ def run(args):
                 "convert_production_datasets.py",
                 ["--input", str(extract_file), "--output", str(converted_file)],
             )
-            if result.returncode:
+            if result.returncode not in (0, 3):
                 raise RuntimeError(
                     "convert failed ({}): {}".format(
                         result.returncode, result.stderr or result.stdout
                     )
+                )
+            if result.returncode == 3:
+                print(
+                    "  WARNING: conversion completed partially; valid records "
+                    "will be ingested and the watermark will remain blocked."
                 )
 
             ingest_args = [

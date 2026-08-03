@@ -38,9 +38,9 @@ runs, errors, or conflicts.
 
 Exit codes:
   0 = clean success, or any valid --dry-run preview
-  1 = conversion, validation, store, Search, or watermark-write error
+  1 = validation, store, Search, or watermark-write error
   2 = invalid command-line invocation (argparse)
-  3 = otherwise clean run stalled only on dataset conflicts
+  3 = partial conversion or otherwise clean run stalled on dataset conflicts
 """
 
 import argparse
@@ -48,6 +48,9 @@ import copy
 import hashlib
 import json
 import os
+import random
+import re
+import socket
 import sys
 import tempfile
 import time
@@ -112,8 +115,11 @@ _VOLATILE_HASH_METADATA_FIELDS = {
     # These are computed relative to the converter's current batch. They are
     # not v1 source content, and may differ between full and delta conversion.
     "latest",
+    "previous_version",
     "root_version",
 }
+
+MAX_SEARCH_ATTEMPTS = 3
 
 
 def resolve_env_from_stack(env: str) -> Dict[str, str]:
@@ -194,8 +200,8 @@ def compute_sync_content_hash(converted: Dict[str, Any]) -> str:
     """Return the canonical SHA-256 content identity for a converted record.
 
     The hash covers every top-level converted-record field and every metadata
-    field except ``metadata.latest`` and ``metadata.root_version``. Those two
-    fields are converter batch-relative, so excluding them makes full and
+    field except converter batch-relative chain fields: ``latest``,
+    ``previous_version``, and ``root_version``. Excluding them makes full and
     delta conversions of the same v1 source content hash identically.
     """
     hash_input = copy.deepcopy(converted)
@@ -351,6 +357,7 @@ def _dataset_v2_touch_reasons(
 def _merge_migration_update(
     existing: Dict[str, Any],
     submission: Dict[str, Any],
+    merge_warnings: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Replace migration-owned content while preserving v2 system state."""
     merged = dict(existing)
@@ -358,6 +365,45 @@ def _merge_migration_update(
     for field in _PRESERVED_SYSTEM_FIELDS:
         if field in existing and existing[field] is not None:
             merged[field] = existing[field]
+    existing_metadata = existing.get("dataset_mdata") or {}
+    incoming_metadata = submission.get("dataset_mdata") or {}
+    metadata_parse_failed = False
+    for label, value in (
+        ("stored", existing_metadata),
+        ("incoming", incoming_metadata),
+    ):
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            metadata_parse_failed = True
+            if merge_warnings is not None:
+                merge_warnings.append(
+                    {
+                        "source_id": str(submission.get("source_id") or ""),
+                        "error": "could not parse {} dataset_mdata; skipped "
+                        "chain preservation: {}".format(label, exc),
+                    }
+                )
+            break
+        if label == "stored":
+            existing_metadata = parsed
+        else:
+            incoming_metadata = parsed
+    if (
+        not metadata_parse_failed
+        and isinstance(existing_metadata, dict)
+        and isinstance(incoming_metadata, dict)
+    ):
+        for field in ("previous_version", "root_version"):
+            incoming_value = incoming_metadata.get(field)
+            existing_value = existing_metadata.get(field)
+            if incoming_value in (None, "", [], {}) and existing_value not in (
+                None, "", [], {}
+            ):
+                incoming_metadata[field] = existing_value
+        merged["dataset_mdata"] = json.dumps(incoming_metadata)
     # An updated v1 payload invalidates embeddings derived from the old title
     # and description. Do not set metadata_updated_at: that field marks v2
     # user edits and would turn the migration's own update into a conflict.
@@ -370,13 +416,170 @@ def _merge_migration_update(
     return merged
 
 
+def _metadata_dict(value: Any) -> Optional[Dict[str, Any]]:
+    """Return dataset metadata as a dict without raising on legacy rows."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _chain_fields_need_repair(
+    existing: Dict[str, Any], submission: Dict[str, Any]
+) -> bool:
+    """Return whether meaningful incoming chain fields differ in storage."""
+    incoming = _metadata_dict(submission.get("dataset_mdata"))
+    if incoming is None:
+        return False
+    stored = _metadata_dict(existing.get("dataset_mdata"))
+    for field in ("previous_version", "root_version"):
+        incoming_value = incoming.get(field)
+        if incoming_value not in (None, "", [], {}) and (
+            stored is None or stored.get(field) != incoming_value
+        ):
+            return True
+    return False
+
+
+def _http_status(exc: Exception) -> Optional[int]:
+    """Return an HTTP status carried by a common SDK exception shape."""
+    for attr in ("http_status", "status_code"):
+        status = getattr(exc, attr, None)
+        if status is not None:
+            try:
+                return int(status)
+            except (TypeError, ValueError):
+                pass
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        status = response.get("status_code") or response.get("status")
+    else:
+        status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    status = _http_status(exc)
+    if status is not None:
+        return 500 <= status <= 599
+    if isinstance(exc, (TimeoutError, ConnectionError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, (TimeoutError, ConnectionError, socket.timeout))
+
+
+def _transient_error_text(value: Any) -> bool:
+    """Recognize transport/5xx failures returned as batch error strings."""
+    text = str(value or "").lower()
+    status_match = re.search(
+        r"\b(?:http|status)\D{0,5}(\d{3})\b", text, re.IGNORECASE
+    )
+    if status_match:
+        return 500 <= int(status_match.group(1)) <= 599
+    return any(
+        marker in text
+        for marker in (
+            "timed out", "timeout", "connection reset", "connection refused",
+            "connection aborted", "connection error", "broken pipe",
+            "network unreachable",
+        )
+    )
+
+
+def _batch_result_is_transient_failure(result: Dict[str, Any]) -> bool:
+    errors = result.get("errors") or []
+    if not errors or int(result.get("ingested") or 0) != 0:
+        return False
+    messages = [
+        error.get("error") if isinstance(error, dict) else error
+        for error in errors
+    ]
+    return bool(messages) and all(_transient_error_text(msg) for msg in messages)
+
+
+def _batch_ingest_with_retry(
+    search: Any, submissions: List[Dict[str, Any]], attempts: int = MAX_SEARCH_ATTEMPTS
+) -> Dict[str, Any]:
+    """Retry one Search batch on transport/5xx failures, never on 4xx."""
+    for attempt in range(1, attempts + 1):
+        try:
+            result = search.batch_ingest(
+                submissions, batch_size=SEARCH_BATCH_SIZE
+            )
+        except Exception as exc:
+            if attempt == attempts or not _is_transient_error(exc):
+                raise
+            result = None
+            detail = str(exc)
+        else:
+            if not _batch_result_is_transient_failure(result) or attempt == attempts:
+                return result
+            detail = "; ".join(
+                str(error.get("error") if isinstance(error, dict) else error)
+                for error in result.get("errors") or []
+            )
+        delay = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+        print(
+            "  Search batch failed transiently (attempt {}/{}): {}; "
+            "retrying in {:.2f}s".format(attempt, attempts, detail, delay),
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _stamp_search_sync(
+    store: Any, source_id: str, version: str, sync_hash: Optional[str]
+) -> None:
+    """Atomically stamp only Search sync fields without replacing the row."""
+    synced_at = _utc_now()
+    table = getattr(store, "table", None)
+    if table is not None:
+        table.update_item(
+            Key={"source_id": source_id, "version": version},
+            UpdateExpression=(
+                "SET search_synced_hash = :sync_hash, "
+                "last_synced_at = :synced_at"
+            ),
+            ExpressionAttributeValues={
+                ":sync_hash": sync_hash,
+                ":synced_at": synced_at,
+            },
+            ConditionExpression=(
+                "attribute_exists(source_id) AND attribute_exists(version)"
+            ),
+        )
+        return
+    conn = getattr(store, "conn", None)
+    if conn is not None:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE submissions SET search_synced_hash = ?, "
+                "last_synced_at = ? WHERE source_id = ? AND version = ?",
+                (sync_hash, synced_at, source_id, version),
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError("record disappeared before Search sync stamp")
+        return
+    raise TypeError("store backend does not support targeted Search sync stamps")
+
+
 def _prepare_migration_write(
     submission: Dict[str, Any],
     existing: Optional[Dict[str, Any]] = None,
+    merge_warnings: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Prepare one atomic store write for a create or migration update."""
     prepared = (
-        _merge_migration_update(existing, submission)
+        _merge_migration_update(existing, submission, merge_warnings)
         if existing is not None
         else dict(submission)
     )
@@ -560,6 +763,7 @@ def ingest_records(
         "conflicts": 0,
         "conflict_records": [],
         "store_errors": [],
+        "metadata_merge_warnings": [],
         "search_ingested": 0,
         "search_errors": [],
         "would_search_ingest": 0,
@@ -634,12 +838,15 @@ def ingest_records(
                 elif (
                     existing.get("sync_content_hash")
                     == submission["sync_content_hash"]
+                    and not _chain_fields_need_repair(existing, submission)
                 ):
                     prepared = existing
                     stats["unchanged"] += 1
                 else:
                     prepared = _prepare_migration_write(
-                        submission, existing=existing
+                        submission,
+                        existing=existing,
+                        merge_warnings=stats["metadata_merge_warnings"],
                     )
                     stats["updated"] += 1
 
@@ -699,9 +906,9 @@ def ingest_records(
             batch = search_submissions[
                 batch_start:batch_start + SEARCH_BATCH_SIZE
             ]
-            result = search.batch_ingest(
+            result = _batch_ingest_with_retry(
+                search,
                 [submission for _, submission in batch],
-                batch_size=SEARCH_BATCH_SIZE,
             )
             stats["search_ingested"] += int(result.get("ingested") or 0)
             batch_errors = result.get("errors") or []
@@ -733,18 +940,12 @@ def ingest_records(
                 continue
             for source_id, submission in accepted:
                 try:
-                    stored = store.get_submission(
-                        source_id, str(submission["version"])
+                    _stamp_search_sync(
+                        store,
+                        source_id,
+                        str(submission["version"]),
+                        submission.get("sync_content_hash"),
                     )
-                    if not stored:
-                        raise RuntimeError(
-                            "record disappeared before Search sync stamp"
-                        )
-                    stored["search_synced_hash"] = stored.get(
-                        "sync_content_hash"
-                    )
-                    stored["last_synced_at"] = _utc_now()
-                    store.upsert_submission(stored)
                 except Exception as exc:
                     stats["store_errors"].append(
                         {
@@ -975,6 +1176,12 @@ def main():
         if stats["store_errors"]:
             for e in stats["store_errors"][:3]:
                 print(f"    {e['source_id']}: {e['error'][:100]}")
+        print(
+            f"  Metadata merge warnings: "
+            f"{len(stats['metadata_merge_warnings'])}"
+        )
+        for warning in stats["metadata_merge_warnings"][:3]:
+            print(f"    {warning['source_id']}: {warning['error'][:100]}")
 
     if args.dry_run:
         print(
@@ -1020,8 +1227,7 @@ def main():
 
     # Exit with error code if any failures
     has_errors = (
-        conversion_errors
-        or stats["validation_errors"]
+        stats["validation_errors"]
         or stats.get("store_errors")
         or stats.get("search_errors")
     )
@@ -1031,7 +1237,10 @@ def main():
     # edits would make the delta bridge skip them permanently.
     if args.watermark_file:
         blocked_reasons = _watermark_blocked_reasons(
-            args, candidate_watermark, stats, bool(has_errors)
+            args,
+            candidate_watermark,
+            stats,
+            bool(has_errors or conversion_errors),
         )
 
         if blocked_reasons:
@@ -1075,7 +1284,7 @@ def main():
     exit_code = _result_exit_code(
         dry_run=args.dry_run,
         has_errors=bool(has_errors),
-        conflicts=stats["conflicts"],
+        conflicts=stats["conflicts"] + len(conversion_errors),
     )
     if exit_code:
         sys.exit(exit_code)

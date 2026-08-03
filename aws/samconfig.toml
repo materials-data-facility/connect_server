@@ -96,5 +96,7 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 # ApiCustomDomainRegionalDomainName / ApiCustomDomainRegionalHostedZoneId outputs
 # (see README "Custom domain"). Alarms: set AlarmEmail to a monitored inbox, e.g.
 #   AlarmEmail="mdf-ops@uchicago.edu"
-parameter_overrides = 'Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
+# Production has no test index. The API rejects test submissions while this
+# sentinel is configured, preventing them from targeting staging or a mock.
+parameter_overrides = 'Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=not-configured ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 tags = "Project=mdf-connect Environment=prod Team=MDF"

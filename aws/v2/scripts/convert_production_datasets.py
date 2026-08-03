@@ -320,6 +320,12 @@ def main():
             json.dump(redirect_map, f, indent=2)
         print(f"Redirect map: {len(redirect_map)} entries saved to {args.redirect_map}")
 
+    if errors:
+        # The output above is still a valid partial conversion and can be
+        # ingested safely. Exit 1 remains reserved for failures that prevent
+        # an output artifact from being produced at all.
+        sys.exit(3)
+
 
 if __name__ == "__main__":
     main()

@@ -100,12 +100,47 @@ def _reject(client, source_id, reason="needs work", version=None):
     return resp.json()
 
 
-def _status(client, source_id, version=None):
+def _status(client, source_id, version=None, headers=None):
     url = f"/status/{source_id}"
     params = {"version": version} if version else {}
-    resp = client.get(url, params=params)
+    resp = client.get(url, params=params, headers=headers)
     assert resp.status_code == 200
     return resp.json().get("submission", {})
+
+
+@pytest.mark.parametrize("test_index_id", [None, "not-configured"])
+def test_submit_rejects_test_mode_without_configured_index(
+    env, monkeypatch, test_index_id,
+):
+    if test_index_id is None:
+        monkeypatch.delenv("TEST_SEARCH_INDEX_UUID", raising=False)
+    else:
+        monkeypatch.setenv("TEST_SEARCH_INDEX_UUID", test_index_id)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/submit",
+        headers=HEADERS,
+        json={**BASE_SUBMISSION, "test": True},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Test submissions are not supported in this environment"
+
+
+def test_curation_landing_host_matches_search_subject_for_default_portal(monkeypatch):
+    from urllib.parse import urlparse
+
+    from v2.curation import _portal_url
+    from v2.search_client import _detail_base
+
+    monkeypatch.setenv("PORTAL_URL", "https://www.materialsdatafacility.org")
+    monkeypatch.delenv("SEARCH_SUBJECT_BASE", raising=False)
+
+    landing_url = f"{_portal_url()}/example-source"
+    search_subject = f"{_detail_base()}/example-source"
+    assert urlparse(landing_url).netloc == urlparse(search_subject).netloc
+    assert landing_url == search_subject
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +148,230 @@ def _status(client, source_id, version=None):
 # ---------------------------------------------------------------------------
 
 class TestMetadataEdit:
+    NEW_EDITABLE_FIELDS = [
+        pytest.param(
+            "external",
+            {
+                "source": "Zenodo",
+                "doi": "10.5281/zenodo.12345",
+                "url": "https://zenodo.org/records/12345",
+                "identifier": "12345",
+                "doi_relation": "IsVariantFormOf",
+            },
+            id="external",
+        ),
+        pytest.param(
+            "download_url",
+            "https://example.com/download/archive.zip",
+            id="download_url",
+        ),
+        pytest.param(
+            "data_sources",
+            ["https://example.com/migrated-data.csv"],
+            id="data_sources",
+        ),
+        pytest.param("publisher", "Example Research Institute", id="publisher"),
+        pytest.param("publication_year", 2024, id="publication_year"),
+    ]
+
+    @pytest.mark.parametrize("field,value", NEW_EDITABLE_FIELDS)
+    def test_edit_new_field_pending_curation(self, env, field, value):
+        """Migrated-record fields can be corrected in place before curation."""
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={field: value},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["updated_fields"] == [field]
+        record = _status(client, source_id, version="1.0")
+        assert record["status"] == "pending_curation"
+        assert record["dataset_mdata"][field] == value
+
+    @pytest.mark.parametrize("field,value", NEW_EDITABLE_FIELDS)
+    def test_edit_new_field_published_creates_minor_bump(self, env, field, value):
+        """Migrated-record corrections on published data create version 1.1."""
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=False)
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={field: value, "version": "1.0"},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["new_version"] == "1.1"
+        record = _status(client, source_id, version="1.1")
+        assert record["status"] == "published"
+        assert record["dataset_mdata"][field] == value
+
+    def test_edit_rejects_invalid_publication_year(self, env):
+        """The extended edit schema rejects publication years that are not integers."""
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"publication_year": "not-a-year"},
+        )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"][0]["loc"][-1] == "publication_year"
+
+    def test_edit_data_sources_rejects_count_over_limit(self, env, monkeypatch):
+        from v2.app.routers import submissions
+
+        monkeypatch.setattr(submissions, "MAX_SUBMIT_DATA_SOURCES", 1)
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"data_sources": ["https://example.com/a", "https://example.com/b"]},
+        )
+
+        assert resp.status_code == 413
+        assert "Too many data_sources" in resp.json()["detail"]
+
+    def test_edit_data_sources_rejects_invalid_uri(self, env):
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"data_sources": ["globus://not-a-uuid/path"]},
+        )
+
+        assert resp.status_code == 400
+        assert "Invalid data_sources" in resp.json()["detail"]
+
+    def test_edit_data_sources_rejects_oversized_merged_metadata(self, env, monkeypatch):
+        from v2.app.routers import submissions
+
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        monkeypatch.setattr(submissions, "MAX_SUBMIT_METADATA_BYTES", 100)
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"data_sources": ["https://example.com/replacement.csv"]},
+        )
+
+        assert resp.status_code == 413
+        assert "metadata exceeds" in resp.json()["detail"]
+
+    def test_partial_external_edit_preserves_existing_fields(self, env):
+        client = TestClient(app)
+        source_id = _submit(client, extra={
+            "external": {
+                "source": "Zenodo",
+                "doi": "10.5281/zenodo.old",
+                "doi_relation": "IsIdenticalTo",
+            },
+        })["source_id"]
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"external": {"doi": "10.5281/zenodo.new"}},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        external = _status(client, source_id, version="1.0")["dataset_mdata"]["external"]
+        assert external == {
+            "source": "Zenodo",
+            "doi": "10.5281/zenodo.new",
+            "url": None,
+            "identifier": None,
+            "doi_relation": "IsIdenticalTo",
+        }
+
+    def test_owner_data_location_edit_on_published_requires_curation(
+        self, env, strict_curators, monkeypatch,
+    ):
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        approved = client.post(
+            f"/curation/{source_id}/approve",
+            headers=CURATOR_HEADERS,
+            json={"mint_doi": False},
+        )
+        assert approved.status_code == 200, approved.json()
+
+        def unexpected_publish(*args, **kwargs):
+            raise AssertionError("owner-sensitive edit must not dispatch publication")
+
+        monkeypatch.setattr(
+            "v2.app.routers.submissions.dispatch_publish_job",
+            unexpected_publish,
+        )
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"data_sources": ["https://example.com/repointed.csv"]},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["status"] == "pending_curation"
+        assert "curator approval" in resp.json()["message"]
+        record = _status(client, source_id, version="1.1", headers=HEADERS)
+        assert record["status"] == "pending_curation"
+        assert not record.get("approved_by")
+
+    def test_curator_data_location_edit_on_published_auto_publishes(
+        self, env, strict_curators,
+    ):
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        approved = client.post(
+            f"/curation/{source_id}/approve",
+            headers=CURATOR_HEADERS,
+            json={"mint_doi": False},
+        )
+        assert approved.status_code == 200, approved.json()
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=CURATOR_HEADERS,
+            json={"data_sources": ["https://example.com/curator-repointed.csv"]},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["status"] == "published"
+        assert _status(client, source_id, version="1.1")["status"] == "published"
+
+    def test_owner_descriptive_edit_on_published_auto_publishes(
+        self, env, strict_curators,
+    ):
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        approved = client.post(
+            f"/curation/{source_id}/approve",
+            headers=CURATOR_HEADERS,
+            json={"mint_doi": False},
+        )
+        assert approved.status_code == 200, approved.json()
+
+        resp = client.post(
+            f"/submissions/{source_id}/metadata",
+            headers=HEADERS,
+            json={"title": "Owner descriptive correction"},
+        )
+
+        assert resp.status_code == 200, resp.json()
+        assert resp.json()["status"] == "published"
+        assert _status(client, source_id, version="1.1")["status"] == "published"
+
     def test_edit_pending_curation(self, env):
         """Edit metadata on a pending_curation submission (in-place)."""
         client = TestClient(app)

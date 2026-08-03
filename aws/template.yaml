@@ -201,7 +201,9 @@ Parameters:
 
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
+  IsDevEnvironment: !Equals [!Ref Environment, dev]
   IsDevAuth: !Equals [!Ref AuthMode, dev]
+  IsDevMode: !Or [!Condition IsDevAuth, !Condition IsDevEnvironment]
   UseAutoStorage: !Equals [!Ref StorageBackend, "auto"]
   UseAutoMockDatacite: !Equals [!Ref UseMockDatacite, "auto"]
   UseAutoAllowCurators: !Equals [!Ref AllowAllCurators, "auto"]
@@ -250,7 +252,7 @@ Resources:
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
           USE_MOCK_DATACITE: !If
             - UseAutoMockDatacite
-            - !If [IsDevAuth, "true", "false"]
+            - !If [IsDevMode, "true", "false"]
             - !Ref UseMockDatacite
           DATACITE_USERNAME: !Ref DataCiteUsername
           DATACITE_PASSWORD: !Ref DataCitePassword
@@ -258,7 +260,7 @@ Resources:
           DATACITE_PREFIX: !Ref DataCitePrefix
           SEARCH_INDEX_UUID: !Ref SearchIndexUUID
           TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
-          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          USE_MOCK_SEARCH: !If [IsDevMode, "true", "false"]
           ALLOW_ALL_CURATORS: !If
             - UseAutoAllowCurators
             - !If [IsDevAuth, "true", "false"]
@@ -355,7 +357,7 @@ Resources:
           GLOBUS_CLIENT_SECRET: !Ref GlobusClientSecret
           USE_MOCK_DATACITE: !If
             - UseAutoMockDatacite
-            - !If [IsDevAuth, "true", "false"]
+            - !If [IsDevMode, "true", "false"]
             - !Ref UseMockDatacite
           DATACITE_USERNAME: !Ref DataCiteUsername
           DATACITE_PASSWORD: !Ref DataCitePassword
@@ -363,7 +365,7 @@ Resources:
           DATACITE_PREFIX: !Ref DataCitePrefix
           SEARCH_INDEX_UUID: !Ref SearchIndexUUID
           TEST_SEARCH_INDEX_UUID: !Ref TestSearchIndexUUID
-          USE_MOCK_SEARCH: !If [IsDevAuth, "true", "false"]
+          USE_MOCK_SEARCH: !If [IsDevMode, "true", "false"]
           ALLOW_ALL_CURATORS: !If
             - UseAutoAllowCurators
             - !If [IsDevAuth, "true", "false"]

@@ -19,9 +19,10 @@ Usage:
     PYTHONPATH=. STORE_BACKEND=sqlite USE_MOCK_SEARCH=true \
         python v2/scripts/reconcile_migration.py --check-search --json
 
-Exit code is 1 for missing records, stale content, Search-pending latest
-datasets, or (with --check-search) missing Search subjects. Pre-hash records
-are reported as ``never_hashed`` warnings but do not fail reconciliation.
+Exit code is 1 for hard drift: missing records, stale content, Search-pending
+latest datasets, or (with --check-search) missing/extra Search subjects.
+Incomplete/erroring Search audits are warnings by default; --strict-search
+makes those inconclusive signals fail. Pre-hash records are warnings only.
 """
 
 import argparse
@@ -47,6 +48,89 @@ from ingest_converted_datasets import (  # noqa: E402
 from convert_production_datasets import convert_entry  # noqa: E402
 from extract_mdf_production_datasets import fetch_all_datasets  # noqa: E402
 from legacy_auth import get_legacy_search_client  # noqa: E402
+from purge_stale_search_entries import (  # noqa: E402
+    classify_entries,
+    enumerate_index,
+)
+
+
+def _reverse_search_report(store, search=None, search_scan_limit=0):
+    """Return Search subjects that have no corresponding store record."""
+    if search is None:
+        from v2.search_client import get_search_client
+
+        search = get_search_client()
+    if not hasattr(search, "_get_read_client"):
+        return {
+            "search_checked": False,
+            "search_scan_complete": None,
+            "search_scan_warnings": [
+                "Search client does not support a read scan; audit skipped"
+            ],
+        }
+    read_client = search._get_read_client()  # noqa: SLF001 — audit raw index
+    index_id = getattr(search, "index_id", None)
+    if not index_id:
+        raise RuntimeError("Search client has no index_id")
+    index_records = []
+    scan = None
+    first_warnings = []
+    first_error = None
+    for attempt in range(2):
+        try:
+            index_records, scan = enumerate_index(
+                read_client, index_id, limit=search_scan_limit
+            )
+        except Exception as exc:
+            if attempt == 0:
+                first_error = str(exc)
+                continue
+            raise
+        if scan.get("complete"):
+            break
+        if attempt == 0:
+            first_warnings = list(scan.get("warnings") or [])
+            continue
+        scan.setdefault("warnings", []).insert(
+            0, "Search scan remained incomplete after one retry"
+        )
+    if scan is None:  # pragma: no cover - second exception is raised above
+        raise RuntimeError(first_error or "Search scan failed")
+    if not first_error and not scan.get("complete") and first_warnings:
+        scan.setdefault("warnings", []).extend(first_warnings)
+    classified = classify_entries(index_records, store)
+    extras = classified["stale_superseded"] + classified["stale_orphan"]
+    extra_ids = sorted(
+        {
+            str(record.get("source_id") or record.get("subject") or "")
+            for record in extras
+            if record.get("source_id") or record.get("subject")
+        }
+    )
+    scan_complete = bool(scan.get("complete")) and not bool(
+        scan.get("limited")
+    )
+    scan_warnings = list(scan.get("warnings") or [])
+    if scan.get("limited"):
+        scan_warnings.append(
+            "Search scan was limited to {}; full-index parity is inconclusive"
+            .format(search_scan_limit)
+        )
+    report = {
+        "search_checked": True,
+        "extra_in_index_count": len(extra_ids),
+        "extra_in_index": extra_ids[:50],
+        "search_index_total": scan.get("index_total_before", 0),
+        "search_scan_complete": scan_complete,
+        "search_scan_warnings": scan_warnings,
+        "search_store_errors": classified.get("store_errors") or [],
+    }
+    if extra_ids:
+        report["extra_in_index_remedy"] = (
+            "run scripts/purge_stale_search_entries.py --execute; entries: {}"
+            .format(", ".join(extra_ids[:10]))
+        )
+    return report
 
 
 def _expected_version(converted):
@@ -63,18 +147,27 @@ def _has_authors(meta):
     return any((a or {}).get("name") for a in authors if isinstance(a, dict))
 
 
-def reconcile(records, *, check_search=False, show=10):
+def reconcile(
+    records, *, check_search=False, show=10, search_scan_limit=0
+):
     """Compare expected (converted) records against the v2 store/search."""
     from v2.store import get_store
 
     store = get_store()
     search = None
     search_subject = None
+    search_setup_warning = None
     if check_search:
         try:
             from v2.search_client import get_search_client
 
             search = get_search_client()
+            if not hasattr(search, "_get_read_client"):
+                search_setup_warning = (
+                    "Search client does not support reads; audit skipped"
+                )
+                search = None
+                raise AttributeError(search_setup_warning)
             read_client = search._get_read_client()  # noqa: SLF001 — exact-subject probe
             index_id = getattr(search, "index_id", None)
         except Exception as exc:  # pragma: no cover - depends on Globus creds
@@ -99,6 +192,15 @@ def reconcile(records, *, check_search=False, show=10):
         "in_search": 0,
         "missing_from_search": [],
         "search_checked": bool(search),
+        "extra_in_index_count": 0,
+        "extra_in_index": [],
+        "search_index_total": 0,
+        "search_scan_complete": None,
+        "search_scan_warnings": (
+            [search_setup_warning] if search_setup_warning else []
+        ),
+        "search_store_errors": [],
+        "search_check_error": None,
     }
 
     checked_search_pending = set()
@@ -190,6 +292,16 @@ def reconcile(records, *, check_search=False, show=10):
             except Exception:
                 report["missing_from_search"].append(f"{source_id}-{version}")
 
+    if search is not None:
+        try:
+            report.update(
+                _reverse_search_report(
+                    store, search, search_scan_limit=search_scan_limit
+                )
+            )
+        except Exception as exc:
+            report["search_check_error"] = str(exc)
+
     return report
 
 
@@ -224,7 +336,10 @@ def _legacy_expected(entry):
     }
 
 
-def reconcile_legacy(legacy_client, *, sample=25, store=None, rng=None):
+def reconcile_legacy(
+    legacy_client, *, sample=25, store=None, rng=None, check_search=False,
+    search=None, search_scan_limit=0,
+):
     """Compare the live legacy index with records marked as v1 migrations."""
     from v2.store import get_store
 
@@ -310,7 +425,7 @@ def reconcile_legacy(legacy_client, *, sample=25, store=None, rng=None):
                 {"source_name": expected["source_name"], "fields": fields}
             )
 
-    return {
+    report = {
         "legacy_total": int(legacy_total),
         "migrated_total": len(migrated),
         "missing_from_v2": missing_names[:50],
@@ -319,7 +434,25 @@ def reconcile_legacy(legacy_client, *, sample=25, store=None, rng=None):
         "field_mismatches": len(mismatch_records),
         "field_mismatch_records": mismatch_records,
         "legacy_conversion_errors": conversion_errors,
+        "search_checked": bool(check_search),
+        "extra_in_index_count": 0,
+        "extra_in_index": [],
+        "search_index_total": 0,
+        "search_scan_complete": None,
+        "search_scan_warnings": [],
+        "search_store_errors": [],
+        "search_check_error": None,
     }
+    if check_search:
+        try:
+            report.update(
+                _reverse_search_report(
+                    store, search, search_scan_limit=search_scan_limit
+                )
+            )
+        except Exception as exc:
+            report["search_check_error"] = str(exc)
+    return report
 
 
 def _print_legacy_report(report, show):
@@ -340,6 +473,14 @@ def _print_legacy_report(report, show):
                 ", ".join(sorted(mismatch["fields"])),
             )
         )
+    if report.get("search_checked"):
+        print(f"  Extra in Search index:   {report['extra_in_index_count']}")
+        for source_id in report["extra_in_index"][:show]:
+            print(f"    - {source_id}")
+        if report.get("search_check_error"):
+            print(f"  Search check error:      {report['search_check_error']}")
+        if report.get("extra_in_index_remedy"):
+            print(f"  Remedy:                  {report['extra_in_index_remedy']}")
 
 
 def _print_report(report, show):
@@ -396,6 +537,13 @@ def _print_report(report, show):
         print(f"  Missing from search:    {len(report['missing_from_search'])}")
         for sid in report["missing_from_search"][:show]:
             print(f"    - {sid}")
+        print(f"  Extra in Search index:   {report['extra_in_index_count']}")
+        for source_id in report["extra_in_index"][:show]:
+            print(f"    - {source_id}")
+        if report.get("search_check_error"):
+            print(f"  Search check error:      {report['search_check_error']}")
+        if report.get("extra_in_index_remedy"):
+            print(f"  Remedy:                  {report['extra_in_index_remedy']}")
     else:
         print(f"\n  (search not checked — pass --check-search to probe the index)")
 
@@ -408,7 +556,18 @@ def main():
                         default=os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "converted_datasets.json"),
                         help="Path to converted_datasets.json (the expected set).")
     parser.add_argument("--check-search", action="store_true",
-                        help="Also probe the search index for each record (exact subject).")
+                        help="Probe expected subjects and scan for extra index entries.")
+    parser.add_argument(
+        "--strict-search",
+        action="store_true",
+        help="Fail when Search reconciliation is incomplete or errors.",
+    )
+    parser.add_argument(
+        "--search-scan-limit",
+        type=int,
+        default=0,
+        help="Cap reverse Search scan entries (0 = full index).",
+    )
     parser.add_argument(
         "--legacy-check",
         action="store_true",
@@ -437,9 +596,25 @@ def main():
             # the legacy JSON mode machine-readable without changing the
             # established converted-vs-store output behavior.
             with contextlib.redirect_stdout(io.StringIO()):
-                report = reconcile_legacy(legacy_client, sample=args.sample)
+                try:
+                    report = reconcile_legacy(
+                        legacy_client,
+                        sample=args.sample,
+                        check_search=args.check_search,
+                        search_scan_limit=args.search_scan_limit,
+                    )
+                except Exception as exc:
+                    report = _legacy_check_error_report(exc)
         else:
-            report = reconcile_legacy(legacy_client, sample=args.sample)
+            try:
+                report = reconcile_legacy(
+                    legacy_client,
+                    sample=args.sample,
+                    check_search=args.check_search,
+                    search_scan_limit=args.search_scan_limit,
+                )
+            except Exception as exc:
+                report = _legacy_check_error_report(exc)
     else:
         input_path = os.path.abspath(args.input)
         with open(input_path) as f:
@@ -449,8 +624,15 @@ def main():
             records = records[:args.limit]
         print(f"Loaded {len(records)} expected records from {input_path}")
         report = reconcile(
-            records, check_search=args.check_search, show=args.show
+            records,
+            check_search=args.check_search,
+            show=args.show,
+            search_scan_limit=args.search_scan_limit,
         )
+
+    inconclusive = _inconclusive_reasons(report)
+    report["inconclusive"] = bool(inconclusive)
+    report["inconclusive_reasons"] = inconclusive
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))
@@ -460,22 +642,97 @@ def main():
         _print_report(report, args.show)
 
     if args.legacy_check:
-        drift = (
-            report["missing_from_v2_count"] > 0
-            or report["field_mismatches"] > 0
-            or bool(report["legacy_conversion_errors"])
+        drift = _legacy_report_has_drift(
+            report, strict_search=args.strict_search
         )
     else:
-        drift = (
-            bool(report["missing_from_store"])
-            or report["stale_content"] > 0
-            or report["search_pending"] > 0
-            or (
-                report["search_checked"]
-                and bool(report["missing_from_search"])
+        drift = _report_has_drift(report, strict_search=args.strict_search)
+    if inconclusive:
+        print(
+            "WARNING: reconciliation inconclusive: {}".format(
+                "; ".join(inconclusive)
+            ),
+            file=sys.stderr,
+        )
+    if report.get("extra_in_index_remedy"):
+        print(report["extra_in_index_remedy"], file=sys.stderr)
+    sys.exit(1 if drift else 0)
+
+
+def _legacy_check_error_report(exc):
+    """Return a JSON-safe inconclusive report for a failed live check."""
+    return {
+        "legacy_total": 0,
+        "migrated_total": 0,
+        "missing_from_v2": [],
+        "missing_from_v2_count": 0,
+        "sampled": 0,
+        "field_mismatches": 0,
+        "field_mismatch_records": [],
+        "legacy_conversion_errors": [],
+        "legacy_check_error": str(exc),
+        "search_checked": False,
+        "extra_in_index_count": 0,
+        "extra_in_index": [],
+        "search_scan_complete": None,
+        "search_scan_warnings": [],
+        "search_store_errors": [],
+        "search_check_error": None,
+    }
+
+
+def _inconclusive_reasons(report):
+    """Return operational/check failures that are not evidence of drift."""
+    reasons = []
+    if report.get("legacy_check_error"):
+        reasons.append("legacy check error: {}".format(
+            report["legacy_check_error"]
+        ))
+    if report.get("search_check_error"):
+        reasons.append("Search check error: {}".format(
+            report["search_check_error"]
+        ))
+    if report.get("search_scan_complete") is False:
+        reasons.append("Search scan incomplete")
+    if report.get("search_store_errors"):
+        reasons.append(
+            "{} store lookup error(s) during Search scan".format(
+                len(report["search_store_errors"])
             )
         )
-    sys.exit(1 if drift else 0)
+    reasons.extend(str(item) for item in report.get("search_scan_warnings") or [])
+    return list(dict.fromkeys(reasons))
+
+
+def _search_report_has_drift(report):
+    """Return only proven reverse-index drift, never audit uncertainty."""
+    return bool(report.get("extra_in_index_count", 0))
+
+
+def _legacy_report_has_drift(report, strict_search=False):
+    hard_drift = bool(
+        report["missing_from_v2_count"] > 0
+        or report["field_mismatches"] > 0
+        or report["legacy_conversion_errors"]
+        or (report.get("search_checked") and _search_report_has_drift(report))
+    )
+    return hard_drift or bool(strict_search and _inconclusive_reasons(report))
+
+
+def _report_has_drift(report, strict_search=False):
+    hard_drift = bool(
+        report["missing_from_store"]
+        or report["stale_content"] > 0
+        or report["search_pending"] > 0
+        or (
+            report["search_checked"]
+            and (
+                report["missing_from_search"]
+                or _search_report_has_drift(report)
+            )
+        )
+    )
+    return hard_drift or bool(strict_search and _inconclusive_reasons(report))
 
 
 if __name__ == "__main__":

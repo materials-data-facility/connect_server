@@ -59,9 +59,9 @@ def build_embedding_text(meta: DatasetMetadata) -> str:
 
 def _api_key() -> str:
     key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not key or key == "not-configured":
         raise EmbeddingError(
-            "OPENAI_API_KEY is not set. Required for embedding generation and semantic search."
+            "OPENAI_API_KEY is not configured. Required for embedding generation and semantic search."
         )
     return key
 

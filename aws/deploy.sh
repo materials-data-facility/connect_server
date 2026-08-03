@@ -407,6 +407,43 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
         warn "DataCite SSM parameters not found — relying on mock/default DataCite behavior"
     fi
 
+    # Resolve the OpenAI embedding key when present. ParameterNotFound is an
+    # expected optional configuration in non-prod environments; every other
+    # SSM failure is operational (permissions, credentials, throttling, etc.)
+    # and must stop the deploy instead of masquerading as a missing key.
+    log "Resolving OpenAI API key from SSM (/mdf/$env/openai-api-key)..."
+    local openai_api_key openai_ssm_error openai_ssm_error_file
+    openai_api_key=""
+    openai_ssm_error_file=$(mktemp)
+    if ! openai_api_key=$(aws ssm get-parameter \
+        --name "/mdf/$env/openai-api-key" \
+        --region "$REGION" \
+        --with-decryption \
+        --query 'Parameter.Value' --output text 2>"$openai_ssm_error_file"); then
+        openai_ssm_error=$(<"$openai_ssm_error_file")
+        rm -f "$openai_ssm_error_file"
+        if [[ "$openai_ssm_error" == *"ParameterNotFound"* ]]; then
+            openai_api_key=""
+            if [[ "$env" == "prod" ]]; then
+                error "OpenAI API key required for prod but SSM parameter /mdf/$env/openai-api-key was not found."
+            fi
+            warn "OpenAI SSM parameter not found — embedding generation will remain disabled"
+        else
+            error "Failed to resolve /mdf/$env/openai-api-key from SSM: $openai_ssm_error"
+        fi
+    else
+        rm -f "$openai_ssm_error_file"
+        if [[ -z "$openai_api_key" || "$openai_api_key" == "not-configured" ]]; then
+            openai_api_key=""
+            if [[ "$env" == "prod" ]]; then
+                error "OpenAI API key required for prod but /mdf/$env/openai-api-key is not configured."
+            fi
+            warn "OpenAI SSM parameter is not configured — embedding generation will remain disabled"
+        else
+            log "OpenAI API key resolved from SSM"
+        fi
+    fi
+
     # Account-suffixed: the bare name is owned by another AWS account (bucket
     # names are global). Must match s3_bucket in samconfig.toml.
     ensure_s3_bucket "mdf-sam-deployments-$env-$(aws sts get-caller-identity --query Account --output text)"
@@ -419,6 +456,9 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     [[ -n "$datacite_pass" ]] && all_params="$all_params DataCitePassword=$datacite_pass"
     [[ -n "$datacite_url" ]] && all_params="$all_params DataCiteApiUrl=$datacite_url"
     [[ -n "$datacite_prefix" ]] && all_params="$all_params DataCitePrefix=$datacite_prefix"
+    if [[ -n "$openai_api_key" && "$openai_api_key" != "not-configured" ]]; then
+        all_params="$all_params OpenAIApiKey=$openai_api_key"
+    fi
 
     # In CI there is no TTY to approve a changeset on. The typed-confirmation
     # gate in .github/workflows/deploy-v2.yml (plus GitHub environment

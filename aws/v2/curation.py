@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from v2.metadata import parse_metadata, to_datacite
+from v2.search_client import _detail_base
 from v2.store import get_store as get_submission_store
 
 
@@ -33,6 +34,11 @@ CURATOR_USER_IDS = set(
 CURATOR_GROUP_IDS = set(
     os.environ.get("CURATOR_GROUP_IDS", "").split(",")
 ) - {""}
+
+
+def _portal_url() -> str:
+    """Canonical detail base shared with Globus Search subject identities."""
+    return _detail_base().rstrip("/")
 
 
 def _is_curator(auth: Dict[str, Any]) -> bool:
@@ -73,7 +79,7 @@ def _extract_doi_metadata(submission: Dict[str, Any]) -> Dict[str, Any]:
     doi_payload = to_datacite(
         meta,
         doi="",
-        url=f"https://materialsdatafacility.org/detail/{source_id}",
+        url=f"{_portal_url()}/{source_id}",
         source_id=source_id,
         created_at=submission.get("created_at"),
         published_at=submission.get("published_at"),
@@ -193,7 +199,7 @@ def _mint_doi_for_submission(
                 client.update_metadata(
                     doi=dataset_doi,
                     metadata=doi_metadata,
-                    url=f"https://materialsdatafacility.org/detail/{source_id}",
+                    url=f"{_portal_url()}/{source_id}",
                     related_identifiers=has_version,
                 )
                 result["dataset_doi"] = dataset_doi
@@ -208,7 +214,7 @@ def _mint_doi_for_submission(
             update_result = client.update_metadata(
                 doi=dataset_doi,
                 metadata=doi_metadata,
-                url=f"https://materialsdatafacility.org/detail/{source_id}",
+                url=f"{_portal_url()}/{source_id}",
             )
             client.close()
             return {

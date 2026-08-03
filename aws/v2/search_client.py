@@ -6,13 +6,148 @@ Falls back to MockGlobusSearchClient when credentials or indexes are not configu
 
 import logging
 import os
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Historical production value. Search subjects are the index's identity keys, so
+# this is the fallback used when no portal URL is configured — see _detail_base().
 MDF_DETAIL_BASE = "https://materialsdatafacility.org/detail"
+
+# Globus Search ingest task states (GET /v1/task/<task_id> -> {"state": ...}).
+TASK_STATE_SUCCESS = "SUCCESS"
+TASK_STATE_FAILED = "FAILED"
+TASK_TERMINAL_FAILURE_STATES = frozenset({TASK_STATE_FAILED})
+
+# Default wall-clock budget for confirming an ingest task. Deliberately small:
+# ingest() is called from the API request path too (withdraw/delete reconcile),
+# where API Gateway caps a request at 29s. The publish worker passes its own,
+# larger budget explicitly.
+DEFAULT_INGEST_WAIT_SECONDS = 20.0
+
+# Per-HTTP-call ceiling for the authenticated client. The polling loop below is
+# itself the retry mechanism, so the transport must not add its own (globus_sdk
+# defaults to a 60s socket timeout and up to 5 automatic retries — one hung call
+# would blow through both the ingest budget and the Lambda's whole timeout).
+#
+# Kept comfortably below the publish path's minimum ingest budget (5s) so that
+# even the smallest budget affords several polls, while capping how far a single
+# hung call can overrun a deadline.
+DEFAULT_HTTP_TIMEOUT_SECONDS = 3.0
+DEFAULT_HTTP_MAX_RETRIES = 0
+
+# 4xx statuses that are worth retrying; every other 4xx is a permanent error
+# (bad request, unauthorized, unknown task) and must fail fast.
+RETRYABLE_CLIENT_ERROR_STATUSES = frozenset({408, 425, 429})
+
+
+def _http_timeout_seconds() -> float:
+    return _float_env("GLOBUS_HTTP_TIMEOUT_SECONDS", DEFAULT_HTTP_TIMEOUT_SECONDS)
+
+
+def _http_max_retries() -> int:
+    return int(_float_env("GLOBUS_HTTP_MAX_RETRIES", DEFAULT_HTTP_MAX_RETRIES))
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+        return default
+
+
+def _build_search_client(globus_sdk, **kwargs) -> Any:
+    """Construct a SearchClient with a bounded HTTP transport.
+
+    The transport API moved between globus_sdk 3.x (``transport_params``) and
+    4.x (``transport=`` / ``retry_config=``) and the pinned range is ">=3.0", so
+    both shapes are attempted before falling back to an unbounded client.
+    """
+    timeout = _http_timeout_seconds()
+    retries = _http_max_retries()
+
+    try:  # globus_sdk 4.x
+        from globus_sdk.transport import RequestsTransport, RetryConfig
+
+        return globus_sdk.SearchClient(
+            transport=RequestsTransport(http_timeout=timeout),
+            retry_config=RetryConfig(max_retries=retries),
+            **kwargs,
+        )
+    except Exception:
+        pass
+
+    try:  # globus_sdk 3.x
+        return globus_sdk.SearchClient(
+            transport_params={"http_timeout": timeout, "max_retries": retries},
+            **kwargs,
+        )
+    except Exception:
+        logger.warning(
+            "Could not configure Globus Search HTTP timeout/retries; "
+            "falling back to SDK defaults (calls may block far longer than the ingest budget)",
+            exc_info=True,
+        )
+
+    return globus_sdk.SearchClient(**kwargs)
+
+
+def _is_permanent_api_error(exc: Exception) -> bool:
+    """True for an HTTP error that will not succeed on retry (4xx, mostly)."""
+    status = getattr(exc, "http_status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
+    try:
+        status = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return False
+    if status is None:
+        return False
+    return 400 <= status < 500 and status not in RETRYABLE_CLIENT_ERROR_STATUSES
+
+
+def _detail_base() -> str:
+    """Base URL for search subjects: ``{base}/{source_id}``.
+
+    The subject is the Globus Search index's *identity key* for a dataset, so it
+    must stay byte-stable across deploys: change it and every existing entry is
+    orphaned (duplicated on the next publish, un-deletable by delete_entry).
+
+    Resolution order:
+      1. ``SEARCH_SUBJECT_BASE`` — explicit escape hatch, used verbatim.
+      2. ``PORTAL_URL`` — the same portal config email_utils consumes.
+      3. The historical production value.
+
+    The host is canonicalized (leading ``www.`` stripped, a trailing ``/detail``
+    not doubled) because ``PORTAL_URL`` is a *display* URL and is deployed as
+    ``https://www.materialsdatafacility.org``, while every subject already in the
+    index is ``https://materialsdatafacility.org/detail/...``. Canonicalizing
+    keeps the two spellings pointing at one identity.
+    """
+    explicit = os.environ.get("SEARCH_SUBJECT_BASE")
+    if explicit:
+        return explicit.rstrip("/")
+
+    portal = (os.environ.get("PORTAL_URL") or "").strip().rstrip("/")
+    if not portal:
+        return MDF_DETAIL_BASE
+
+    portal = portal.replace("://www.", "://", 1)
+    if portal.endswith("/detail"):
+        return portal
+    return f"{portal}/detail"
+
+
+def _default_ingest_wait_seconds() -> float:
+    """Seconds to wait for an ingest task to reach a terminal state (0 = don't)."""
+    return _float_env("SEARCH_INGEST_WAIT_SECONDS", DEFAULT_INGEST_WAIT_SECONDS)
 
 DEFAULT_FACETS = [
     {"name": "Year",         "field_name": "dc.year",          "type": "terms", "size": 20},
@@ -56,7 +191,7 @@ class GlobusSearchClient:
             )
 
         authorizer = globus_sdk.AccessTokenAuthorizer(access_token)
-        self._client = globus_sdk.SearchClient(authorizer=authorizer)
+        self._client = _build_search_client(globus_sdk, authorizer=authorizer)
         return self._client
 
     def build_gmeta_entry(
@@ -69,7 +204,7 @@ class GlobusSearchClient:
         version = submission.get("version", "1.0")
         meta = parse_metadata(submission)
 
-        subject = f"{MDF_DETAIL_BASE}/{source_id}"
+        subject = f"{_detail_base()}/{source_id}"
 
         acl = meta.acl or ["public"]
         visible_to = ["public"] if "public" in acl else [f"urn:globus:auth:identity:{a}" for a in acl]
@@ -155,8 +290,111 @@ class GlobusSearchClient:
             "content": content,
         }
 
-    def ingest(self, submission: Dict[str, Any], version_count: Optional[int] = None) -> Dict[str, Any]:
-        """Ingest a single submission into the Globus Search index."""
+    def get_task(self, task_id: str) -> Dict[str, Any]:
+        """Return the raw Globus Search task document for ``task_id``."""
+        client = self._get_client()
+        resp = client.get_task(task_id)
+        data = getattr(resp, "data", None)
+        if isinstance(data, dict):
+            return data
+        return resp if isinstance(resp, dict) else {}
+
+    def _wait_for_task(self, task_id: str, deadline: float) -> Dict[str, Any]:
+        """Poll an ingest task until it is terminal, ``deadline`` passes, or it fails.
+
+        Globus Search's ingest endpoint returns *acceptance*, not completion: the
+        documents are not queryable — and may never become queryable — when
+        ingest() returns. Publishing is gated on this confirmation.
+
+        ``deadline`` is a ``time.monotonic()`` timestamp covering the *whole*
+        ingest operation (submission included), not just this loop.
+
+        Error classification matters as much as the states: a 4xx is permanent
+        (bad task id, revoked credentials) and fails immediately, while 5xx and
+        network errors are transient and keep polling. The transport is capped at
+        ``GLOBUS_HTTP_TIMEOUT_SECONDS`` per call with SDK retries disabled, so a
+        single hung call cannot overrun the deadline by more than that ceiling —
+        without that cap globus_sdk would allow 60s per call and retry it 5 times.
+        """
+        per_call = _http_timeout_seconds()
+        delay = 0.5
+        last_state = None
+        last_error = None
+        polled = False
+
+        while True:
+            try:
+                task = self.get_task(task_id)
+                polled = True
+                last_state = (task.get("state") or "").upper()
+                if last_state == TASK_STATE_SUCCESS:
+                    return {"success": True, "state": last_state, "task_id": task_id}
+                if last_state in TASK_TERMINAL_FAILURE_STATES:
+                    message = task.get("message") or task.get("fatal_error") or "ingest task failed"
+                    return {
+                        "success": False,
+                        "state": last_state,
+                        "task_id": task_id,
+                        "error": f"Globus Search ingest task {task_id} {last_state}: {message}",
+                    }
+            except Exception as exc:
+                last_error = str(exc)
+                if _is_permanent_api_error(exc):
+                    logger.warning(
+                        "Globus Search get_task(%s) failed permanently: %s", task_id, exc,
+                    )
+                    return {
+                        "success": False,
+                        "state": last_state,
+                        "task_id": task_id,
+                        "error": (
+                            f"Globus Search ingest task {task_id} could not be confirmed: {exc}"
+                        ),
+                    }
+                logger.warning("Globus Search get_task(%s) failed (transient): %s", task_id, exc)
+
+            remaining = deadline - time.monotonic()
+            # Stop when the budget is gone, or when what is left cannot fit
+            # another bounded call (which would overrun the deadline). Always
+            # allow one attempt, so a tiny budget still asks once.
+            if remaining <= 0 or (polled and remaining < per_call):
+                detail = f"last state {last_state or 'unknown'}"
+                if last_error:
+                    detail += f", last poll error: {last_error}"
+                return {
+                    "success": False,
+                    "timed_out": True,
+                    "state": last_state,
+                    "task_id": task_id,
+                    "error": (
+                        f"Globus Search ingest task {task_id} not confirmed "
+                        f"within the ingest budget ({detail})"
+                    ),
+                }
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, 5.0)
+
+    def ingest(
+        self,
+        submission: Dict[str, Any],
+        version_count: Optional[int] = None,
+        wait_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Ingest a single submission and confirm the ingest task completed.
+
+        ``wait_seconds`` bounds the *whole* operation — submitting the ingest and
+        polling its task — because the submission call can hang too.
+
+        - ``None``  -> the ``SEARCH_INGEST_WAIT_SECONDS`` default.
+        - ``0``     -> accept-only mode: return as soon as the request is
+          accepted, with ``confirmed: False``. Legitimate only for callers that
+          are not gating a publish on the result (the withdraw/delete reconcile
+          path); the publish worker always passes a positive budget.
+
+        Callers that need the entry to actually be in the index must require
+        ``success and confirmed``: ``success: True, confirmed: False`` means the
+        request was accepted and nothing more.
+        """
         client = self._get_client()
         entry = self.build_gmeta_entry(submission, version_count=version_count)
 
@@ -165,15 +403,56 @@ class GlobusSearchClient:
             "ingest_data": entry,
         }
 
+        if wait_seconds is None:
+            wait_seconds = _default_ingest_wait_seconds()
+        deadline = time.monotonic() + wait_seconds
+
         try:
             result = client.ingest(self.index_id, ingest_doc)
-            return {
-                "success": True,
-                "task_id": getattr(result, "data", {}).get("task_id") if hasattr(result, "data") else str(result),
-            }
+            data = getattr(result, "data", None)
+            task_id = data.get("task_id") if isinstance(data, dict) else None
         except Exception as exc:
             logger.exception("Globus Search ingest failed for %s", submission.get("source_id"))
-            return {"success": False, "error": str(exc)}
+            return {"success": False, "confirmed": False, "error": str(exc)}
+
+        if wait_seconds <= 0:
+            return {"success": True, "task_id": task_id, "confirmed": False}
+
+        if not task_id:
+            # Nothing to poll: the request was accepted but its completion can
+            # never be established. A caller that asked for confirmation asked
+            # for a guarantee this response cannot give, so this is a failure —
+            # re-ingesting is an idempotent upsert, so failing costs nothing.
+            logger.warning(
+                "Globus Search ingest for %s returned no task_id; completion cannot be confirmed",
+                submission.get("source_id"),
+            )
+            return {
+                "success": False,
+                "task_id": None,
+                "confirmed": False,
+                "error": (
+                    "Globus Search ingest returned no task_id; "
+                    "completion could not be confirmed"
+                ),
+            }
+
+        status = self._wait_for_task(task_id, deadline)
+        outcome: Dict[str, Any] = {
+            "success": bool(status.get("success")),
+            "task_id": task_id,
+            "task_state": status.get("state"),
+            "confirmed": bool(status.get("success")),
+        }
+        if status.get("timed_out"):
+            outcome["timed_out"] = True
+        if not status.get("success"):
+            outcome["error"] = status.get("error")
+            logger.warning(
+                "Globus Search ingest not confirmed for %s: %s",
+                submission.get("source_id"), outcome["error"],
+            )
+        return outcome
 
     def batch_ingest(
         self, submissions: List[Dict[str, Any]], batch_size: int = 100,
@@ -236,7 +515,7 @@ class GlobusSearchClient:
     def delete_entry(self, source_id: str) -> Dict[str, Any]:
         """Delete a subject entry from the index."""
         client = self._get_client()
-        subject = f"{MDF_DETAIL_BASE}/{source_id}"
+        subject = f"{_detail_base()}/{source_id}"
 
         try:
             client.delete_entry(self.index_id, subject)
@@ -252,7 +531,7 @@ class GlobusSearchClient:
         Only ingest/delete operations use the authenticated client from _get_client().
         """
         import globus_sdk
-        return globus_sdk.SearchClient()
+        return _build_search_client(globus_sdk)
 
     def search(self, query: str, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
         """Search the Globus Search index."""
@@ -330,6 +609,15 @@ class MockGlobusSearchClient:
         # publish pipeline's ingest-failure/retry path.
         self.fail_next_ingests = 0
         self.ingest_calls = 0
+        # Test seams for the ingest *task* (B-17): the request is accepted but
+        # the asynchronous task fails, or never reaches a terminal state.
+        self.fail_next_ingest_tasks = 0
+        self.timeout_next_ingest_tasks = 0
+        # Test seam for a client that accepts the ingest but cannot confirm it
+        # (no task id / accept-only transport): success without confirmation.
+        self.unconfirmed_next_ingests = 0
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._task_seq = 0
 
     def build_gmeta_entry(
         self, submission: Dict[str, Any], version_count: Optional[int] = None,
@@ -344,9 +632,18 @@ class MockGlobusSearchClient:
         The index holds one entry per dataset, keyed on the version-less detail
         URL subject, so this is the entry a search would return for source_id.
         """
-        return self._entries.get(f"{MDF_DETAIL_BASE}/{source_id}")
+        return self._entries.get(f"{_detail_base()}/{source_id}")
 
-    def ingest(self, submission: Dict[str, Any], version_count: Optional[int] = None) -> Dict[str, Any]:
+    def get_task(self, task_id: str) -> Dict[str, Any]:
+        """Task document for a mock ingest, mirroring the Globus Search shape."""
+        return self._tasks.get(task_id, {"task_id": task_id, "state": "FAILED", "message": "unknown task"})
+
+    def ingest(
+        self,
+        submission: Dict[str, Any],
+        version_count: Optional[int] = None,
+        wait_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
         self.ingest_calls += 1
         if self.fail_next_ingests > 0:
             self.fail_next_ingests -= 1
@@ -355,9 +652,66 @@ class MockGlobusSearchClient:
                 "mock": True,
                 "error": "mock search ingest failure",
             }
+
+        self._task_seq += 1
+        task_id = f"mock-task-{self._task_seq}"
+
+        # Accepted, entry stored, but the caller gets no confirmation — either
+        # because it asked for none (wait_seconds=0) or because the client could
+        # not provide one. Callers that gate on indexing must treat this as
+        # "not indexed" (see the publish worker).
+        if self.unconfirmed_next_ingests > 0 or (wait_seconds is not None and wait_seconds <= 0):
+            if self.unconfirmed_next_ingests > 0:
+                self.unconfirmed_next_ingests -= 1
+            entry = self.build_gmeta_entry(submission, version_count=version_count)
+            self._entries[entry["subject"]] = entry
+            self._tasks[task_id] = {"task_id": task_id, "state": "PENDING"}
+            return {
+                "success": True,
+                "mock": True,
+                "subject": entry["subject"],
+                "task_id": task_id,
+                "confirmed": False,
+            }
+
+        # Accepted-but-not-completed cases: the entry never lands in the index.
+        if self.fail_next_ingest_tasks > 0:
+            self.fail_next_ingest_tasks -= 1
+            self._tasks[task_id] = {
+                "task_id": task_id, "state": "FAILED", "message": "mock ingest task failure",
+            }
+            return {
+                "success": False,
+                "mock": True,
+                "task_id": task_id,
+                "task_state": "FAILED",
+                "confirmed": False,
+                "error": f"Globus Search ingest task {task_id} FAILED: mock ingest task failure",
+            }
+        if self.timeout_next_ingest_tasks > 0:
+            self.timeout_next_ingest_tasks -= 1
+            self._tasks[task_id] = {"task_id": task_id, "state": "PROGRESS"}
+            return {
+                "success": False,
+                "mock": True,
+                "task_id": task_id,
+                "task_state": "PROGRESS",
+                "confirmed": False,
+                "timed_out": True,
+                "error": f"Globus Search ingest task {task_id} not confirmed within mock budget",
+            }
+
         entry = self.build_gmeta_entry(submission, version_count=version_count)
         self._entries[entry["subject"]] = entry
-        return {"success": True, "mock": True, "subject": entry["subject"]}
+        self._tasks[task_id] = {"task_id": task_id, "state": "SUCCESS"}
+        return {
+            "success": True,
+            "mock": True,
+            "subject": entry["subject"],
+            "task_id": task_id,
+            "task_state": "SUCCESS",
+            "confirmed": True,
+        }
 
     def batch_ingest(
         self, submissions: List[Dict[str, Any]], batch_size: int = 100,
@@ -377,7 +731,7 @@ class MockGlobusSearchClient:
         }
 
     def delete_entry(self, source_id: str) -> Dict[str, Any]:
-        subject = f"{MDF_DETAIL_BASE}/{source_id}"
+        subject = f"{_detail_base()}/{source_id}"
         self._entries.pop(subject, None)
         return {"success": True, "mock": True, "source_id": source_id}
 

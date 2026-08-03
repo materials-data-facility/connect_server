@@ -33,6 +33,8 @@ hatch that restores the old write-immediately behavior.
 import argparse
 import json
 import os
+import random
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -45,6 +47,57 @@ MDF_PRODUCTION_INDEX = "1a57bbe5-5272-477f-9d31-343b8258b7a5"
 
 # Globus Search max limit per request
 PAGE_SIZE = 100
+MAX_ATTEMPTS = 3
+
+
+def _http_status(exc):
+    """Return an HTTP status carried by a common SDK exception shape."""
+    for attr in ("http_status", "status_code"):
+        status = getattr(exc, attr, None)
+        if status is not None:
+            try:
+                return int(status)
+            except (TypeError, ValueError):
+                pass
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        status = response.get("status_code") or response.get("status")
+    else:
+        status = getattr(response, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_transient_error(exc):
+    """Retry only server failures and transport-level interruptions."""
+    status = _http_status(exc)
+    if status is not None:
+        return 500 <= status <= 599
+    if isinstance(exc, (TimeoutError, ConnectionError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, (TimeoutError, ConnectionError, socket.timeout))
+
+
+def _retry_transient(operation, description, attempts=MAX_ATTEMPTS):
+    """Run a network operation with bounded jittered exponential backoff."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:
+            if attempt == attempts or not _is_transient_error(exc):
+                raise
+            delay = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+            print(
+                "\n  {} failed transiently (attempt {}/{}): {}; "
+                "retrying in {:.2f}s".format(
+                    description, attempt, attempts, exc, delay
+                ),
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def _parse_dt(value):
@@ -139,13 +192,14 @@ def _is_forbidden(exc):
 def fetch_all_datasets(search_client, limit=None):
     """Fetch all resource_type=dataset entries from the production index.
 
-    Uses offset-based pagination to walk through all results.
+    Uses stable ingest-date sorting with offset pagination to walk all results.
     Returns a list of raw gmeta entries (each with subject, content, etc).
     """
     query = 'mdf.resource_type:"dataset"'
     offset = 0
     all_gmeta = []
     total = None
+    use_sort = True
 
     while True:
         fetch_limit = PAGE_SIZE
@@ -157,23 +211,55 @@ def fetch_all_datasets(search_client, limit=None):
 
         print(f"  Fetching offset={offset}, limit={fetch_limit} ...", end=" ", flush=True)
 
+        request = {
+            "q": query,
+            "advanced": True,
+        }
+        if use_sort:
+            request["sort"] = [
+                {"field_name": "mdf.ingest_date", "order": "asc"},
+                {"field_name": "mdf.source_id", "order": "asc"},
+            ]
+
         try:
-            result = search_client.search(
-                MDF_PRODUCTION_INDEX,
-                query,
-                limit=fetch_limit,
-                offset=offset,
-                advanced=True,
+            result = _retry_transient(
+                lambda: search_client.post_search(
+                    MDF_PRODUCTION_INDEX,
+                    request,
+                    limit=fetch_limit,
+                    offset=offset,
+                ),
+                "Search page at offset {}".format(offset),
             )
         except Exception as exc:
-            if _is_forbidden(exc):
+            status = _http_status(exc)
+            if offset == 0 and use_sort and status is not None and (
+                400 <= status <= 499 and status != 403
+            ):
+                use_sort = False
                 print(
-                    "\nERROR: Legacy Search returned 403. Grant this Globus "
-                    "confidential client read permission on legacy index {}."
-                    .format(MDF_PRODUCTION_INDEX),
+                    "\n  WARNING: legacy Search rejected deterministic sort "
+                    "(HTTP {}); retrying the extraction unsorted.".format(status),
                     file=sys.stderr,
                 )
-            raise
+                result = _retry_transient(
+                    lambda: search_client.post_search(
+                        MDF_PRODUCTION_INDEX,
+                        {"q": query, "advanced": True},
+                        limit=fetch_limit,
+                        offset=offset,
+                    ),
+                    "unsorted Search page at offset {}".format(offset),
+                )
+            else:
+                if _is_forbidden(exc):
+                    print(
+                        "\nERROR: Legacy Search returned 403. Grant this Globus "
+                        "confidential client read permission on legacy index {}."
+                        .format(MDF_PRODUCTION_INDEX),
+                        file=sys.stderr,
+                    )
+                raise
         data = result.data if hasattr(result, "data") else result
 
         if total is None:
@@ -209,7 +295,7 @@ def summarize(gmeta_list):
     source_ids = []
     orgs = set()
     for entry in gmeta_list:
-        for content in entry.get("content", []):
+        for content in _entry_contents(entry):
             dc = content.get("dc", {})
             mdf = content.get("mdf", {})
             title = dc.get("title") or dc.get("titles", [{}])[0].get("title", "?") if dc else "?"

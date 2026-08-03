@@ -28,6 +28,7 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       GLOBUS_CLIENT_ID: ${{ secrets.GLOBUS_CLIENT_ID }}
       GLOBUS_CLIENT_SECRET: ${{ secrets.GLOBUS_CLIENT_SECRET }}
@@ -64,4 +65,5 @@ jobs:
           python aws/v2/scripts/reconcile_migration.py \
             --env "$SYNC_ENV" \
             --legacy-check \
+            --check-search \
             --json

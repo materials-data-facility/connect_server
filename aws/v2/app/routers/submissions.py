@@ -44,6 +44,8 @@ MAX_SUBMIT_METADATA_BYTES = int(os.environ.get("MAX_SUBMIT_METADATA_BYTES", "262
 MAX_SUBMIT_DATA_SOURCES = int(os.environ.get("MAX_SUBMIT_DATA_SOURCES", "2000"))
 MAX_SUBMIT_AUTHORS = int(os.environ.get("MAX_SUBMIT_AUTHORS", "1000"))
 
+DATA_LOCATION_EDIT_FIELDS = frozenset({"data_sources", "download_url", "external"})
+
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
@@ -357,19 +359,43 @@ async def edit_metadata(
     editable_fields = [
         "title", "authors", "description", "keywords", "license", "funding",
         "related_works", "methods", "facility", "fields_of_science", "domains",
-        "ml", "geo_locations", "tags", "extensions",
+        "ml", "geo_locations", "tags", "extensions", "external", "download_url",
+        "data_sources", "publisher", "publication_year",
     ]
-    updates = {}
-    for field in editable_fields:
-        value = getattr(payload, field)
-        if value is not None:
-            updates[field] = value
+    updates = payload.model_dump(
+        include=set(editable_fields),
+        exclude_none=True,
+    )
 
     if not updates:
         raise HTTPException(400, "No metadata fields provided")
 
+    if "data_sources" in updates:
+        data_sources = updates["data_sources"]
+        if len(data_sources) > MAX_SUBMIT_DATA_SOURCES:
+            raise HTTPException(
+                413,
+                f"Too many data_sources (max {MAX_SUBMIT_DATA_SOURCES})",
+            )
+        data_source_errors = _validate_data_sources(data_sources)
+        if data_source_errors:
+            raise HTTPException(
+                400,
+                f"Invalid data_sources: {'; '.join(data_source_errors)}",
+            )
+
     existing_mdata = _parse_mdata(submission)
     deep_merge(existing_mdata, updates)
+
+    try:
+        merged_serialized = json.dumps(existing_mdata, allow_nan=False)
+    except Exception:
+        raise HTTPException(400, "Edited metadata may not contain NaN or Infinity")
+    if len(merged_serialized.encode("utf-8")) > MAX_SUBMIT_METADATA_BYTES:
+        raise HTTPException(
+            413,
+            f"Submission metadata exceeds {MAX_SUBMIT_METADATA_BYTES} bytes",
+        )
 
     # Re-validate through Pydantic to catch schema errors
     try:
@@ -384,6 +410,10 @@ async def edit_metadata(
         # Auto-create a minor version bump
         new_version = increment_version(version, major=False)
         new_versioned_id = "{}-{}".format(source_id, new_version)
+        requires_curation = (
+            bool(DATA_LOCATION_EDIT_FIELDS.intersection(updates))
+            and not is_curator(auth)
+        )
 
         existing_mdata["version"] = new_version
         existing_mdata["latest"] = True
@@ -408,16 +438,17 @@ async def edit_metadata(
             "user_id": submission.get("user_id") or auth.user_id,
             "user_email": submission.get("user_email") or auth.user_email,
             "organization": submission.get("organization"),
-            "status": "approved",
+            "status": "pending_curation" if requires_curation else "approved",
             "dataset_mdata": json.dumps(existing_mdata),
             "schema_version": submission.get("schema_version", "2"),
             "test": submission.get("test", False),
             "created_at": now,
             "updated_at": now,
             "metadata_updated_at": now,
-            "approved_at": now,
-            "approved_by": auth.user_id,
         }
+        if not requires_curation:
+            new_record["approved_at"] = now
+            new_record["approved_by"] = auth.user_id
 
         # Inherit dataset_doi
         dataset_doi = submission.get("dataset_doi") or submission.get("doi")
@@ -428,6 +459,26 @@ async def edit_metadata(
         _flip_latest_on_prior(store, submission)
 
         store.put_submission(new_record)
+
+        if requires_curation:
+            try:
+                notify_curators_new_submission(new_record)
+            except Exception:
+                logger.warning(
+                    "Failed to send new-submission email for %s",
+                    source_id,
+                    exc_info=True,
+                )
+            return {
+                "success": True,
+                "source_id": source_id,
+                "version": version,
+                "new_version": new_version,
+                "status": "pending_curation",
+                "message": "Data-location changes require curator approval before publication.",
+                "updated_fields": list(updates.keys()),
+                "card": build_dataset_card(new_record),
+            }
 
         # Publish the new version (updates DataCite metadata + search entry).
         # Failures surface as a 502 instead of a success response describing a
@@ -802,6 +853,13 @@ async def submit(
         organization = organization[0]
 
     is_test = flat.get("test", False)
+    if is_test:
+        test_index_id = os.environ.get("TEST_SEARCH_INDEX_UUID", "").strip()
+        if not test_index_id or test_index_id == "not-configured":
+            raise HTTPException(
+                400,
+                "Test submissions are not supported in this environment",
+            )
     update = flat.get("update", False)
 
     source_id = _source_id_from_metadata(metadata)

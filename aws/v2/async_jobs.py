@@ -1,7 +1,11 @@
+import contextvars
 import json
 import logging
 import os
 import sqlite3
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -684,16 +688,99 @@ def _record_publish_failure(store, submission: Dict[str, Any], error: str) -> No
         )
 
 
+# Ingest-confirmation budget for a publish job. Sized against the worker's
+# limits: Lambda timeout 120s, SQS visibility timeout 180s, batch size up to 10.
+# Ingest tasks normally settle in ~1s, so a 30s ceiling confirms the common case
+# without risking the invocation, and a timeout is retried rather than lost.
+DEFAULT_PUBLISH_SEARCH_WAIT_SECONDS = 30.0
+
+# A publish must never run the search client in accept-only mode: a zero budget
+# means "don't confirm", and an unconfirmed ingest is exactly the B-17 bug. The
+# budget is clamped to this floor no matter what the config or the remaining
+# Lambda time says.
+MIN_PUBLISH_SEARCH_WAIT_SECONDS = 5.0
+
+# Wall-clock a publish job needs on top of the search wait: DOI mint/update,
+# store writes, prior-version flag normalization, the submitter email.
+PUBLISH_OVERHEAD_SECONDS = 15.0
+
+# Extra headroom kept back so an invocation returns its batchItemFailures
+# instead of being killed mid-record.
+BATCH_SAFETY_MARGIN_SECONDS = 5.0
+
+# Remaining-time budget for the current record, narrowed by the batch loop from
+# the Lambda context. A ContextVar (not a global) so the threaded tests and any
+# future concurrent worker cannot bleed budgets into each other.
+_record_time_budget: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
+    "publish_record_time_budget", default=None,
+)
+
+
+@contextmanager
+def record_time_budget(seconds: Optional[float]):
+    """Scope the wall-clock a single job may spend, for the duration of the block."""
+    token = _record_time_budget.set(seconds)
+    try:
+        yield
+    finally:
+        _record_time_budget.reset(token)
+
+
+def _configured_publish_search_wait_seconds() -> float:
+    raw = os.environ.get("PUBLISH_SEARCH_WAIT_SECONDS")
+    if raw is None:
+        return DEFAULT_PUBLISH_SEARCH_WAIT_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Invalid PUBLISH_SEARCH_WAIT_SECONDS=%r, using default", raw)
+        return DEFAULT_PUBLISH_SEARCH_WAIT_SECONDS
+
+
+def _publish_record_worst_case_seconds() -> float:
+    """Upper bound on one publish job's wall-clock, used to plan a batch."""
+    return _configured_publish_search_wait_seconds() + PUBLISH_OVERHEAD_SECONDS
+
+
+def _publish_search_wait_seconds() -> float:
+    """Ingest-confirmation budget for this publish job.
+
+    The configured ceiling, narrowed by whatever wall-clock the batch loop says
+    is left for this record, and floored at ``MIN_PUBLISH_SEARCH_WAIT_SECONDS``
+    so the publish path can never degrade into unconfirmed accept-only mode.
+    """
+    budget = _configured_publish_search_wait_seconds()
+    remaining = _record_time_budget.get()
+    if remaining is not None:
+        budget = min(budget, remaining - PUBLISH_OVERHEAD_SECONDS)
+    return max(MIN_PUBLISH_SEARCH_WAIT_SECONDS, budget)
+
+
+def _datacite_is_mocked() -> bool:
+    """True when DOIs are deliberately fake (USE_MOCK_DATACITE=true).
+
+    In that mode a DOI is not a real, citable identifier, so a DOI failure is
+    not a reason to block a publish — see ``_process_publish_submission``.
+    """
+    return os.environ.get("USE_MOCK_DATACITE", "").strip().lower() == "true"
+
+
 def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Publish a submission: handle DOI, ingest into search, then mark published.
 
-    Ordering matters: status only advances to "published" once the dataset is
-    actually discoverable. If the search ingest fails the job raises
-    ``JobExecutionError`` so the queue retries it (bug B-7a); every step above is
-    idempotent so the retry is safe.
+    Ordering matters: status only advances to "published" once the dataset has a
+    DOI *and* is actually discoverable. If either precondition fails the job
+    raises ``JobExecutionError`` so the queue retries it (and eventually DLQs);
+    every step is idempotent, so the retry is safe.
+
+    The DOI + search-write + status-flip sequence runs under a per-dataset lock
+    (B-16) because it is read-then-write: it reads every version to decide
+    whether this version owns the dataset's single search entry. Two publish
+    jobs for different versions of the same dataset could otherwise interleave
+    and leave the index describing the older one. All state the decision depends
+    on is re-read *inside* the lock.
     """
-    from v2.search_client import get_search_client
-    from v2.store import get_store
+    from v2.store import PublishLockUnavailable, get_store, publish_lock
 
     source_id = payload["source_id"]
     version = payload["version"]
@@ -704,26 +791,71 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not submission:
         return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
 
-    # Only records that a route deliberately moved into a pre-publish state may
-    # be published. A queue message can outlive the state it was created for
-    # (withdrawn, rejected, reverted to pending_curation), and an at-least-once
-    # delivery must not resurrect such a record. Skipping is reported as success
-    # so the message is consumed rather than retried forever against a tombstone.
+    # Cheap pre-check outside the lock; re-validated inside it.
+    skipped = _publish_skip_result(submission, source_id, version)
+    if skipped:
+        return skipped
+
+    try:
+        with publish_lock(store, source_id, owner=f"publish:{version}:{uuid.uuid4()}"):
+            return _publish_under_lock(store, source_id, version, mint_doi)
+    except PublishLockUnavailable as exc:
+        # A concurrent publish for this dataset is in flight. Fail the job so the
+        # queue redelivers it after the visibility timeout — by then the other
+        # publish has finished and this one sees its writes.
+        logger.info("Publish job for %s v%s deferred: %s", source_id, version, exc)
+        raise JobExecutionError(
+            f"Publish deferred for {source_id} v{version}: {exc}",
+            result={"source_id": source_id, "version": version, "lock_contended": True},
+        ) from exc
+
+
+def _publish_skip_result(
+    submission: Dict[str, Any], source_id: str, version: str,
+) -> Optional[Dict[str, Any]]:
+    """Skip payload when the record is no longer in a publishable state.
+
+    Only records that a route deliberately moved into a pre-publish state may be
+    published. A queue message can outlive the state it was created for
+    (withdrawn, rejected, reverted to pending_curation), and an at-least-once
+    delivery must not resurrect such a record. Skipping is reported as success
+    so the message is consumed rather than retried forever against a tombstone.
+    """
     status = submission.get("status")
-    if status not in PUBLISHABLE_STATUSES:
-        logger.info(
-            "Publish job for %s v%s skipped: status is %r, expected one of %s "
-            "(stale queue message or the record changed state after enqueue)",
-            source_id, version, status, sorted(PUBLISHABLE_STATUSES),
-        )
-        return {
-            "success": True,
-            "skipped": True,
-            "source_id": source_id,
-            "version": version,
-            "status": status,
-            "reason": f"submission status '{status}' is not publishable",
-        }
+    if status in PUBLISHABLE_STATUSES:
+        return None
+
+    logger.info(
+        "Publish job for %s v%s skipped: status is %r, expected one of %s "
+        "(stale queue message or the record changed state after enqueue)",
+        source_id, version, status, sorted(PUBLISHABLE_STATUSES),
+    )
+    return {
+        "success": True,
+        "skipped": True,
+        "source_id": source_id,
+        "version": version,
+        "status": status,
+        "reason": f"submission status '{status}' is not publishable",
+    }
+
+
+def _publish_under_lock(store, source_id: str, version: str, mint_doi: bool) -> Dict[str, Any]:
+    """The publish critical section, run while holding the dataset's lock."""
+    from v2.search_client import get_search_client
+
+    # Re-read under the lock: a publish that just completed for another version
+    # may have changed this record's status and the version set the
+    # search-ownership decision is made from.
+    submission = store.get_submission(source_id, version)
+    if not submission:
+        return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
+
+    skipped = _publish_skip_result(submission, source_id, version)
+    if skipped:
+        return skipped
+
+    status = submission.get("status")
 
     # Look up all versions for DOI versioning context
     all_versions = store.list_versions(source_id)
@@ -733,20 +865,70 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Step 1: DOI handling (mint new or update existing dataset DOI).
     # Handles both mint_doi=True (mint) and mint_doi=False (metadata update only).
-    result["doi"] = _publish_doi_step(
+    doi_result = _publish_doi_step(
         store, submission, source_id, version, all_versions, mint_doi,
     )
+    result["doi"] = doi_result
+
+    # A published dataset without its DOI is not publishable output: the DOI is
+    # what makes it citable, and a warning-only failure left records permanently
+    # DOI-less with nothing to retry (bug B-19). Minting is check-before-mint
+    # idempotent, so failing the job is retry-safe. Note this gates on the DOI
+    # *step* succeeding, not on a DOI existing: mint_doi=false with no prior
+    # dataset DOI legitimately publishes with no DOI at all (metadata-edit
+    # republish, curator approval with minting declined).
+    if not doi_result.get("success"):
+        error = doi_result.get("error") or "DOI handling failed"
+        if _datacite_is_mocked():
+            # Mock/disabled DataCite: the DOI would be fake anyway, so a failure
+            # here must not block local dev or staging publishes.
+            logger.warning(
+                "DOI step failed for %s v%s but DataCite is mocked; publishing anyway: %s",
+                source_id, version, error,
+            )
+            result["doi_failure_ignored"] = True
+        else:
+            logger.warning("DOI step failed for %s v%s: %s", source_id, version, error)
+            _record_publish_failure(store, submission, error)
+            result["success"] = False
+            result["status"] = submission.get("status")
+            result["error"] = error
+            raise JobExecutionError(
+                f"Publish failed for {source_id} v{version}: DOI step failed: {error}",
+                result=result,
+            )
 
     # Step 2: Ingest into Globus Search — one entry per dataset, always the
     # latest published version.
     owns_entry = _owns_search_entry(version, all_versions)
     if owns_entry:
+        # Always a positive budget: a publish may never run the client in
+        # accept-only mode, and the result must be *confirmed*, not merely
+        # accepted (see the confirmation check below).
+        search_wait = _publish_search_wait_seconds()
+        assert search_wait >= MIN_PUBLISH_SEARCH_WAIT_SECONDS
         try:
             search_client = get_search_client()
-            search_result = search_client.ingest(submission, version_count=len(all_versions))
+            search_result = search_client.ingest(
+                submission,
+                version_count=len(all_versions),
+                wait_seconds=search_wait,
+            )
         except Exception as exc:
             logger.exception("Search ingest error for %s", source_id)
             search_result = {"success": False, "error": f"Search ingest exception: {exc}"}
+
+        # An ingest that reports success without confirmation (no task id, an
+        # accept-only client, a transport that cannot poll) has told us the
+        # request was accepted and nothing more. Publishing on that is the B-17
+        # bug with extra steps, so require both.
+        if search_result.get("success") and not search_result.get("confirmed"):
+            search_result = dict(search_result)
+            search_result["success"] = False
+            search_result["error"] = (
+                search_result.get("error")
+                or "search ingest was accepted but never confirmed as indexed"
+            )
     else:
         logger.info(
             "Publish job for %s v%s: a newer published version owns the search entry, "
@@ -769,6 +951,13 @@ def _process_publish_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
         result["error"] = error
         # Do NOT mark the submission published: an unindexed dataset is not
         # published. Raising fails the SQS batch item so the job is retried.
+        #
+        # "Failed" here includes an ingest that was *accepted* but whose task
+        # did not reach SUCCESS within the budget (B-17): Globus Search ingest is
+        # asynchronous, so acceptance is not indexing. An unconfirmed task is
+        # treated as a failure — re-ingesting is an idempotent upsert on the
+        # subject, so a retry costs nothing if the task actually did land, while
+        # the alternative (assume success) is the silent-unindexed-dataset bug.
         raise JobExecutionError(
             f"Publish failed for {source_id} v{version}: search ingest failed: {error}",
             result=result,
@@ -973,14 +1162,78 @@ def run_sqlite_worker_once(limit: int = 20) -> Dict[str, Any]:
     }
 
 
-def handle_sqs_event(event: Dict[str, Any]) -> Dict[str, Any]:
+def _remaining_time_fn(context: Any = None):
+    """Return a callable giving the seconds left in this Lambda invocation.
+
+    Prefers the real Lambda context. When the handler does not pass one (the
+    current ``async_worker.lambda_handler`` calls ``handle_sqs_event(event)``),
+    fall back to the configured function timeout measured from entry — the same
+    number the template sets, so the estimate is only wrong if the two drift.
+    """
+    get_remaining = getattr(context, "get_remaining_time_in_millis", None)
+    if callable(get_remaining):
+        def remaining() -> float:
+            try:
+                return float(get_remaining()) / 1000.0
+            except Exception:
+                return float("inf")
+        return remaining
+
+    raw = os.environ.get("ASYNC_WORKER_TIMEOUT_SECONDS")
+    if raw is None:
+        return lambda: float("inf")
+    try:
+        budget = float(raw)
+    except ValueError:
+        return lambda: float("inf")
+
+    started = time.monotonic()
+    return lambda: budget - (time.monotonic() - started)
+
+
+def handle_sqs_event(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+    """Process an SQS batch, leaving unstarted records to be redelivered.
+
+    Records are handled serially, so a batch of 10 publishes — each of which may
+    spend up to ``PUBLISH_SEARCH_WAIT_SECONDS`` confirming its search ingest —
+    can outlast the Lambda timeout. A killed invocation returns *no*
+    ``batchItemFailures``, so SQS redelivers the whole batch: completed records
+    get reprocessed and a record whose publish lock is still held sees
+    contention. So before each record we check that the remaining time covers a
+    worst-case job; if it does not, the rest of the batch is reported as failed
+    (untouched, never started) and redelivered cleanly.
+    """
+    remaining = _remaining_time_fn(context)
+    reserve = _publish_record_worst_case_seconds() + BATCH_SAFETY_MARGIN_SECONDS
+
     failures: List[Dict[str, str]] = []
-    for record in event.get("Records", []):
+    records = event.get("Records", [])
+    deferred = 0
+
+    for index, record in enumerate(records):
         message_id = record.get("messageId", "")
+        left = remaining()
+
+        # The first record is always attempted (a batch that never starts
+        # anything makes no progress); later ones only when they fit.
+        if index > 0 and left < reserve:
+            deferred += 1
+            failures.append({"itemIdentifier": message_id})
+            continue
+
         try:
             body = json.loads(record.get("body") or "{}")
-            process_job(body["job_type"], body["payload"])
+            with record_time_budget(None if left == float("inf") else left - BATCH_SAFETY_MARGIN_SECONDS):
+                process_job(body["job_type"], body["payload"])
         except Exception:
             logger.exception("Failed processing SQS async job message_id=%s", message_id)
             failures.append({"itemIdentifier": message_id})
+
+    if deferred:
+        logger.warning(
+            "Deferred %d of %d SQS records: not enough invocation time left "
+            "(reserve %.0fs/record); they are reported as batch item failures and redelivered",
+            deferred, len(records), reserve,
+        )
+
     return {"batchItemFailures": failures}

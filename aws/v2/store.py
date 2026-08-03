@@ -1,11 +1,147 @@
 import json
 import os
 import sqlite3
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from v2.config import AWS_REGION, DYNAMO_ENDPOINT_URL, DYNAMO_SUBMISSIONS_TABLE
 from v2.submission_utils import latest_version
+
+# ---------------------------------------------------------------------------
+# Per-dataset publish lock (B-16)
+#
+# Two publish jobs for different versions of the same dataset can run at the
+# same time (SQS is not ordered and the worker's reserved concurrency is > 1).
+# The publish critical section is read-then-write — read every version, decide
+# whether this version owns the single search entry, write the entry, flip the
+# status — so interleaved jobs can leave the index describing an older version.
+#
+# The queue-level fix is a FIFO queue with MessageGroupId=source_id, but the
+# queue is owned by the CloudFormation template. This lock gives the same
+# serialization from inside the worker: mutual exclusion per source_id, with an
+# expiry so a crashed worker cannot deadlock a dataset's publishes.
+# ---------------------------------------------------------------------------
+
+# Sentinel sort key for the lock item in the submissions table. It shares the
+# table (adding one is a template change) and is filtered out of every read that
+# enumerates versions, so it is invisible to the rest of the system. Chosen to
+# be un-collidable with a real version string.
+PUBLISH_LOCK_VERSION = "__publish_lock__"
+
+# TTL of a held lock. Must exceed the worker Lambda timeout (120s) so a running
+# worker never has its lock stolen, and must not exceed the queue visibility
+# timeout (180s) by much, so a redelivered message after a worker crash finds
+# the lock already expired rather than burning a delivery attempt.
+DEFAULT_PUBLISH_LOCK_TTL_SECONDS = 180.0
+
+# How long a publish job waits in-process for a contended lock before giving up
+# and letting the queue retry it. Publishes take seconds, so a short wait
+# resolves nearly all contention without spending an SQS delivery attempt
+# (maxReceiveCount is 3).
+DEFAULT_PUBLISH_LOCK_WAIT_SECONDS = 15.0
+
+
+class PublishLockUnavailable(RuntimeError):
+    """Another worker holds the publish lock for this dataset."""
+
+
+def _without_lock_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop publish-lock sentinel items from a table read.
+
+    The lock shares the submissions table, so every read that enumerates rows
+    for a dataset must skip it — otherwise it would masquerade as a version.
+    """
+    return [i for i in items if i.get("version") != PUBLISH_LOCK_VERSION]
+
+
+def is_reserved_version(version: Any) -> bool:
+    """True for the internal sentinel that is never a real submission version."""
+    return version == PUBLISH_LOCK_VERSION
+
+
+def _reject_reserved_version(version: Any) -> None:
+    """Guard writes against the lock sentinel.
+
+    ``version`` reaches the store from URL paths and request bodies, so a caller
+    could address the lock item directly (``/submissions/{id}/__publish_lock__``)
+    and overwrite or delete a held lock. Reads of it return None; writes raise.
+    """
+    if is_reserved_version(version):
+        raise ValueError(f"{PUBLISH_LOCK_VERSION!r} is a reserved internal version")
+
+
+def _is_conditional_check_failure(exc: Exception) -> bool:
+    """True for a DynamoDB ConditionalCheckFailedException (lock contention)."""
+    if exc.__class__.__name__ == "ConditionalCheckFailedException":
+        return True
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = (response.get("Error") or {}).get("Code")
+        return code == "ConditionalCheckFailedException"
+    return False
+
+
+def _publish_lock_ttl_seconds() -> float:
+    return _float_env("PUBLISH_LOCK_TTL_SECONDS", DEFAULT_PUBLISH_LOCK_TTL_SECONDS)
+
+
+def _publish_lock_wait_seconds() -> float:
+    return _float_env("PUBLISH_LOCK_WAIT_SECONDS", DEFAULT_PUBLISH_LOCK_WAIT_SECONDS)
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return default
+
+
+@contextmanager
+def publish_lock(
+    store: "SubmissionStore",
+    source_id: str,
+    owner: Optional[str] = None,
+    ttl_seconds: Optional[float] = None,
+    wait_seconds: Optional[float] = None,
+):
+    """Hold the publish lock for ``source_id`` for the duration of the block.
+
+    Raises :class:`PublishLockUnavailable` if the lock cannot be taken within
+    ``wait_seconds``; the caller is expected to turn that into a retryable job
+    failure (the whole publish is idempotent, so retrying is safe).
+
+    The lock is always released in ``finally`` — and self-expires anyway, so a
+    worker killed mid-publish delays the next publish of that dataset by at most
+    the TTL instead of blocking it forever.
+    """
+    owner = owner or f"publish-{uuid.uuid4()}"
+    ttl = _publish_lock_ttl_seconds() if ttl_seconds is None else ttl_seconds
+    wait = _publish_lock_wait_seconds() if wait_seconds is None else wait_seconds
+
+    deadline = time.monotonic() + wait
+    while True:
+        if store.acquire_publish_lock(source_id, owner, ttl_seconds=ttl):
+            break
+        if time.monotonic() >= deadline:
+            raise PublishLockUnavailable(
+                f"another publish job holds the lock for {source_id} "
+                f"(waited {wait:g}s)"
+            )
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+    try:
+        yield owner
+    finally:
+        try:
+            store.release_publish_lock(source_id, owner)
+        except Exception:  # pragma: no cover - release is best effort; TTL covers it
+            pass
 
 
 class SubmissionStore:
@@ -95,6 +231,20 @@ class SubmissionStore:
             raise ValueError(f"Invalid counter name: {counter}")
         raise NotImplementedError
 
+    def acquire_publish_lock(
+        self, source_id: str, owner: str, ttl_seconds: float = DEFAULT_PUBLISH_LOCK_TTL_SECONDS,
+    ) -> bool:
+        """Take the per-dataset publish lock. True if acquired, False if held.
+
+        Must be atomic against concurrent workers (conditional write), and must
+        take over a lock whose expiry has passed.
+        """
+        raise NotImplementedError
+
+    def release_publish_lock(self, source_id: str, owner: str) -> bool:
+        """Release the lock if ``owner`` still holds it. True if released."""
+        raise NotImplementedError
+
 
 class DynamoSubmissionStore(SubmissionStore):
     def __init__(self):
@@ -115,6 +265,11 @@ class DynamoSubmissionStore(SubmissionStore):
         # latest right after a successful save. Write volume is tiny (O(1000)
         # edits/year), so the doubled read cost is irrelevant. GSI queries
         # (user/org/status/legacy) cannot be consistent and stay as they are.
+        #
+        # The publish lock lives in this table under a reserved version; it is
+        # not a submission, so a direct read of it returns nothing.
+        if is_reserved_version(version):
+            return None
         resp = self.table.get_item(
             Key={"source_id": source_id, "version": version},
             ConsistentRead=True,
@@ -151,18 +306,21 @@ class DynamoSubmissionStore(SubmissionStore):
             KeyConditionExpression=self._key("source_id").eq(source_id),
             ConsistentRead=True,
         )
-        return resp.get("Items", [])
+        return _without_lock_items(resp.get("Items", []))
 
     def put_submission(self, record: Dict[str, Any]) -> None:
+        _reject_reserved_version(record.get("version"))
         self.table.put_item(
             Item=record,
             ConditionExpression="attribute_not_exists(source_id) AND attribute_not_exists(version)",
         )
 
     def upsert_submission(self, record: Dict[str, Any]) -> None:
+        _reject_reserved_version(record.get("version"))
         self.table.put_item(Item=record)
 
     def update_status(self, source_id: str, version: str, status: str) -> None:
+        _reject_reserved_version(version)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self.table.update_item(
             Key={"source_id": source_id, "version": version},
@@ -268,6 +426,7 @@ class DynamoSubmissionStore(SubmissionStore):
         return items
 
     def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
+        _reject_reserved_version(version)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self.table.update_item(
             Key={"source_id": source_id, "version": version},
@@ -311,19 +470,73 @@ class DynamoSubmissionStore(SubmissionStore):
             if last_key:
                 kwargs["ExclusiveStartKey"] = last_key
             resp = self.table.scan(**kwargs)
-            items.extend(resp.get("Items", []))
+            items.extend(_without_lock_items(resp.get("Items", [])))
             last_key = resp.get("LastEvaluatedKey")
             if not last_key:
                 break
         return items[:limit]
 
     def increment_counter(self, source_id: str, version: str, counter: str) -> None:
+        _reject_reserved_version(version)
         self.table.update_item(
             Key={"source_id": source_id, "version": version},
             UpdateExpression="ADD #counter :one",
             ExpressionAttributeNames={"#counter": counter},
             ExpressionAttributeValues={":one": 1},
         )
+
+    # -- publish lock (B-16) ------------------------------------------------
+    #
+    # The lock is an item in the submissions table keyed
+    # (source_id, PUBLISH_LOCK_VERSION). A conditional PutItem is the atomic
+    # primitive: it succeeds only when no lock item exists or the existing one
+    # has expired, so exactly one concurrent worker wins. The lock item carries
+    # none of the GSI key attributes (user_id / organization / status /
+    # legacy_source_id), so it stays out of every sparse index, and the two
+    # reads that could see it (list_versions, list_all) filter it out.
+
+    def acquire_publish_lock(
+        self, source_id: str, owner: str, ttl_seconds: float = DEFAULT_PUBLISH_LOCK_TTL_SECONDS,
+    ) -> bool:
+        now = int(time.time())
+        expires_at = now + int(ttl_seconds)
+        try:
+            self.table.put_item(
+                Item={
+                    "source_id": source_id,
+                    "version": PUBLISH_LOCK_VERSION,
+                    "record_type": "publish_lock",
+                    "lock_owner": owner,
+                    "lock_acquired_at": now,
+                    "lock_expires_at": expires_at,
+                    # DynamoDB TTL attribute (if enabled on the table): sweeps
+                    # abandoned lock items long after they stop being honored.
+                    "expires_at": expires_at + 86400,
+                },
+                ConditionExpression=(
+                    "attribute_not_exists(source_id) OR lock_expires_at < :now"
+                ),
+                ExpressionAttributeValues={":now": now},
+            )
+            return True
+        except Exception as exc:
+            if _is_conditional_check_failure(exc):
+                return False
+            raise
+
+    def release_publish_lock(self, source_id: str, owner: str) -> bool:
+        try:
+            self.table.delete_item(
+                Key={"source_id": source_id, "version": PUBLISH_LOCK_VERSION},
+                ConditionExpression="lock_owner = :owner",
+                ExpressionAttributeValues={":owner": owner},
+            )
+            return True
+        except Exception as exc:
+            if _is_conditional_check_failure(exc):
+                # Lock already expired and was taken over — not ours to delete.
+                return False
+            raise
 
 
 class SqliteSubmissionStore(SubmissionStore):
@@ -382,6 +595,20 @@ class SqliteSubmissionStore(SubmissionStore):
             )
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status)"
+            )
+            # Publish lock (B-16). A PRIMARY KEY on source_id makes the INSERT
+            # itself the mutual-exclusion primitive, mirroring the DynamoDB
+            # conditional write. Local dev is single-process, but a real lock
+            # here keeps the two backends behaviourally identical (and testable).
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS publish_locks (
+                    source_id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    acquired_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                )
+                """
             )
             # Migrations: add columns if missing
             cur = self.conn.execute("PRAGMA table_info(submissions)")
@@ -455,6 +682,10 @@ class SqliteSubmissionStore(SubmissionStore):
         return data
 
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
+        # The reserved publish-lock version is never a submission (see the
+        # DynamoDB backend, where the lock shares the submissions table).
+        if is_reserved_version(version):
+            return None
         cur = self.conn.execute(
             "SELECT * FROM submissions WHERE source_id = ? AND version = ?",
             (source_id, version),
@@ -546,12 +777,15 @@ class SqliteSubmissionStore(SubmissionStore):
             )
 
     def put_submission(self, record: Dict[str, Any]) -> None:
+        _reject_reserved_version(record.get("version"))
         self._write_submission(record)
 
     def upsert_submission(self, record: Dict[str, Any]) -> None:
+        _reject_reserved_version(record.get("version"))
         self._write_submission(record)
 
     def update_status(self, source_id: str, version: str, status: str) -> None:
+        _reject_reserved_version(version)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.conn:
             self.conn.execute(
@@ -606,6 +840,7 @@ class SqliteSubmissionStore(SubmissionStore):
         return []
 
     def update_profile(self, source_id: str, version: str, profile_json: str) -> None:
+        _reject_reserved_version(version)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.conn:
             self.conn.execute(
@@ -637,12 +872,44 @@ class SqliteSubmissionStore(SubmissionStore):
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
     def increment_counter(self, source_id: str, version: str, counter: str) -> None:
+        _reject_reserved_version(version)
         with self.conn:
             self.conn.execute(
                 f"UPDATE submissions SET {counter} = COALESCE({counter}, 0) + 1 "
                 "WHERE source_id = ? AND version = ?",
                 (source_id, version),
             )
+
+    # -- publish lock (B-16) ------------------------------------------------
+
+    def acquire_publish_lock(
+        self, source_id: str, owner: str, ttl_seconds: float = DEFAULT_PUBLISH_LOCK_TTL_SECONDS,
+    ) -> bool:
+        now = time.time()
+        try:
+            with self.conn:
+                # Clear an expired lock first, then let the PRIMARY KEY decide
+                # the winner. Both statements run in one transaction.
+                self.conn.execute(
+                    "DELETE FROM publish_locks WHERE source_id = ? AND expires_at <= ?",
+                    (source_id, now),
+                )
+                self.conn.execute(
+                    "INSERT INTO publish_locks (source_id, owner, acquired_at, expires_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (source_id, owner, now, now + ttl_seconds),
+                )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def release_publish_lock(self, source_id: str, owner: str) -> bool:
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM publish_locks WHERE source_id = ? AND owner = ?",
+                (source_id, owner),
+            )
+        return cur.rowcount > 0
 
 
 def get_store() -> SubmissionStore:

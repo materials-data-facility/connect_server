@@ -20,6 +20,7 @@ import legacy_auth  # noqa: E402
 import purge_stale_search_entries as purge_search  # noqa: E402
 import reconcile_migration as reconcile_script  # noqa: E402
 import sync_prod_to_v2 as sync_script  # noqa: E402
+import convert_production_datasets as convert_script  # noqa: E402
 from v2.store import SqliteSubmissionStore  # noqa: E402
 
 
@@ -328,6 +329,118 @@ def test_limited_extract_suppresses_candidate_watermark():
     assert complete["candidate_watermark_suppressed"] is None
 
 
+def test_extract_retries_5xx_and_uses_stable_sort(monkeypatch):
+    calls = []
+
+    class ServerError(Exception):
+        http_status = 503
+
+    class Search:
+        def post_search(self, index_id, query, **kwargs):
+            calls.append((query, kwargs))
+            if len(calls) < 3:
+                raise ServerError("temporarily unavailable")
+            return {"total": 1, "gmeta": [{"subject": "dataset"}]}
+
+    monkeypatch.setattr(extract.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(extract.random, "uniform", lambda _a, _b: 0)
+    records, total = extract.fetch_all_datasets(Search())
+
+    assert total == 1
+    assert records == [{"subject": "dataset"}]
+    assert len(calls) == 3
+    assert calls[-1][0]["sort"] == [
+        {"field_name": "mdf.ingest_date", "order": "asc"},
+        {"field_name": "mdf.source_id", "order": "asc"},
+    ]
+
+
+def test_extract_retries_first_page_without_sort_when_sort_is_rejected(
+    monkeypatch, capsys
+):
+    calls = []
+
+    class ClientError(Exception):
+        http_status = 400
+
+    class Search:
+        def post_search(self, _index_id, request, **_kwargs):
+            calls.append(request)
+            if "sort" in request:
+                raise ClientError("sort unsupported")
+            return {"total": 1, "gmeta": [{"subject": "dataset"}]}
+
+    monkeypatch.setattr(
+        extract.time,
+        "sleep",
+        lambda _delay: pytest.fail("sort fallback must not back off"),
+    )
+    records, total = extract.fetch_all_datasets(Search())
+    assert (records, total) == ([{"subject": "dataset"}], 1)
+    assert len(calls) == 2
+    assert "sort" in calls[0]
+    assert "sort" not in calls[1]
+    assert "retrying the extraction unsorted" in capsys.readouterr().err
+
+
+def test_extract_summary_reads_modern_gmeta_shape(capsys):
+    extract.summarize(
+        [
+            {
+                "entries": [
+                    {
+                        "content": {
+                            "dc": {"title": "Modern title"},
+                            "mdf": {
+                                "source_id": "modern-id",
+                                "organizations": ["MDF"],
+                            },
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    output = capsys.readouterr().out
+    assert "Modern title" in output
+    assert "modern-id" in output
+    assert "MDF" in output
+
+
+def test_convert_main_exits_partial_after_writing_error_report(
+    tmp_path, monkeypatch
+):
+    input_path = tmp_path / "extract.json"
+    output_path = tmp_path / "converted.json"
+    input_path.write_text(json.dumps({"gmeta": [{"subject": "broken"}]}))
+    monkeypatch.setattr(
+        convert_script,
+        "convert_entry",
+        lambda _entry: (_ for _ in ()).throw(ValueError("cannot convert")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "convert_production_datasets.py",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        convert_script.main()
+
+    assert exc_info.value.code == 3
+    report = json.loads(output_path.read_text())
+    assert report["count"] == 0
+    assert report["errors"] == [
+        {"subject": "broken", "error": "cannot convert"}
+    ]
+
+
 def test_sqlite_upsert_round_trips_sync_fields(tmp_path):
     store = SqliteSubmissionStore(str(tmp_path / "roundtrip.db"))
     record = {
@@ -349,14 +462,160 @@ def test_sqlite_upsert_round_trips_sync_fields(tmp_path):
     assert final["last_synced_at"] == "2026-01-01T00:00:00Z"
 
 
-def test_sync_hash_excludes_batch_relative_latest_and_root():
+def test_sync_hash_excludes_batch_relative_chain_fields():
     first = converted_record(latest=True)
     second = copy.deepcopy(first)
     second["metadata"]["latest"] = False
+    second["metadata"]["previous_version"] = "batch-specific-previous"
     second["metadata"]["root_version"] = "batch-specific-root"
     assert ingest.compute_sync_content_hash(first) == ingest.compute_sync_content_hash(
         second
     )
+
+
+def test_delta_reingest_preserves_chain_and_is_unchanged(sync_runtime):
+    store, _search = sync_runtime
+    version_one = converted_record(version="1.0", title="One", latest=False)
+    version_one["metadata"]["root_version"] = "dataset-1.0"
+    version_two = converted_record(version="2.0", title="Two", latest=True)
+    version_two["metadata"].update(
+        previous_version="dataset-1.0", root_version="dataset-1.0"
+    )
+    assert ingest.ingest_records([version_one, version_two])["created"] == 2
+
+    delta = copy.deepcopy(version_two)
+    delta["metadata"].pop("previous_version")
+    delta["metadata"]["root_version"] = None
+    result = ingest.ingest_records([delta])
+    assert result["unchanged"] == 1
+    stored = store.get_submission("dataset", "2.0")
+    assert stored["dataset_mdata"]["previous_version"] == "dataset-1.0"
+    assert stored["dataset_mdata"]["root_version"] == "dataset-1.0"
+
+    delta["metadata"]["title"] = "Two updated"
+    assert ingest.ingest_records([delta])["updated"] == 1
+    stored = store.get_submission("dataset", "2.0")
+    assert stored["dataset_mdata"]["previous_version"] == "dataset-1.0"
+    assert stored["dataset_mdata"]["root_version"] == "dataset-1.0"
+
+
+def test_unchanged_content_repairs_corrupted_nonempty_chain(sync_runtime):
+    store, _search = sync_runtime
+    incoming = converted_record(version="2.0", title="Two")
+    incoming["metadata"].update(
+        previous_version="dataset-1.0", root_version="dataset-1.0"
+    )
+    stored = ingest.build_submission_record(incoming)
+    stored_metadata = json.loads(stored["dataset_mdata"])
+    stored_metadata.update(
+        previous_version="wrong-previous", root_version="wrong-root"
+    )
+    stored["dataset_mdata"] = stored_metadata
+    store.upsert_submission(stored)
+
+    result = ingest.ingest_records([incoming], skip_search=True)
+
+    assert result["updated"] == 1
+    assert result["unchanged"] == 0
+    repaired = store.get_submission("dataset", "2.0")["dataset_mdata"]
+    assert repaired["previous_version"] == "dataset-1.0"
+    assert repaired["root_version"] == "dataset-1.0"
+
+
+def test_malformed_stored_metadata_is_best_effort_merge(sync_runtime):
+    store, _search = sync_runtime
+    incoming = converted_record()
+    stored = ingest.build_submission_record(incoming)
+    stored["sync_content_hash"] = "stale"
+    stored["dataset_mdata"] = "{not-json"
+    store.upsert_submission(stored)
+
+    result = ingest.ingest_records([incoming], skip_search=True)
+
+    assert result["updated"] == 1
+    assert len(result["metadata_merge_warnings"]) == 1
+    assert "skipped chain preservation" in result["metadata_merge_warnings"][0][
+        "error"
+    ]
+    assert store.get_submission("dataset", "1.0")["dataset_mdata"]["title"] == (
+        "Original"
+    )
+
+
+def test_batch_ingest_retries_transient_results_but_not_4xx(monkeypatch):
+    monkeypatch.setattr(ingest.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(ingest.random, "uniform", lambda _a, _b: 0)
+
+    class Search:
+        def __init__(self, error):
+            self.error = error
+            self.calls = 0
+
+        def batch_ingest(self, submissions, batch_size=100):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "ingested": 0,
+                    "errors": [
+                        {"source_id": "dataset", "error": self.error}
+                    ],
+                }
+            return {"ingested": len(submissions), "errors": []}
+
+    transient = Search("HTTP 503 from Search")
+    result = ingest._batch_ingest_with_retry(transient, [{"source_id": "dataset"}])
+    assert result["ingested"] == 1
+    assert transient.calls == 2
+
+    client_error = Search("HTTP 400 from Search")
+    result = ingest._batch_ingest_with_retry(
+        client_error, [{"source_id": "dataset"}]
+    )
+    assert result["ingested"] == 0
+    assert client_error.calls == 1
+    assert ingest._transient_error_text("batch of 400 records timed out") is True
+    assert ingest._transient_error_text("status 400 from Search") is False
+
+
+def test_search_stamp_is_targeted_sqlite_update(tmp_path, monkeypatch):
+    store = SqliteSubmissionStore(str(tmp_path / "stamp.db"))
+    record = ingest.build_submission_record(converted_record())
+    record["view_count"] = 9
+    store.upsert_submission(record)
+    monkeypatch.setattr(
+        store,
+        "get_submission",
+        lambda *_args: pytest.fail("stamp must not read the whole record"),
+    )
+    monkeypatch.setattr(
+        store,
+        "upsert_submission",
+        lambda *_args: pytest.fail("stamp must not replace the whole record"),
+    )
+
+    ingest._stamp_search_sync(store, "dataset", "1.0", "synced-hash")
+
+    row = store.conn.execute(
+        "SELECT search_synced_hash, last_synced_at, view_count "
+        "FROM submissions WHERE source_id = ? AND version = ?",
+        ("dataset", "1.0"),
+    ).fetchone()
+    assert row["search_synced_hash"] == "synced-hash"
+    assert row["last_synced_at"]
+    assert row["view_count"] == 9
+
+
+def test_search_stamp_preserves_absent_hash_as_null(tmp_path):
+    store = SqliteSubmissionStore(str(tmp_path / "null-stamp.db"))
+    record = ingest.build_submission_record(converted_record())
+    record.pop("sync_content_hash")
+    store.upsert_submission(record)
+
+    ingest._stamp_search_sync(store, "dataset", "1.0", None)
+
+    stored = store.get_submission("dataset", "1.0")
+    assert stored.get("search_synced_hash") is None
+    assert stored.get("search_synced_hash") == stored.get("sync_content_hash")
 
 
 def test_reconcile_separates_never_hashed_stale_and_search_pending(
@@ -472,6 +731,63 @@ def test_ssm_report_writer_uses_pinned_contract():
     assert saved == report
 
 
+def test_sync_accepts_partial_conversion_and_runs_ingest(
+    tmp_path, monkeypatch, capsys
+):
+    extract_file = tmp_path / "extract.json"
+    extract_file.write_text(json.dumps({"gmeta": []}))
+    calls = []
+
+    def run_script(name, arguments):
+        calls.append(name)
+        if name == "convert_production_datasets.py":
+            output = Path(arguments[arguments.index("--output") + 1])
+            output.write_text(
+                json.dumps({"records": [], "errors": [{"error": "bad"}]})
+            )
+            return SimpleNamespace(returncode=3, stdout="partial", stderr="")
+        if name == "ingest_converted_datasets.py":
+            report_path = Path(
+                arguments[arguments.index("--report-file") + 1]
+            )
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "created": 0,
+                        "updated": 0,
+                        "unchanged": 0,
+                        "conflicts": 0,
+                        "search_pending": 0,
+                        "store_errors": [],
+                        "search_errors": [],
+                    }
+                )
+            )
+            return SimpleNamespace(returncode=3, stdout="partial", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sync_script, "_run_script", run_script)
+    args = SimpleNamespace(
+        env="dev",
+        run_source="test",
+        no_ssm=True,
+        state_dir=str(tmp_path / "state"),
+        dry_run=False,
+        json=False,
+        report_file=None,
+        from_extract_file=str(extract_file),
+        local_config=True,
+    )
+
+    assert sync_script.run(args) == 3
+    assert calls == [
+        "convert_production_datasets.py",
+        "ingest_converted_datasets.py",
+        "reconcile_migration.py",
+    ]
+    assert "conversion completed partially" in capsys.readouterr().out
+
+
 def test_legacy_auth_prefers_confidential_credentials(monkeypatch):
     calls = []
     marker = object()
@@ -542,9 +858,13 @@ def test_reconcile_legacy_check_presence_and_field_sample():
     ]
 
     class LegacyClient:
-        def search(self, index_id, query, **kwargs):
+        def post_search(self, index_id, request, **kwargs):
             assert index_id == extract.MDF_PRODUCTION_INDEX
-            assert query == 'mdf.resource_type:"dataset"'
+            assert request["q"] == 'mdf.resource_type:"dataset"'
+            assert request["sort"] == [
+                {"field_name": "mdf.ingest_date", "order": "asc"},
+                {"field_name": "mdf.source_id", "order": "asc"},
+            ]
             return {"total": 3, "gmeta": legacy_entries}
 
     class Store:
@@ -592,6 +912,151 @@ def test_reconcile_legacy_check_presence_and_field_sample():
     mismatch = report["field_mismatch_records"][0]
     assert mismatch["source_name"] == "beta"
     assert set(mismatch["fields"]) == {"title", "author_count"}
+
+
+def test_reconcile_legacy_reverse_search_detects_extra_subject():
+    legacy_entries = [
+        _legacy_gmeta("alpha", "Alpha", "10.1234/alpha", ["A"]),
+    ]
+
+    class LegacyClient:
+        def post_search(self, _index_id, _query, **_kwargs):
+            return {"total": 1, "gmeta": legacy_entries}
+
+    class Store:
+        def list_all(self, limit):
+            assert limit > 0
+            return [
+                {
+                    "source_id": "alpha",
+                    "version": "1.0",
+                    "legacy_source_id": "alpha_v1",
+                    "doi": "10.1234/alpha",
+                    "dataset_mdata": {
+                        "title": "Alpha",
+                        "authors": [{"name": "A"}],
+                    },
+                }
+            ]
+
+        def list_versions(self, source_id):
+            return self.list_all(10) if source_id == "alpha" else []
+
+    def search_entry(source_id):
+        return {
+            "subject": "https://materialsdatafacility.org/detail/{}".format(
+                source_id
+            ),
+            "entries": [
+                {"content": {"mdf": {"source_id": source_id}}}
+            ],
+        }
+
+    class ReadClient:
+        def post_search(self, index_id, _query, offset, limit):
+            assert index_id == "v2-index"
+            assert offset == 0
+            assert limit == purge_search.PAGE_SIZE
+            return {
+                "total": 2,
+                "gmeta": [search_entry("alpha"), search_entry("orphan")],
+            }
+
+    class Search:
+        index_id = "v2-index"
+
+        def _get_read_client(self):
+            return ReadClient()
+
+    report = reconcile_script.reconcile_legacy(
+        LegacyClient(),
+        sample=1,
+        store=Store(),
+        check_search=True,
+        search=Search(),
+    )
+
+    assert report["search_checked"] is True
+    assert report["extra_in_index_count"] == 1
+    assert report["extra_in_index"] == ["orphan"]
+    assert report["search_scan_complete"] is True
+    assert report["extra_in_index_remedy"] == (
+        "run scripts/purge_stale_search_entries.py --execute; entries: orphan"
+    )
+    assert reconcile_script._legacy_report_has_drift(report) is True
+
+
+def test_reverse_search_mock_without_read_client_is_inconclusive():
+    report = reconcile_script._reverse_search_report(object(), search=object())
+    assert report["search_checked"] is False
+    assert report["search_scan_complete"] is None
+    assert reconcile_script._search_report_has_drift(report) is False
+    assert reconcile_script._inconclusive_reasons(report)
+
+
+def test_incomplete_search_scan_retries_and_is_strict_only(monkeypatch):
+    calls = []
+
+    def incomplete_scan(_client, _index_id, limit=0):
+        calls.append(limit)
+        return [], {
+            "complete": False,
+            "limited": False,
+            "warnings": ["refresh lag"],
+            "index_total_before": 1,
+        }
+
+    monkeypatch.setattr(reconcile_script, "enumerate_index", incomplete_scan)
+    monkeypatch.setattr(
+        reconcile_script,
+        "classify_entries",
+        lambda _records, _store: {
+            "stale_superseded": [],
+            "stale_orphan": [],
+            "store_errors": [],
+        },
+    )
+
+    class Search:
+        index_id = "v2-index"
+
+        def _get_read_client(self):
+            return object()
+
+    report = reconcile_script._reverse_search_report(
+        object(), search=Search(), search_scan_limit=25
+    )
+    base = {
+        "missing_from_v2_count": 0,
+        "field_mismatches": 0,
+        "legacy_conversion_errors": [],
+    }
+    base.update(report)
+
+    assert calls == [25, 25]
+    assert report["search_scan_complete"] is False
+    assert reconcile_script._legacy_report_has_drift(base) is False
+    assert reconcile_script._legacy_report_has_drift(
+        base, strict_search=True
+    ) is True
+
+
+def test_search_store_error_is_inconclusive_not_hard_drift():
+    report = {
+        "missing_from_v2_count": 0,
+        "field_mismatches": 0,
+        "legacy_conversion_errors": [],
+        "search_checked": True,
+        "extra_in_index_count": 0,
+        "search_scan_complete": True,
+        "search_scan_warnings": [],
+        "search_store_errors": [{"source_id": "throttled"}],
+        "search_check_error": None,
+    }
+    assert reconcile_script._legacy_report_has_drift(report) is False
+    assert reconcile_script._legacy_report_has_drift(
+        report, strict_search=True
+    ) is True
 
 
 def test_sync_no_ssm_dry_run_end_to_end(tmp_path):
