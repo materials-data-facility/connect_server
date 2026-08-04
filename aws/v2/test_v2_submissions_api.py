@@ -11,7 +11,9 @@ Covers:
 from __future__ import annotations
 
 import json
+import logging
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -2045,6 +2047,65 @@ class TestStatusSanitization:
 # ---------------------------------------------------------------------------
 
 class TestDeleteReconcilesSearch:
+    def test_reconcile_takes_publish_lock_and_behaves_as_before(
+        self, env, mock_search, monkeypatch,
+    ):
+        import v2.app.routers.submissions as submissions_router
+
+        lock_calls = []
+
+        @contextmanager
+        def recording_lock(store, source_id):
+            lock_calls.append(source_id)
+            yield
+
+        monkeypatch.setattr(submissions_router, "publish_lock", recording_lock)
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=False)
+
+        resp = client.post(
+            f"/submissions/{source_id}/delete", headers=HEADERS, json={"reason": "Bad data"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["search_index"] == {"action": "deleted", "success": True}
+        assert lock_calls == [source_id]
+        assert mock_search.get_entry(source_id) is None
+
+    def test_contended_reconcile_does_not_fail_delete(
+        self, env, mock_search, monkeypatch, caplog,
+    ):
+        import v2.app.routers.submissions as submissions_router
+        from v2.store import PublishLockUnavailable
+
+        @contextmanager
+        def contended_lock(store, source_id):
+            raise PublishLockUnavailable(f"publish lock held for {source_id}")
+            yield  # pragma: no cover - makes this a context manager
+
+        monkeypatch.setattr(submissions_router, "publish_lock", contended_lock)
+        client = TestClient(app)
+        source_id = _submit(client)["source_id"]
+        _approve(client, source_id, mint_doi=False)
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.post(
+                f"/submissions/{source_id}/delete",
+                headers=HEADERS,
+                json={"reason": "Bad data"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deleted"
+        reconcile = resp.json()["search_index"]
+        assert reconcile["action"] == "skipped"
+        assert reconcile["success"] is False
+        assert "concurrent publish" in reconcile["warning"]
+        assert "re-establish the search entry" in reconcile["warning"]
+        assert "concurrent publish" in caplog.text
+        assert mock_search.get_entry(source_id) is not None
+
     def test_deleting_only_published_version_removes_search_entry(self, env, mock_search):
         client = TestClient(app)
         source_id = _submit(client)["source_id"]

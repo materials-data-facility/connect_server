@@ -33,7 +33,13 @@ from v2.app.models import (
 from v2.config import DEFAULT_ORGANIZATION
 from v2.email_utils import notify_curators_new_submission
 from v2.metadata import DatasetMetadata, migrate_v1_payload
-from v2.store import SubmissionStore, parse_pagination_key, serialize_pagination_key
+from v2.store import (
+    PublishLockUnavailable,
+    SubmissionStore,
+    parse_pagination_key,
+    publish_lock,
+    serialize_pagination_key,
+)
 from v2.submission_utils import deep_merge, generate_source_id, increment_version, latest_version
 
 logger = logging.getLogger(__name__)
@@ -698,28 +704,43 @@ def _reconcile_search_after_removal(
     - none remain → delete the entry, otherwise the dataset keeps showing up in
       search results and /detail links 404 (bug B-18).
 
-    Never raises: the record is already updated in the store, and a search
-    outage must not turn a completed delete into a 500. Failures are logged and
-    reported in the response so the caller can retry.
+    The store reads and search write share the per-dataset publish lock with the
+    async publish worker. A synchronous delete waits for the lock's short,
+    bounded default; if it remains contended, reconciliation is skipped because
+    the concurrent publish will re-establish the entry. Never raises: the record
+    is already updated in the store, and a search outage or lock contention must
+    not turn a completed delete into a 500. Failures are logged and reported in
+    the response so the caller can retry.
     """
     try:
         from v2.search_client import get_search_client
 
         client = get_search_client(test_mode=bool(removed.get("test", False)))
-        remaining = [
-            v for v in (store.list_versions(source_id) or [])
-            if v.get("status") == "published"
-        ]
-        if remaining:
-            latest_published = max(remaining, key=_version_sort_key)
-            outcome = client.ingest(latest_published, version_count=len(remaining))
-            return {
-                "action": "reingested",
-                "version": latest_published.get("version"),
-                "success": bool(outcome.get("success")),
-            }
-        outcome = client.delete_entry(source_id)
-        return {"action": "deleted", "success": bool(outcome.get("success"))}
+        with publish_lock(store, source_id):
+            remaining = [
+                v for v in (store.list_versions(source_id) or [])
+                if v.get("status") == "published"
+            ]
+            if remaining:
+                latest_published = max(remaining, key=_version_sort_key)
+                outcome = client.ingest(latest_published, version_count=len(remaining))
+                return {
+                    "action": "reingested",
+                    "version": latest_published.get("version"),
+                    "success": bool(outcome.get("success")),
+                }
+            outcome = client.delete_entry(source_id)
+            return {"action": "deleted", "success": bool(outcome.get("success"))}
+    except PublishLockUnavailable:
+        warning = (
+            "Search reconciliation skipped because a concurrent publish holds "
+            "the dataset lock; that publish will re-establish the search entry."
+        )
+        logger.warning(
+            "%s source_id=%s removed_version=%s",
+            warning, source_id, removed.get("version"),
+        )
+        return {"action": "skipped", "success": False, "warning": warning}
     except Exception:
         logger.warning(
             "Failed to reconcile the search index after removing %s v%s",

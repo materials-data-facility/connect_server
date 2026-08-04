@@ -390,7 +390,8 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt AsyncJobsQueue.Arn
-            BatchSize: !Ref AsyncWorkerBatchSize
+            # Eventual upgrade: use FifoQueue with MessageGroupId=source_id.
+            BatchSize: 1
             MaximumBatchingWindowInSeconds: !Ref AsyncWorkerBatchWindowSeconds
             FunctionResponseTypes:
               - ReportBatchItemFailures
