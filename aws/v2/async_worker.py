@@ -12,12 +12,19 @@ logger = logging.getLogger(__name__)
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    # EventBridge scheduled events have "source": "aws.events"
-    if event.get("source") == "aws.events":
-        from v2.async_jobs import JOB_CLEANUP_TRANSFERS, process_job
+    # EventBridge scheduled events have "source": "aws.events". Each schedule in
+    # template.yaml passes an Input naming its job; a schedule without one is
+    # the original transfer-cleanup rule.
+    if event.get("source") == "aws.events" or "job" in event:
+        from v2.async_jobs import JOB_CLEANUP_TRANSFERS, JOB_LINK_HEALTH_SWEEP, process_job
 
-        logger.info("Handling EventBridge scheduled event: %s", event.get("detail-type"))
-        return process_job(JOB_CLEANUP_TRANSFERS, {})
+        job = event.get("job") or JOB_CLEANUP_TRANSFERS
+        allowed = {JOB_CLEANUP_TRANSFERS, JOB_LINK_HEALTH_SWEEP}
+        if job not in allowed:
+            logger.warning("Ignoring scheduled event for unknown job %r", job)
+            return {"ignored": job}
+        logger.info("Handling scheduled job %s (%s)", job, event.get("detail-type"))
+        return process_job(job, dict(event.get("payload") or {}))
 
     return handle_sqs_event(event)
 

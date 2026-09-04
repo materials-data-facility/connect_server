@@ -444,6 +444,12 @@ def _public_submission_view(record: Dict[str, Any]) -> Dict[str, Any]:
         mdata = dict(mdata)
         mdata.pop("acl", None)
         public["dataset_mdata"] = mdata
+    if "link_health" in public:
+        # Outsiders get the aggregate only (status + checked_at); the per-URL
+        # ``checks`` array with upstream error strings is curator-grade detail.
+        from v2.link_health import public_link_health
+
+        public["link_health"] = public_link_health(rec)
     return public
 
 

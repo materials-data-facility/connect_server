@@ -71,6 +71,7 @@ class DataCiteClient:
         publish: bool = True,
         doi_suffix: Optional[str] = None,
         related_identifiers: Optional[List[Dict[str, str]]] = None,
+        source_version: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Mint a new DOI for a dataset.
 
@@ -94,7 +95,15 @@ class DataCiteClient:
             url = f"https://materialsdatafacility.org/detail/{source_id}"
 
         # Build DataCite payload
-        payload = self._build_payload(doi, url, metadata, publish, related_identifiers, source_id=source_id)
+        payload = self._build_payload(
+            doi,
+            url,
+            metadata,
+            publish,
+            related_identifiers,
+            source_id=source_id,
+            source_version=source_version,
+        )
 
         # Check if DOI already exists
         existing = self.get_doi(doi)
@@ -211,7 +220,13 @@ class DataCiteClient:
 
             candidates = {f"{_detail_base().rstrip('/')}/{source_id}", f"/detail/{source_id}"}
             stripped = url.rstrip("/")
-            if any(stripped == c or stripped.endswith(c) or stripped.startswith(c + "/") for c in candidates):
+            if any(
+                stripped == c
+                or stripped.endswith(c)
+                or stripped.startswith(c + "/")
+                or stripped.startswith(c + "?version=")
+                for c in candidates
+            ):
                 return True
         for identifier in attributes.get("alternateIdentifiers") or []:
             if isinstance(identifier, str) and identifier == source_id:
@@ -228,6 +243,7 @@ class DataCiteClient:
         publish: bool = True,
         related_identifiers: Optional[List[Dict[str, str]]] = None,
         source_id: Optional[str] = None,
+        source_version: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build DataCite API payload."""
         # Extract metadata fields
@@ -298,6 +314,11 @@ class DataCiteClient:
             attributes["alternateIdentifiers"] = [
                 {"alternateIdentifier": source_id, "alternateIdentifierType": "mdf-source-id"}
             ]
+            if source_version is not None:
+                attributes["alternateIdentifiers"].append({
+                    "alternateIdentifier": f"{source_id}@{source_version}",
+                    "alternateIdentifierType": "mdf-source-version",
+                })
 
         # State: draft, registered, or findable
         if publish:
@@ -341,6 +362,7 @@ class MockDataCiteClient:
         publish: bool = True,
         doi_suffix: Optional[str] = None,
         related_identifiers: Optional[List[Dict[str, str]]] = None,
+        source_version: Optional[str] = None,
     ) -> Dict[str, Any]:
         suffix = doi_suffix or self._generate_suffix(source_id)
         doi = f"{self.prefix}/{suffix}"
@@ -353,9 +375,17 @@ class MockDataCiteClient:
             "url": url,
             "metadata": metadata,
             "related_identifiers": related_identifiers or [],
+            "alternate_identifiers": [
+                {"alternateIdentifier": source_id, "alternateIdentifierType": "mdf-source-id"},
+            ],
             "state": "findable" if publish else "draft",
             "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+        if source_version is not None:
+            self._dois[doi]["alternate_identifiers"].append({
+                "alternateIdentifier": f"{source_id}@{source_version}",
+                "alternateIdentifierType": "mdf-source-version",
+            })
 
         return {
             "success": True,

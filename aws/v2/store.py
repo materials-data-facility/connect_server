@@ -74,6 +74,35 @@ def _with_curation_queue(record: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+def _link_health_for_write(payload: Any) -> Dict[str, Any]:
+    """Coerce a link_health payload into a float-free, JSON-safe dict.
+
+    DynamoDB rejects floats and returns them as Decimal on read, so latencies
+    are pinned to int here. Anything unrecognizable becomes an empty dict
+    rather than corrupting the attribute.
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return {}
+    if not isinstance(payload, dict):
+        return {}
+    out = dict(payload)
+    checks = out.get("checks")
+    if isinstance(checks, list):
+        coerced = []
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            item = dict(check)
+            if isinstance(item.get("ms"), float):
+                item["ms"] = int(item["ms"])
+            coerced.append(item)
+        out["checks"] = coerced
+    return out
+
+
 def prepare_for_write(record: Dict[str, Any]) -> Dict[str, Any]:
     """Canonicalize a record on its way into either backend.
 
@@ -83,7 +112,13 @@ def prepare_for_write(record: Dict[str, Any]) -> Dict[str, Any]:
     matter which route, job or migration script produced the record. Callers
     are free to keep handing us the old blob-nested shape.
     """
-    return normalize_record_shape(_with_curation_queue(record))
+    prepared = normalize_record_shape(_with_curation_queue(record))
+    # link_health is a top-level system attribute (extensions proposal P1). A
+    # whole-record upsert (publish job, metadata edit) carries it along, so it
+    # is normalized here too and not only in update_link_health.
+    if prepared.get("link_health") is not None:
+        prepared["link_health"] = _link_health_for_write(prepared["link_health"])
+    return prepared
 
 
 def is_reserved_version(version: Any) -> bool:
@@ -250,6 +285,23 @@ class SubmissionStore:
         model: str,
     ) -> None:
         """Persist a dataset embedding with the model that produced it."""
+        raise NotImplementedError
+
+    def update_link_health(
+        self,
+        source_id: str,
+        version: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        """Persist a record's ``link_health`` block (extensions proposal P1).
+
+        ``link_health`` is a TOP-LEVEL record attribute, never nested inside
+        ``dataset_mdata``: it is system-computed, must survive a metadata edit,
+        and authorization/reporting reads it directly. Both backends must
+        handle it, so it goes through this helper rather than a raw update —
+        DynamoDB keeps a native map, SQLite a JSON column (same treatment as
+        ``dataset_profile``).
+        """
         raise NotImplementedError
 
     _ALLOWED_COUNTERS = {"view_count", "download_count"}
@@ -592,6 +644,32 @@ class DynamoSubmissionStore(SubmissionStore):
             },
         )
 
+    def update_link_health(
+        self,
+        source_id: str,
+        version: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        _reject_reserved_version(version)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Stored as a native Dynamo map so both backends hand callers a dict
+        # (SQLite deserializes its JSON column in _row_to_dict). That only
+        # holds because the payload is float-free — link_health latencies are
+        # ints by construction, so nothing comes back as Decimal.
+        self.table.update_item(
+            Key={"source_id": source_id, "version": version},
+            UpdateExpression=(
+                "SET link_health = :lh, "
+                "link_health_checked_at = :checked_at, "
+                "updated_at = :updated_at"
+            ),
+            ExpressionAttributeValues={
+                ":lh": _link_health_for_write(payload),
+                ":checked_at": (payload or {}).get("checked_at") or now,
+                ":updated_at": now,
+            },
+        )
+
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         # Scan is expensive but acceptable for search
         items: List[Dict[str, Any]] = []
@@ -720,6 +798,8 @@ class SqliteSubmissionStore(SubmissionStore):
                     source_name TEXT,
                     root_version TEXT,
                     previous_version TEXT,
+                    link_health TEXT,
+                    link_health_checked_at TEXT,
                     PRIMARY KEY (source_id, version)
                 )
                 """
@@ -804,6 +884,15 @@ class SqliteSubmissionStore(SubmissionStore):
                     self.conn.execute(
                         "ALTER TABLE submissions ADD COLUMN {} TEXT".format(promoted)
                     )
+            # Link health (extensions proposal P1). The JSON blob mirrors the
+            # DynamoDB map; the flat checked_at column exists so the sweep's
+            # staleness filter is a column read, not a JSON parse per row.
+            if "link_health" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN link_health TEXT")
+            if "link_health_checked_at" not in col_names:
+                self.conn.execute(
+                    "ALTER TABLE submissions ADD COLUMN link_health_checked_at TEXT"
+                )
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -830,6 +919,17 @@ class SqliteSubmissionStore(SubmissionStore):
                 )
             except Exception:
                 pass
+        # link_health is a native map on DynamoDB, so SQLite must hand callers
+        # a dict too — otherwise every reader needs a str/dict branch.
+        if data.get("link_health"):
+            try:
+                data["link_health"] = json.loads(data["link_health"])
+            except Exception:
+                data.pop("link_health", None)
+        else:
+            data.pop("link_health", None)
+        if not data.get("link_health_checked_at"):
+            data.pop("link_health_checked_at", None)
         # acl is a list attribute stored as JSON text in SQLite; DynamoDB keeps
         # it as a native list, so both backends must hand callers a list.
         if data.get("acl"):
@@ -894,6 +994,15 @@ class SqliteSubmissionStore(SubmissionStore):
         if isinstance(embedding, list):
             embedding = json.dumps(embedding)
 
+        # Carried through whole-record writes so a publish/edit upsert cannot
+        # silently drop a computed link_health block (the fixed column list is
+        # exactly why publish_error only ever survived on DynamoDB).
+        link_health = record.get("link_health")
+        link_health_checked_at = record.get("link_health_checked_at")
+        if isinstance(link_health, dict):
+            link_health_checked_at = link_health_checked_at or link_health.get("checked_at")
+            link_health = json.dumps(link_health)
+
         with self.conn:
             self.conn.execute(
                 """
@@ -904,8 +1013,9 @@ class SqliteSubmissionStore(SubmissionStore):
                     rejection_reason, curation_history, dataset_profile, metadata_updated_at,
                     title_description_embedding, embedding_model, embedding_generated_at,
                     view_count, download_count, sync_content_hash, search_synced_hash,
-                    last_synced_at, acl, source_name, root_version, previous_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_synced_at, acl, source_name, root_version, previous_version,
+                    link_health, link_health_checked_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -945,6 +1055,8 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("source_name"),
                     record.get("root_version"),
                     record.get("previous_version"),
+                    link_health,
+                    link_health_checked_at,
                 ),
             )
 
@@ -1067,6 +1179,28 @@ class SqliteSubmissionStore(SubmissionStore):
                 "embedding_model = ?, embedding_generated_at = ?, updated_at = ? "
                 "WHERE source_id = ? AND version = ?",
                 (json.dumps(embedding), model, now, now, source_id, version),
+            )
+
+    def update_link_health(
+        self,
+        source_id: str,
+        version: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        _reject_reserved_version(version)
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        normalized = _link_health_for_write(payload)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE submissions SET link_health = ?, link_health_checked_at = ?, "
+                "updated_at = ? WHERE source_id = ? AND version = ?",
+                (
+                    json.dumps(normalized),
+                    normalized.get("checked_at") or now,
+                    now,
+                    source_id,
+                    version,
+                ),
             )
 
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:

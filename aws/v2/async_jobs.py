@@ -22,6 +22,13 @@ JOB_CLEANUP_TRANSFERS = "cleanup_transfers"
 JOB_GENERATE_EMBEDDING = "generate_embedding"
 JOB_BUILD_EMBEDDING_SNAPSHOT = "build_embedding_snapshot"
 JOB_DISPATCH_EMBEDDING_REBUILD = "dispatch_embedding_rebuild"
+JOB_LINK_HEALTH = "link_health"
+JOB_LINK_HEALTH_SWEEP = "link_health_sweep"
+
+# How long a link_health result is considered current. A sweep skips records
+# checked inside this window unless it is run with force=True, so a nightly
+# schedule and a curator mashing the admin button cost the same.
+DEFAULT_LINK_HEALTH_MAX_AGE_HOURS = 24.0
 
 # Statuses a publish job accepts. "approved" is the state routes move a record
 # into before dispatching (curation approve, metadata edit, status update);
@@ -340,6 +347,27 @@ def enqueue_rebuild_dispatch_job(
     return get_job_dispatcher().dispatch(JOB_DISPATCH_EMBEDDING_REBUILD, payload)
 
 
+def enqueue_link_health_job(source_id: str, version: str) -> Dict[str, Any]:
+    """Probe one record's data sources (extensions proposal P1)."""
+    payload = {"source_id": source_id, "version": version}
+    return get_job_dispatcher().dispatch(JOB_LINK_HEALTH, payload)
+
+
+def enqueue_link_health_sweep_job(
+    force: bool = False,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Enqueue the meta-job that fans out one link-health job per record.
+
+    Same shape as the embedding rebuild dispatcher: the admin endpoint must
+    return inside API Gateway's 30s cap, so the scan lives in the worker.
+    """
+    payload: Dict[str, Any] = {"force": force}
+    if limit is not None:
+        payload["limit"] = limit
+    return get_job_dispatcher().dispatch(JOB_LINK_HEALTH_SWEEP, payload)
+
+
 def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if job_type == JOB_PROFILE_SUBMISSION:
         return _process_profile_submission(payload)
@@ -359,6 +387,10 @@ def process_job(job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return _process_build_embedding_snapshot(payload)
     if job_type == JOB_DISPATCH_EMBEDDING_REBUILD:
         return _process_dispatch_embedding_rebuild(payload)
+    if job_type == JOB_LINK_HEALTH:
+        return _process_link_health(payload)
+    if job_type == JOB_LINK_HEALTH_SWEEP:
+        return _process_link_health_sweep(payload)
     raise ValueError(f"Unknown job type: {job_type}")
 
 
@@ -1135,6 +1167,143 @@ def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, An
         "skipped_current": skipped_current,
         "enqueue_failures": failed_enqueue,
         "snapshot_job": snapshot_job,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Link health (extensions proposal P1)
+# ---------------------------------------------------------------------------
+
+def _link_health_max_age_seconds() -> float:
+    raw = os.environ.get("LINK_HEALTH_MAX_AGE_HOURS")
+    try:
+        hours = float(raw) if raw else DEFAULT_LINK_HEALTH_MAX_AGE_HOURS
+    except (TypeError, ValueError):
+        hours = DEFAULT_LINK_HEALTH_MAX_AGE_HOURS
+    return max(hours, 0.0) * 3600.0
+
+
+def _link_health_is_current(record: Dict[str, Any]) -> bool:
+    """True when this record was checked recently enough to skip."""
+    from v2.link_health import parse_link_health
+
+    block = parse_link_health(record)
+    if not block:
+        return False
+    checked_at = block.get("checked_at") or record.get("link_health_checked_at")
+    if not checked_at:
+        return False
+    try:
+        text = str(checked_at)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        stamp = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    return age < _link_health_max_age_seconds()
+
+
+def _process_link_health(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Probe one published record's data sources and store the result.
+
+    Never raises JobExecutionError: an unreachable host is a *result*
+    (``unverifiable``/``broken``), not a retryable failure, and retrying would
+    just re-probe a dead endpoint three more times. Only a missing record or an
+    unpublished one short-circuits, and those are reported, not retried.
+    """
+    from v2.link_health import check_record
+    from v2.store import get_store
+
+    source_id = payload["source_id"]
+    version = payload["version"]
+
+    store = get_store()
+    submission = store.get_submission(source_id, version)
+    if not submission:
+        return {"success": False, "error": f"Submission not found: {source_id} v{version}"}
+    if submission.get("status") != "published":
+        # Only published records make a claim about data availability.
+        return {
+            "success": False,
+            "source_id": source_id,
+            "version": version,
+            "skipped": "not_published",
+            "status": submission.get("status"),
+        }
+
+    result = check_record(submission)
+    try:
+        store.update_link_health(source_id, version, result)
+    except Exception as exc:
+        # The probe succeeded but the write did not — that IS worth a retry.
+        logger.exception("Failed to persist link_health for %s v%s", source_id, version)
+        raise JobExecutionError(f"Could not persist link_health: {exc}") from exc
+
+    return {
+        "success": True,
+        "source_id": source_id,
+        "version": version,
+        "status": result["status"],
+        "checked": len(result.get("checks") or []),
+        "checked_at": result.get("checked_at"),
+    }
+
+
+def _process_link_health_sweep(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Scan published records and fan out one JOB_LINK_HEALTH job per record.
+
+    Mirrors _process_dispatch_embedding_rebuild: runs in the worker (120s
+    budget) so the scan and the fan-out never touch the API request, and skips
+    records whose last check is still current unless `force` is set.
+    """
+    from v2.store import get_store
+
+    force = bool(payload.get("force"))
+    limit = payload.get("limit")
+
+    store = get_store()
+    all_subs = store.list_all(limit=100000)
+
+    enqueued = 0
+    skipped_current = 0
+    considered = 0
+    failed_enqueue: List[Dict[str, Any]] = []
+
+    for sub in all_subs:
+        if sub.get("status") != "published":
+            continue
+        mdata = sub.get("dataset_mdata") or {}
+        if isinstance(mdata, dict) and mdata.get("latest") is False:
+            continue
+        considered += 1
+        if not force and _link_health_is_current(sub):
+            skipped_current += 1
+            continue
+
+        source_id = sub.get("source_id")
+        version = sub.get("version")
+        if not source_id or not version:
+            continue
+        try:
+            enqueue_link_health_job(source_id, version)
+            enqueued += 1
+        except Exception as exc:
+            failed_enqueue.append({"source_id": source_id, "error": str(exc)})
+            logger.exception(
+                "Sweep: failed to enqueue link health job for %s v%s", source_id, version
+            )
+        if limit and enqueued >= int(limit):
+            break
+
+    return {
+        "success": True,
+        "considered": considered,
+        "enqueued": enqueued,
+        "skipped_current": skipped_current,
+        "enqueue_failures": failed_enqueue,
     }
 
 

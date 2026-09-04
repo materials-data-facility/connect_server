@@ -408,6 +408,13 @@ Resources:
             Schedule: rate(6 hours)
             Description: "Periodic cleanup of stale Globus transfers and ACL rules"
             Enabled: true
+        LinkHealthSweepSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(30 6 * * ? *)   # daily 06:30 UTC
+            Description: "Nightly link-health sweep of published datasets (skips records checked <24h ago)"
+            Enabled: true
+            Input: '{"job": "link_health_sweep", "payload": {}}'
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SubmissionsTable

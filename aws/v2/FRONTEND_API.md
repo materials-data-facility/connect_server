@@ -288,6 +288,11 @@ Both accept optional auth. When authenticated, the response includes permissions
 - `ml` — ML metadata summary (only for ML-ready datasets)
 - `profile_summary` — file-level profiling data (only for profiled datasets)
 - `methods`, `facility` — experimental context
+- `link_health` — data availability, `{"status": "ok"|"degraded"|"broken"|"unverifiable", "checked_at": "<iso>"}`.
+  Absent on datasets that have never been checked (do not render "unverified" for a missing key — render
+  nothing). `unverifiable` means MDF could not check anonymously (e.g. a Globus collection that requires
+  consent); it is **not** a quality signal and must not be styled as a problem. The per-URL detail behind the
+  status is curator-only (see [Link Health](#link-health-curator)).
 
 **`permissions` object:**
 
@@ -298,6 +303,70 @@ Always present. All false when unauthenticated.
 | `can_edit` | bool | User can edit metadata (owner or curator, status is `pending_curation`/`rejected`/`published`) |
 | `can_delete` | bool | User can soft-delete (curator only) |
 | `can_curate` | bool | User can approve/reject (curator and status is `pending_curation`) |
+
+#### Agent card (`?format=agent`)
+
+```
+GET /card/{source_id}?version={optional}&format=agent
+```
+
+Same record, same visibility rules, same `permissions` block — a different projection, aimed at LLM/agent
+consumers (the `mdf` MCP server, `mdf import`, notebook assistants) that pay per token and want code they can
+run. `format` accepts `full` (the default, byte-identical to the response above) or `agent`; anything else is
+a `400`. An agent response additionally carries `"format": "agent"` at the top level.
+
+Differences from the full card: no `stats`/`links` indirection, no `profile_summary`, `description` truncated
+to 600 characters on a word boundary (with a trailing `…`), and two extra blocks.
+
+**Response:**
+```json
+{
+  "success": true,
+  "format": "agent",
+  "card": {
+    "source_id": "levine_abo2179_database_v2.1",
+    "version": "1.0",
+    "title": "ABO2179 Electroadhesives Database",
+    "doi": "10.18126/jx14-t0v8",
+    "license": {"name": "CC-BY-4.0", "identifier": "CC-BY-4.0", "url": "https://..."},
+    "organization": "MDF Open",
+    "authors": [{"name": "Daniel Levine", "orcid": "0000-...", "affiliations": ["..."]}],
+    "keywords": ["electroadhesion"],
+    "description": "Database of electroadhesives…",
+    "size_bytes": 1048576,
+    "file_count": 3,
+    "data_sources": ["https://data.materialsdatafacility.org/..."],
+    "download_url": "https://data.materialsdatafacility.org/...",
+    "loading_recipe": {
+      "python": "# pip install mdf-cli\nfrom mdf import MDFAgent\n\nagent = MDFAgent()\nagent.clone(\"levine_abo2179_database_v2.1\", version=\"1.0\")",
+      "shell": "pip install mdf-cli && mdf clone levine_abo2179_database_v2.1"
+    },
+    "citation_apa": "Levine, D., & Bhorkar, A. (2023). ABO2179 ... Materials Data Facility.",
+    "link_health": {"status": "ok", "checked_at": "2026-09-04T02:11:00Z"},
+    "urls": {
+      "landing": "https://www.materialsdatafacility.org/detail/levine_abo2179_database_v2.1?version=1.0",
+      "citation": "/citation/levine_abo2179_database_v2.1",
+      "files": "/preview/levine_abo2179_database_v2.1/files"
+    },
+    "ml": {"data_format": "csv", "task_type": ["regression"], "domain": [], "n_items": 5000,
+           "short_name": "perovskite_bg",
+           "splits": [{"type": "train", "path": "train.csv", "n_items": 4000}],
+           "keys": [{"name": "bandgap", "role": "target"}]},
+    "columns": [{"name": "composition", "dtype": "object"}, {"name": "bandgap", "dtype": "float64"}]
+  },
+  "permissions": {"can_edit": false, "can_delete": false, "can_curate": false}
+}
+```
+
+Notes:
+- Every key above except `ml` and `columns` is always present; unknown values are `null`/`[]`/`0` rather than
+  omitted, so consumers never branch on absence.
+- `loading_recipe.python` routes ML-ready datasets through `foundry` (`Foundry().get_dataset(...)`) and
+  everything else through `mdf clone`, because that is the only path that works for an arbitrary file tree.
+- `urls.landing` is an absolute portal URL (`PORTAL_URL`, version-pinned when the record is versioned).
+  `urls.citation` / `urls.files` are API-relative, matching the `links` convention on the full card.
+- `columns` comes from the stored `dataset_profile` (first profiled file with columns), so it is absent on
+  migrated records that have never been profiled.
 
 ---
 
@@ -978,6 +1047,76 @@ Authorization: Bearer <token>
   }
 }
 ```
+
+---
+
+### Link Health (Curator)
+
+Data availability reporting. Curator-only, because the per-URL detail exposes internal paths and upstream
+error strings; the public half is the `link_health` key on the dataset card.
+
+```
+POST /admin/link-health/run        {"force": false, "limit": null}
+GET  /admin/link-health/summary
+Authorization: Bearer <token>
+```
+
+`POST /admin/link-health/run` enqueues one sweep meta-job and returns immediately — the scan and the
+per-record fan-out happen in the async worker, exactly like `/admin/embeddings/rebuild`, because a full-corpus
+scan does not fit in API Gateway's 30s window. The sweep skips records checked within the last
+`LINK_HEALTH_MAX_AGE_HOURS` (default 24) unless `force` is true; `limit` caps the fan-out. A dispatch failure
+returns `200` with `{"success": false, "error": "..."}`, matching the embedding endpoints.
+
+**`POST /admin/link-health/run` response:**
+```json
+{
+  "success": true,
+  "force": false,
+  "limit": null,
+  "sweep_job": {"mode": "sqs", "queued": true, "job_type": "link_health_sweep"},
+  "message": "Link health sweep dispatched to async worker. Poll /admin/link-health/summary to watch results land."
+}
+```
+
+**`GET /admin/link-health/summary` response:**
+```json
+{
+  "success": true,
+  "published_total": 904,
+  "checked": 870,
+  "unchecked": 34,
+  "by_status": {"ok": 800, "degraded": 24, "broken": 18, "unverifiable": 28},
+  "oldest_checked_at": "2026-09-01T04:00:00Z",
+  "newest_checked_at": "2026-09-04T04:00:00Z",
+  "broken_sample": [
+    {
+      "source_id": "old_dataset_2018",
+      "version": "1.0",
+      "status": "broken",
+      "checked_at": "2026-09-04T04:00:00Z",
+      "failed_checks": [{"url": "https://...", "http_status": 404, "error": null}]
+    }
+  ],
+  "broken_total": 42
+}
+```
+
+Counts cover published, latest records only. `broken_sample` holds the 50 most recently checked datasets whose
+status is `broken` **or** `degraded` (one dead source out of four is still work to do), most recent first;
+`broken_total` is the un-truncated count.
+
+Status semantics — the aggregate never claims more than was observed:
+
+| Status | Meaning |
+|--------|---------|
+| `ok` | Every URL MDF could reach answered. |
+| `degraded` | Some URLs answered, at least one refused (4xx/5xx). |
+| `broken` | Nothing answered and at least one URL refused. |
+| `unverifiable` | Nothing could be checked anonymously — no data sources, a Globus collection outside the NCSA MDF endpoint, or transport failures (timeout/DNS/TLS). **Not** a quality signal. |
+
+Timeouts and connection errors are deliberately `unverifiable`, never `broken`: a false "broken" is worse than
+silence. At most 5 URLs are probed per record (`download_url` first, then `data_sources`), HEAD with a ranged
+`GET` fallback, 10s timeout, no auth.
 
 ---
 

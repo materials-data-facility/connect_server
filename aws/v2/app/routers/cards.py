@@ -8,7 +8,7 @@ from v2.app.auth import can_view_dataset, get_optional_auth, is_curator
 from v2.app.deps import get_submission_store, guard_source_id_path
 from v2.app.models import AuthContext
 from v2.citation import generate_apa, generate_bibtex, generate_datacite_xml, generate_ris
-from v2.dataset_card import build_dataset_card
+from v2.dataset_card import build_agent_card, build_dataset_card
 from v2.store import SubmissionStore
 from v2.submission_utils import latest_version
 
@@ -98,17 +98,27 @@ def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> D
 async def get_card(
     source_id: str,
     version: Optional[str] = Query(None),
+    format: Optional[str] = Query(
+        None,
+        description='Card shape: omitted/"full" for the UI card, "agent" for the compact machine-readable one.',
+    ),
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     if version and version.lower() == "latest":
         version = None
 
+    fmt = (format or "full").lower()
+    if fmt not in ("full", "agent"):
+        raise HTTPException(400, "format must be 'full' or 'agent'")
+
     record, canonical = _resolve_published(store, source_id, version, auth)
     if not record:
         raise HTTPException(404, "Dataset not found")
 
-    card = build_dataset_card(record)
+    # Same record, same visibility gate (_resolve_published above) — only the
+    # projection differs, so ?format=agent needs no auth change.
+    card = build_agent_card(record) if fmt == "agent" else build_dataset_card(record)
 
     # Fire-and-forget view count increment (use the canonical id in case the
     # request came in on a legacy id).
@@ -118,6 +128,8 @@ async def get_card(
         logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
     resp = {"success": True, "card": card, "permissions": _build_permissions(auth, record)}
+    if fmt == "agent":
+        resp["format"] = "agent"
     if canonical and canonical != source_id:
         resp["canonical_source_id"] = canonical
         resp["redirected_from"] = source_id

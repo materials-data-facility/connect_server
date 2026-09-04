@@ -461,3 +461,130 @@ async def rebuild_snapshot_only(
         "snapshot_job": job,
         "message": "Snapshot build enqueued. Poll /admin/embeddings/status to see the new snapshot.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Link health / data availability (curator-only) — extensions proposal P1
+#
+# The single claim MDF must never get wrong is "this data is here". These two
+# endpoints are the maintainer half of that: one kicks off a sweep, the other
+# reports what the sweep found. The probing itself is in v2/link_health.py and
+# runs in the async worker.
+# ---------------------------------------------------------------------------
+
+class LinkHealthRunRequest(BaseModel):
+    force: bool = False  # Re-probe records whose last check is still current
+    limit: Optional[int] = None  # Max records to enqueue in this sweep
+
+
+@router.post("/admin/link-health/run")
+async def run_link_health_sweep(
+    body: Optional[LinkHealthRunRequest] = None,
+    auth: AuthContext = Depends(require_curator),
+):
+    """Enqueue a link-health sweep over every published, latest record.
+
+    Returns immediately: the scan and the per-record fan-out happen in the
+    async worker, exactly like /admin/embeddings/rebuild, because a scan of the
+    whole corpus does not fit in API Gateway's 30s window.
+    """
+    from v2.async_jobs import enqueue_link_health_sweep_job
+
+    params = body or LinkHealthRunRequest()
+
+    try:
+        sweep_job = enqueue_link_health_sweep_job(force=params.force, limit=params.limit)
+    except Exception as exc:
+        logger.exception("Failed to enqueue link health sweep job")
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "force": params.force,
+        "limit": params.limit,
+        "sweep_job": sweep_job,
+        "message": (
+            "Link health sweep dispatched to async worker. "
+            "Poll /admin/link-health/summary to watch results land."
+        ),
+    }
+
+
+@router.get("/admin/link-health/summary")
+async def link_health_summary(
+    auth: AuthContext = Depends(require_curator),
+    store: SubmissionStore = Depends(get_submission_store),
+):
+    """Counts by status plus the 50 most recently checked broken datasets.
+
+    "Broken" here means degraded or broken — a dataset with one dead source out
+    of four is still something a curator has to fix, and burying it under a
+    healthier aggregate would hide the work.
+    """
+    from v2.link_health import STATUSES, parse_link_health
+
+    all_submissions = store.list_all(limit=100000)
+
+    by_status: dict[str, int] = {status: 0 for status in STATUSES}
+    published_total = 0
+    unchecked = 0
+    broken: list[dict] = []
+    oldest_checked_at: Optional[str] = None
+    newest_checked_at: Optional[str] = None
+
+    for sub in all_submissions:
+        if sub.get("status") != "published":
+            continue
+        mdata = sub.get("dataset_mdata") or {}
+        if isinstance(mdata, dict) and mdata.get("latest") is False:
+            continue
+        published_total += 1
+
+        block = parse_link_health(sub)
+        if not block:
+            unchecked += 1
+            continue
+
+        status = block["status"]
+        by_status[status] = by_status.get(status, 0) + 1
+
+        checked_at = block.get("checked_at") or ""
+        if checked_at:
+            if oldest_checked_at is None or checked_at < oldest_checked_at:
+                oldest_checked_at = checked_at
+            if newest_checked_at is None or checked_at > newest_checked_at:
+                newest_checked_at = checked_at
+
+        if status in ("broken", "degraded"):
+            failed = [
+                {
+                    "url": c.get("url"),
+                    "http_status": c.get("http_status"),
+                    "error": c.get("error"),
+                }
+                for c in (block.get("checks") or [])
+                if c.get("state") == "broken"
+            ]
+            broken.append({
+                "source_id": sub.get("source_id"),
+                "version": sub.get("version"),
+                "status": status,
+                "checked_at": block.get("checked_at"),
+                "failed_checks": failed,
+            })
+
+    # Most recently checked first: that is the order a curator works in after
+    # kicking off a sweep.
+    broken.sort(key=lambda item: item.get("checked_at") or "", reverse=True)
+
+    return {
+        "success": True,
+        "published_total": published_total,
+        "checked": published_total - unchecked,
+        "unchecked": unchecked,
+        "by_status": by_status,
+        "oldest_checked_at": oldest_checked_at,
+        "newest_checked_at": newest_checked_at,
+        "broken_sample": broken[:50],
+        "broken_total": len(broken),
+    }

@@ -542,3 +542,62 @@ class TestSsmAccessor:
             "region": "us-west-2",
             "name": "/mdf/staging/sync-lock",
         }
+
+
+# ---------------------------------------------------------------------------
+# Link health / data availability routes (extensions proposal P1).
+#
+# The behaviour of the sweep and the summary aggregation is covered in
+# test_v2_link_health.py; these tests only pin the admin surface itself —
+# curator gating, the response envelope, and the fact that neither route ever
+# probes the network from inside the request.
+# ---------------------------------------------------------------------------
+
+class TestLinkHealthRoutes:
+    def test_run_and_summary_require_a_curator(self, env, monkeypatch):
+        monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
+        monkeypatch.setenv("CURATOR_USER_IDS", "curator-user")
+        client = TestClient(app)
+        headers = {"X-User-Id": "nobody"}
+        assert client.post("/admin/link-health/run", headers=headers).status_code == 403
+        assert client.get("/admin/link-health/summary", headers=headers).status_code == 403
+
+    def test_run_returns_the_sweep_job_without_scanning(self, env, monkeypatch):
+        """The endpoint must return inside API Gateway's 30s cap, so it only enqueues."""
+        from v2 import async_jobs
+
+        calls: list = []
+        monkeypatch.setattr(
+            async_jobs,
+            "enqueue_link_health_sweep_job",
+            lambda force=False, limit=None: calls.append((force, limit))
+            or {"mode": "sqs", "queued": True, "job_type": "link_health_sweep"},
+        )
+        client = TestClient(app)
+        resp = client.post("/admin/link-health/run", headers=CURATOR_HEADERS)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["success"] is True
+        assert body["sweep_job"]["queued"] is True
+        assert calls == [(False, None)]
+
+    def test_run_reports_a_dispatch_failure_instead_of_500ing(self, env, monkeypatch):
+        from v2 import async_jobs
+
+        def boom(force=False, limit=None):
+            raise RuntimeError("queue unavailable")
+
+        monkeypatch.setattr(async_jobs, "enqueue_link_health_sweep_job", boom)
+        resp = TestClient(app).post("/admin/link-health/run", headers=CURATOR_HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"success": False, "error": "queue unavailable"}
+
+    def test_summary_envelope_on_an_empty_corpus(self, env):
+        body = TestClient(app).get(
+            "/admin/link-health/summary", headers=CURATOR_HEADERS,
+        ).json()
+        assert body["success"] is True
+        assert body["published_total"] == 0
+        assert body["unchecked"] == 0
+        assert body["broken_sample"] == []
+        assert set(body["by_status"]) == {"ok", "degraded", "broken", "unverifiable"}

@@ -519,6 +519,16 @@ def migrate_v1_payload(old: dict) -> dict:
     # MDF block
     if mdf.get("organization"):
         result["organization"] = mdf["organization"]
+
+    # Collection default: everything published through "MDF Open" was accepted
+    # under CC-BY-4.0, but v1 records rarely carried a rights entry. Fill the
+    # gap ONLY when no license came through; never override an explicit value.
+    if not result.get("license") and (result.get("organization") or "").strip() == "MDF Open":
+        result["license"] = {
+            "name": "CC-BY-4.0",
+            "identifier": "CC-BY-4.0",
+            "url": "https://creativecommons.org/licenses/by/4.0/",
+        }
     elif mdf.get("organizations"):
         orgs = mdf["organizations"]
         if isinstance(orgs, list) and orgs:

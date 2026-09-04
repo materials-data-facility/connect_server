@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from v2.doi_utils import landing_url
 from v2.metadata import parse_metadata, to_datacite
 from v2.search_client import _detail_base
 from v2.store import get_store as get_submission_store
@@ -152,6 +153,7 @@ def _mint_doi_for_submission(
             result = client.mint_doi(
                 source_id=source_id,
                 metadata=doi_metadata,
+                url=landing_url(source_id),
                 publish=True,
                 related_identifiers=doi_metadata.get("relatedIdentifiers"),
             )
@@ -177,9 +179,11 @@ def _mint_doi_for_submission(
             result = client.mint_doi(
                 source_id=source_id,
                 metadata=doi_metadata,
+                url=landing_url(source_id, version),
                 publish=True,
                 doi_suffix=version_suffix,
                 related_identifiers=related,
+                source_version=version,
             )
 
             # Also update the dataset DOI metadata to reflect latest version
@@ -199,7 +203,7 @@ def _mint_doi_for_submission(
                 client.update_metadata(
                     doi=dataset_doi,
                     metadata=doi_metadata,
-                    url=f"{_portal_url()}/{source_id}",
+                    url=landing_url(source_id),
                     related_identifiers=has_version,
                 )
                 result["dataset_doi"] = dataset_doi
@@ -214,7 +218,7 @@ def _mint_doi_for_submission(
             update_result = client.update_metadata(
                 doi=dataset_doi,
                 metadata=doi_metadata,
-                url=f"{_portal_url()}/{source_id}",
+                url=landing_url(source_id),
             )
             client.close()
             return {
