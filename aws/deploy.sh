@@ -367,10 +367,21 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     # Resolve DataCite credentials from SSM (namespaced /mdf/{env}/datacite-*).
     # Secrets are NEVER committed to samconfig.toml — they live in SSM only.
     log "Resolving DataCite credentials from SSM (/mdf/$env/datacite-*)..."
+    #
+    # --with-decryption on EVERY read, not just the obvious secrets. Without it a
+    # SecureString parameter returns its KMS ciphertext instead of its value, and
+    # nothing here would notice: the blob is a non-empty string, so the
+    # credentials-present guard below passes and the ciphertext is deployed as the
+    # DataCite username. The only symptom is DataCite answering 404 to every mint
+    # at publish time — long after the deploy reported success. That exact failure
+    # cost a staging outage once. The flag is a no-op on plain String parameters,
+    # so applying it uniformly removes the question of which ones were stored as
+    # SecureString.
     local datacite_user datacite_pass datacite_url datacite_prefix
     datacite_user=$(aws ssm get-parameter \
         --name "/mdf/$env/datacite-username" \
         --region "$REGION" \
+        --with-decryption \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     datacite_pass=$(aws ssm get-parameter \
         --name "/mdf/$env/datacite-password" \
@@ -380,11 +391,31 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     datacite_url=$(aws ssm get-parameter \
         --name "/mdf/$env/datacite-api-url" \
         --region "$REGION" \
+        --with-decryption \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
     datacite_prefix=$(aws ssm get-parameter \
         --name "/mdf/$env/datacite-prefix" \
         --region "$REGION" \
+        --with-decryption \
         --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+    # An SSM value read without --with-decryption comes back as a base64 KMS
+    # blob that always begins "AQICAH". It is a perfectly non-empty string, so
+    # every emptiness check below happily passes and the blob ships as a real
+    # credential — the deploy reports success and DOI minting 404s later, at
+    # publish time. Catch it here instead of in the worker logs.
+    assert_not_ciphertext() {
+        local name="$1" value="$2"
+        if [[ "$value" == AQICAH* ]]; then
+            error "SSM value for $name looks like KMS ciphertext, not plaintext.
+  It was read without --with-decryption, or the caller lacks kms:Decrypt.
+  Deploying this would set $name to a base64 blob and break DOI minting at
+  publish time with a DataCite 404, long after this deploy reports success."
+        fi
+    }
+    assert_not_ciphertext "datacite-username" "$datacite_user"
+    assert_not_ciphertext "datacite-password" "$datacite_pass"
+    assert_not_ciphertext "globus-client-secret" "$globus_secret"
 
     # When DOIs are minted for real (UseMockDatacite=false — staging and prod),
     # DataCite credentials are mandatory. Refuse to deploy with the template's

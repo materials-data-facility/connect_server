@@ -155,6 +155,10 @@ Parameters:
     Type: String
     Default: "https://www.materialsdatafacility.org/curation"
     Description: "Curation review page URL (curators are redirected here)."
+  SearchSubjectBase:
+    Type: String
+    Default: ""
+    Description: "Overrides the Globus Search subject base ({base}/{source_id}). The subject is the index's IDENTITY KEY, so it must stay byte-stable: change it and every existing entry is orphaned, duplicated on the next publish, and un-deletable. Set this whenever PortalUrl points somewhere other than the canonical portal (e.g. a staging frontend), so display URLs can move without touching dataset identity. Blank = derive from PortalUrl."
   EnableEmails:
     Type: String
     Default: "false"
@@ -272,7 +276,7 @@ Resources:
             - IsProd
             - "https://materialsdatafacility.org,https://app.materialsdatafacility.org"
             - "*"
-          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          LOG_LEVEL: !If [IsDevEnvironment, DEBUG, INFO]
           SEARCH_MAX_RESULTS: "50"
           SEARCH_MAX_DATASET_SCAN: "1000"
           SEARCH_MAX_STREAM_SCAN: "2000"
@@ -280,6 +284,7 @@ Resources:
           CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
           PORTAL_URL: !Ref PortalUrl
           CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SEARCH_SUBJECT_BASE: !Ref SearchSubjectBase
           SES_REGION: !Ref AWS::Region
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
@@ -320,7 +325,8 @@ Resources:
             Effect: Allow
             Action:
               - ses:SendEmail
-            Resource: "*"
+              - ses:SendRawEmail
+            Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
         # Read-only view of the v1->v2 sync state for /admin/stats and
         # /admin/sync. The GitHub Actions runner is the only writer.
         - Statement:
@@ -373,11 +379,12 @@ Resources:
           CURATOR_GROUP_IDS: !If [IsDevAuth, "", !Ref CuratorGroupIds]
           CURATOR_USER_IDS: !If [IsDevAuth, "", !Ref CuratorUserIds]
           REQUIRED_GROUP_MEMBERSHIP: !If [IsDevAuth, "", !Ref RequiredGroupMembership]
-          LOG_LEVEL: !If [IsProd, INFO, DEBUG]
+          LOG_LEVEL: !If [IsDevEnvironment, DEBUG, INFO]
           SES_FROM_EMAIL: !If [EmailsEnabled, !Ref SesFromEmail, ""]
           CURATOR_EMAILS: !If [EmailsEnabled, !Ref CuratorEmails, ""]
           PORTAL_URL: !Ref PortalUrl
           CURATION_PORTAL_URL: !Ref CurationPortalUrl
+          SEARCH_SUBJECT_BASE: !Ref SearchSubjectBase
           SES_REGION: !Ref AWS::Region
           OPENAI_API_KEY: !Ref OpenAIApiKey
           EMBEDDING_MODEL: !Ref EmbeddingModel
@@ -416,7 +423,8 @@ Resources:
             Effect: Allow
             Action:
               - ses:SendEmail
-            Resource: "*"
+              - ses:SendRawEmail
+            Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
 
   # ===========================================================================
   # HTTP API (v2 - cheaper than REST API v1)
@@ -430,6 +438,9 @@ Resources:
       DefaultRouteSettings:
         ThrottlingRateLimit: !Ref HttpApiThrottleRate
         ThrottlingBurstLimit: !Ref HttpApiThrottleBurst
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
       # Literals only: SAM's transform mangles intrinsics (!If) inside
       # CorsConfiguration into an invalid x-amazon-apigateway-cors body that
       # API Gateway silently ignores — the deployed API ends up with NO
@@ -577,6 +588,23 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/${AsyncWorkerFunction}"
       RetentionInDays: !Ref LogRetentionDays
 
+  HttpApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/mdf-connect-v2-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # INDEX MIGRATION (one-time, on stacks deployed before curation-queue-index):
+  # DynamoDB cannot change an existing GSI's projection or keys in place, and
+  # CloudFormation permits only ONE GSI create or delete per stack update. So
+  # the three pre-existing indexes (user-submissions, org-submissions,
+  # legacy-source-id-index) intentionally keep ProjectionType: ALL, and the only
+  # index change is the status-submissions -> curation-queue-index swap, done in
+  # two deploys: deploy 1 with the status-submissions block deleted (already the
+  # state of this file) removes the old index; deploy 2 adds curation-queue-index.
+  # If a single deploy is attempted with both, CloudFormation rejects it. After
+  # deploy 2 run `v2/scripts/backfill_record_shape.py --execute` so existing
+  # pending/approved/rejected rows carry curation_queue and appear in the queue.
   SubmissionsTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -584,6 +612,7 @@ Resources:
     Properties:
       TableName: !Sub "mdf-submissions-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
       SSESpecification:
         SSEEnabled: true
       AttributeDefinitions:
@@ -597,7 +626,7 @@ Resources:
           AttributeType: S
         - AttributeName: updated_at
           AttributeType: S
-        - AttributeName: status
+        - AttributeName: curation_queue
           AttributeType: S
         - AttributeName: legacy_source_id
           AttributeType: S
@@ -623,14 +652,18 @@ Resources:
               KeyType: RANGE
           Projection:
             ProjectionType: ALL
-        - IndexName: status-submissions
+        - IndexName: curation-queue-index
           KeySchema:
-            - AttributeName: status
+            - AttributeName: curation_queue
               KeyType: HASH
             - AttributeName: updated_at
               KeyType: RANGE
           Projection:
-            ProjectionType: ALL
+            # Keys only: the store hydrates full items via BatchGetItem, and the
+            # queue is small (pending/approved/rejected only) so the extra read
+            # is cheap. Key attributes and non-existent top-level attributes
+            # (title lives inside dataset_mdata) must not be listed under INCLUDE.
+            ProjectionType: KEYS_ONLY
         # Sparse index: only datasets migrated from v1 carry legacy_source_id,
         # so old (pre-migration) source_ids resolve to their promoted v2 record.
         - IndexName: legacy-source-id-index
@@ -649,6 +682,7 @@ Resources:
     Properties:
       TableName: !Sub "mdf-streams-${Environment}"
       BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
       SSESpecification:
         SSEEnabled: true
       AttributeDefinitions:

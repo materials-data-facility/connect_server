@@ -9,8 +9,9 @@ from fastapi.responses import JSONResponse
 from v2.app.auth import get_auth, is_curator, is_submitter
 from v2.app.middleware import configure_app_middleware
 
-_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, _log_level, logging.INFO))
+from v2.config import configure_logging
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MDF Connect v2")

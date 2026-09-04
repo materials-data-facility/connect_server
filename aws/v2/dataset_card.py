@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from v2.metadata import parse_metadata
 from v2.store import get_store
+from v2.submission_utils import record_previous_version, record_root_version
 
 
 def _parse_size(total_bytes: int) -> str:
@@ -74,6 +75,12 @@ def build_dataset_card(record: Dict[str, Any]) -> Dict[str, Any]:
         "status": record.get("status"),
         "created_at": record.get("created_at"),
         "updated_at": record.get("updated_at"),
+        # Version chain, as bare version strings (N3). Read from the top-level
+        # record attributes, normalizing the legacy "{source_id}-{version}"
+        # composite on rows the backfill has not reached. Never acl — see
+        # _public_submission_view.
+        "root_version": record_root_version(record),
+        "previous_version": record_previous_version(record),
         # Quick stats
         "stats": {
             "file_types": _extract_file_types(meta.data_sources),

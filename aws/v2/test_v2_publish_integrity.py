@@ -925,7 +925,7 @@ class TestPublishJobSerialization:
         # One entry for the dataset, describing the newest version
         assert len(mock_search._entries) == 1
         entry = mock_search.get_entry(source_id)
-        assert entry["content"]["mdf"]["version"] == "2.0"
+        assert entry["content"]["version"] == "2.0"
 
         # Both records published, and no lock left behind
         for version in ("1.0", "2.0"):

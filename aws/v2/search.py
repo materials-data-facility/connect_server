@@ -17,6 +17,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from v2.metadata import parse_metadata
+from v2.submission_utils import resolve_record_acl
 from v2.store import get_store
 from v2.stream_store import get_stream_store
 
@@ -54,7 +55,9 @@ BROWSE_QUERY = "*"
 # the DynamoDB fallback mirrors it via _record_recency, so both paths agree on
 # what "newest" means. Adding a ranking is a new entry here plus its backing
 # field — the router, search_all and the clients need no changes.
-_RECENCY_SORT = [{"field_name": "mdf.ingest_date", "order": "desc"}]
+# Field name is the FLAT index field written by search_client.build_gmeta_entry
+# (it was mdf.ingest_date before the content flatten).
+_RECENCY_SORT = [{"field_name": "ingest_date", "order": "desc"}]
 
 SORT_STRATEGIES: Dict[str, Optional[List[Dict[str, str]]]] = {
     "relevance": None,
@@ -64,7 +67,7 @@ SORT_STRATEGIES: Dict[str, Optional[List[Dict[str, str]]]] = {
     # so there is no field to sort on there yet. Falling back to recency keeps
     # the option selectable and honest instead of returning an arbitrary order.
     # To implement: write the counter into the GMeta entry, then point this
-    # entry at [{"field_name": "mdf.view_count", "order": "desc"}].
+    # entry at [{"field_name": "view_count", "order": "desc"}].
     "most_viewed": _RECENCY_SORT,
 }
 
@@ -77,7 +80,7 @@ def resolve_sort(sort: Optional[str]) -> Optional[List[Dict[str, str]]]:
 
 
 def _record_recency(record: Dict[str, Any]) -> str:
-    """Recency key for a stored submission, mirroring mdf.ingest_date.
+    """Recency key for a stored submission, mirroring the index's ingest_date.
 
     ISO-8601 timestamps sort correctly as strings. Missing timestamps sort last.
     """
@@ -96,30 +99,33 @@ def _is_searchable_dataset(record: Dict[str, Any]) -> bool:
 def dataset_is_public(record: Dict[str, Any]) -> bool:
     """True only when a dataset is publicly visible (acl empty/absent or "public").
 
-    This is the single definition of "anyone may see this dataset", mirroring the
-    ``visible_to`` rule that ``search_client.build_gmeta_entry`` writes into
-    Globus Search. Everything that serves dataset content to a possibly
-    anonymous caller — the local search fallback, cards, citations, detail
-    pages, previews — must apply this same rule, or a restricted-but-published
-    dataset leaks whenever the caller takes a path Globus Search does not gate.
+    This is the single definition of "anyone may see this dataset".
+    ``search_client.resolve_visible_to`` derives the ``visible_to`` it writes
+    into Globus Search from this function rather than re-deriving the rule, so
+    the index and the server can never disagree. Everything that serves dataset
+    content to a possibly anonymous caller — the local search fallback, the
+    author index behind /related, the embedding snapshot behind semantic and
+    similar-dataset search, cards, citations, detail pages, previews — must
+    apply this same rule, or a restricted-but-published dataset leaks whenever
+    the caller takes a path Globus Search does not gate.
 
-    Fails closed: a record whose stored metadata cannot be read is treated as
-    non-public. ``parse_metadata`` swallows malformed metadata and returns an
-    empty acl, which would otherwise read as "public" — exactly the wrong
-    default for a record we cannot inspect.
+    Reads the TOP-LEVEL ``acl`` record attribute (v2.1 shape) and falls back to
+    the legacy ``dataset_mdata.acl`` for rows the backfill has not reached, so
+    an authorization decision no longer depends on JSON-parsing a user-editable
+    blob. See ``submission_utils.resolve_record_acl``.
+
+    Fails closed: a record whose ACL cannot be read is treated as non-public.
+    The previous ``parse_metadata(record).acl or ["public"]`` swallowed
+    malformed metadata into an empty acl, which read as "public" — exactly the
+    wrong default for a record we cannot inspect.
     """
-    raw = record.get("dataset_mdata") if isinstance(record, dict) else None
-    if raw:
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                return False
-        if not isinstance(raw, dict):
-            return False
+    if not isinstance(record, dict):
+        return False
     try:
-        acl = parse_metadata(record).acl or ["public"]
+        acl = resolve_record_acl(record)
     except Exception:
+        return False
+    if acl is None:
         return False
     return "public" in acl
 
@@ -604,7 +610,15 @@ def _author_keys_for_record(record: Dict[str, Any]) -> List[str]:
 
 
 def build_author_index(limit: int = 100000) -> Dict[str, Any]:
-    """Scan published submissions and return an author_key -> [row...] index."""
+    """Scan published, publicly visible submissions into an author_key -> [row...] index.
+
+    The index is a single process-wide cache shared by every caller of
+    ``GET /datasets/{id}/related``, an endpoint that serves anonymous requests —
+    so a restricted dataset in here is a leak to everyone, not just to whoever
+    triggered the rebuild. Published is therefore not sufficient:
+    ``dataset_is_public`` gates entry, exactly as it does for the local search
+    fallback and the Globus index's ``visible_to``.
+    """
     store = get_store()
     all_subs = store.list_all(limit=limit)
 
@@ -613,6 +627,8 @@ def build_author_index(limit: int = 100000) -> Dict[str, Any]:
 
     for record in all_subs:
         if record.get("status") != "published":
+            continue
+        if not dataset_is_public(record):
             continue
         mdata = record.get("dataset_mdata") or {}
         if isinstance(mdata, dict) and mdata.get("latest") is False:

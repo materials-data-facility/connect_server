@@ -142,7 +142,15 @@ class DatasetMetadata(BaseModel):
     # External Import Provenance
     external: Optional[ExternalSource] = None
 
-    # Versioning
+    # Versioning.
+    #
+    # previous_version/root_version are accepted here for backwards
+    # compatibility with payloads and stored blobs that still carry them, but
+    # they are NOT where the version chain lives: they are top-level record
+    # attributes in the v2.1 record shape and are stripped from the stored blob
+    # on write. Read them with submission_utils.record_root_version /
+    # record_previous_version, never off this model. See "Record shape (v2.1)"
+    # in v2.md.
     version: Optional[str] = None
     previous_version: Optional[str] = None
     root_version: Optional[str] = None
@@ -151,7 +159,13 @@ class DatasetMetadata(BaseModel):
     # MDF Platform
     organization: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    # Accepted on submit as the caller's requested visibility, then promoted to
+    # the top-level `acl` record attribute and stripped from the stored blob.
+    # Authorization reads submission_utils.resolve_record_acl /
+    # v2.search.dataset_is_public — never this field.
     acl: List[str] = Field(default_factory=list)
+    # User metadata ONLY. Keys namespaced `mdf_*` are reserved for system
+    # identity and rejected by the submit/edit routes.
     extensions: Dict[str, Any] = Field(default_factory=dict)
 
     # Submission flags (not stored in metadata proper)
@@ -395,7 +409,7 @@ def migrate_v1_payload(old: dict) -> dict:
     - mdf.organization -> organization
     - mdf.instruments -> methods
     - mdf.facility -> facility
-    - mdf.acl -> acl
+    - mdf.acl -> acl (promoted to a top-level record attribute on write)
     - mdf.doi -> (stored separately on record)
     - projects.foundry -> ml
     - custom -> extensions
@@ -516,10 +530,15 @@ def migrate_v1_payload(old: dict) -> dict:
         result["facility"] = mdf["facility"]
     if mdf.get("acl"):
         result["acl"] = mdf["acl"]
+    # Dataset identity goes to TOP-LEVEL fields, not into extensions (N4).
+    # extensions is user metadata and is deep-merged wholesale on edit, so
+    # identity kept there was rewritable by the submitter. The submit route
+    # still accepts extensions.mdf_source_id/mdf_source_name as deprecated
+    # aliases from released clients; this migration no longer produces them.
     if mdf.get("source_id"):
-        result.setdefault("extensions", {})["mdf_source_id"] = mdf["source_id"]
+        result["source_id"] = mdf["source_id"]
     if mdf.get("source_name"):
-        result.setdefault("extensions", {})["mdf_source_name"] = mdf["source_name"]
+        result["source_name"] = mdf["source_name"]
 
     # Data sources
     if old.get("data_sources"):

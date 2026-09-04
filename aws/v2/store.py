@@ -1,4 +1,6 @@
+import base64
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -8,7 +10,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from v2.config import AWS_REGION, DYNAMO_ENDPOINT_URL, DYNAMO_SUBMISSIONS_TABLE
-from v2.submission_utils import latest_version
+from v2.submission_utils import latest_version, normalize_record_shape
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Per-dataset publish lock (B-16)
@@ -43,6 +47,8 @@ DEFAULT_PUBLISH_LOCK_TTL_SECONDS = 180.0
 # (maxReceiveCount is 3).
 DEFAULT_PUBLISH_LOCK_WAIT_SECONDS = 15.0
 
+CURATION_QUEUE_STATUSES = {"pending_curation", "approved", "rejected"}
+
 
 class PublishLockUnavailable(RuntimeError):
     """Another worker holds the publish lock for this dataset."""
@@ -55,6 +61,29 @@ def _without_lock_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for a dataset must skip it — otherwise it would masquerade as a version.
     """
     return [i for i in items if i.get("version") != PUBLISH_LOCK_VERSION]
+
+
+def _with_curation_queue(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy with the sparse curation-queue attribute normalized."""
+    item = dict(record)
+    status = item.get("status")
+    if status in CURATION_QUEUE_STATUSES:
+        item["curation_queue"] = status
+    else:
+        item.pop("curation_queue", None)
+    return item
+
+
+def prepare_for_write(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Canonicalize a record on its way into either backend.
+
+    Every write goes through here, so the v2.1 record shape (see
+    ``submission_utils.normalize_record_shape``: top-level ``acl`` /
+    ``source_name`` / ``legacy_source_id`` and bare version pointers) holds no
+    matter which route, job or migration script produced the record. Callers
+    are free to keep handing us the old blob-nested shape.
+    """
+    return normalize_record_shape(_with_curation_queue(record))
 
 
 def is_reserved_version(version: Any) -> bool:
@@ -298,6 +327,8 @@ class DynamoSubmissionStore(SubmissionStore):
                 Limit=1000,
             )
             items = resp.get("Items", [])
+        # legacy-source-id-index is projected ALL: the query result is already
+        # the full record, so no BatchGetItem round-trip is needed.
         return items[0] if items else None
 
     def list_versions(self, source_id: str) -> List[Dict[str, Any]]:
@@ -311,23 +342,89 @@ class DynamoSubmissionStore(SubmissionStore):
     def put_submission(self, record: Dict[str, Any]) -> None:
         _reject_reserved_version(record.get("version"))
         self.table.put_item(
-            Item=record,
+            Item=prepare_for_write(record),
             ConditionExpression="attribute_not_exists(source_id) AND attribute_not_exists(version)",
         )
 
     def upsert_submission(self, record: Dict[str, Any]) -> None:
         _reject_reserved_version(record.get("version"))
-        self.table.put_item(Item=record)
+        self.table.put_item(Item=prepare_for_write(record))
 
     def update_status(self, source_id: str, version: str, status: str) -> None:
         _reject_reserved_version(version)
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        expression = "SET #status = :status, updated_at = :updated_at"
+        values = {":status": status, ":updated_at": now}
+        if status in CURATION_QUEUE_STATUSES:
+            expression += ", curation_queue = :curation_queue"
+            values[":curation_queue"] = status
+        else:
+            expression += " REMOVE curation_queue"
         self.table.update_item(
             Key={"source_id": source_id, "version": version},
-            UpdateExpression="SET #status = :status, updated_at = :updated_at",
+            UpdateExpression=expression,
             ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":status": status, ":updated_at": now},
+            ExpressionAttributeValues=values,
         )
+
+    #: BatchGetItem can decline keys under throttling. Retry, but bounded — an
+    #: unbounded loop turns a throttled table into a hung Lambda.
+    _BATCH_GET_MAX_ATTEMPTS = 5
+
+    def _hydrate_index_items(self, projected: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fetch full records for KEYS_ONLY GSI results, preserving query order.
+
+        Only ``curation-queue-index`` needs this: it is projected KEYS_ONLY, so
+        a query returns nothing but the table keys. ``user-submissions``,
+        ``org-submissions`` and ``legacy-source-id-index`` are projected ALL and
+        their query results are already complete records — routing them through
+        here would add a BatchGetItem round-trip per listing for no gain.
+        (DynamoDB cannot narrow an existing GSI's projection in place, so those
+        three stay ALL.)
+        """
+        keys = [
+            {"source_id": item["source_id"], "version": item["version"]}
+            for item in projected
+            if item.get("source_id") and item.get("version")
+        ]
+        if not keys:
+            return []
+
+        hydrated: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
+        table_name = self.table.name
+        for start in range(0, len(keys), 100):
+            pending = keys[start:start + 100]
+            for attempt in range(self._BATCH_GET_MAX_ATTEMPTS):
+                if not pending:
+                    break
+                if attempt:
+                    time.sleep(min(0.05 * (2 ** (attempt - 1)), 1.0))
+                resp = self._resource.batch_get_item(
+                    RequestItems={
+                        table_name: {"Keys": pending, "ConsistentRead": True}
+                    }
+                )
+                for item in resp.get("Responses", {}).get(table_name, []):
+                    hydrated[(item.get("source_id"), item.get("version"))] = item
+                pending = (
+                    resp.get("UnprocessedKeys", {})
+                    .get(table_name, {})
+                    .get("Keys", [])
+                )
+            if pending:
+                logger.warning(
+                    "batch_get_item left %d of %d keys unprocessed after %d "
+                    "attempts; returning a short page",
+                    len(pending),
+                    len(keys),
+                    self._BATCH_GET_MAX_ATTEMPTS,
+                )
+
+        return [
+            hydrated[(key["source_id"], key["version"])]
+            for key in keys
+            if (key["source_id"], key["version"]) in hydrated
+        ]
 
     def list_by_user(self, user_id: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
         kwargs = {
@@ -339,6 +436,7 @@ class DynamoSubmissionStore(SubmissionStore):
         if start_key:
             kwargs["ExclusiveStartKey"] = start_key
         resp = self.table.query(**kwargs)
+        # user-submissions is projected ALL: the query result is the record.
         return resp.get("Items", []), resp.get("LastEvaluatedKey")
 
     def list_by_org(self, organization: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
@@ -351,57 +449,91 @@ class DynamoSubmissionStore(SubmissionStore):
         if start_key:
             kwargs["ExclusiveStartKey"] = start_key
         resp = self.table.query(**kwargs)
+        # org-submissions is projected ALL: the query result is the record.
         return resp.get("Items", []), resp.get("LastEvaluatedKey")
 
     def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
         if not statuses:
             return []
-        # Query the status-submissions GSI for each requested status,
-        # then merge results.  Falls back to scan if the GSI doesn't exist
-        # (e.g. table created before the GSI was added).
-        index_name = os.environ.get("GSI_STATUS_INDEX", "status-submissions")
+        unsupported = set(statuses) - CURATION_QUEUE_STATUSES
+        if unsupported:
+            values = ", ".join(sorted(unsupported))
+            raise NotImplementedError(
+                "list_by_status is scan-free only for curation queue statuses; "
+                f"unsupported: {values}"
+            )
+        index_name = os.environ.get("GSI_CURATION_INDEX", "curation-queue-index")
         items: List[Dict[str, Any]] = []
-        try:
-            for status_val in statuses:
-                if len(items) >= limit:
+        missing_from_index: List[str] = []
+        for status_val in statuses:
+            if len(items) >= limit:
+                break
+            before = len(items)
+            last_key = None
+            while len(items) < limit:
+                kwargs: Dict[str, Any] = {
+                    "IndexName": index_name,
+                    "KeyConditionExpression": self._key("curation_queue").eq(status_val),
+                    "ScanIndexForward": False,
+                    "Limit": limit - len(items),
+                }
+                if last_key:
+                    kwargs["ExclusiveStartKey"] = last_key
+                resp = self.table.query(**kwargs)
+                items.extend(resp.get("Items", []))
+                last_key = resp.get("LastEvaluatedKey")
+                if not last_key:
                     break
-                last_key = None
-                while len(items) < limit:
-                    kwargs: Dict[str, Any] = {
-                        "IndexName": index_name,
-                        "KeyConditionExpression": self._key("status").eq(status_val),
-                        "ScanIndexForward": False,
-                        "Limit": limit - len(items),
-                    }
-                    if last_key:
-                        kwargs["ExclusiveStartKey"] = last_key
-                    resp = self.table.query(**kwargs)
-                    items.extend(resp.get("Items", []))
-                    last_key = resp.get("LastEvaluatedKey")
-                    if not last_key:
-                        break
-        except Exception:
-            # GSI may not exist yet — fall back to scan
-            items = self._list_by_status_scan(statuses, limit)
-        return items[:limit]
+            if len(items) == before:
+                missing_from_index.append(status_val)
 
-    def _list_by_status_scan(self, statuses: List[str], limit: int) -> List[Dict[str, Any]]:
-        """Fallback: full table scan filtered by status (used before GSI exists)."""
+        # curation_queue is a SPARSE attribute stamped on write, so immediately
+        # after deploy the index is empty for the pre-existing backlog and the
+        # curation queue would read as permanently empty. An empty result for a
+        # status is therefore treated as "not indexed yet" and answered from a
+        # filtered scan until scripts/backfill_record_shape.py has run.
+        if missing_from_index:
+            self._warn_curation_index_empty(missing_from_index)
+            items.extend(
+                self._scan_by_status(missing_from_index, limit - len(items))
+            )
+            return items[:limit]
+
+        return self._hydrate_index_items(items[:limit])
+
+    _curation_index_warned = False
+
+    def _warn_curation_index_empty(self, statuses: List[str]) -> None:
+        """Log the index-not-backfilled fallback once per process."""
+        if DynamoSubmissionStore._curation_index_warned:
+            return
+        DynamoSubmissionStore._curation_index_warned = True
+        logger.warning(
+            "curation-queue-index returned no items for status(es) %s; falling "
+            "back to a filtered scan. Run scripts/backfill_record_shape.py "
+            "--execute to stamp curation_queue on the existing backlog.",
+            ", ".join(statuses),
+        )
+
+    def _scan_by_status(self, statuses: List[str], limit: int) -> List[Dict[str, Any]]:
+        """Filtered scan fallback for statuses the sparse GSI does not cover."""
+        if limit <= 0 or not statuses:
+            return []
         from boto3.dynamodb.conditions import Attr
-        filter_expr = Attr("status").eq(statuses[0])
-        for s in statuses[1:]:
-            filter_expr = filter_expr | Attr("status").eq(s)
+
+        condition = None
+        for status_val in statuses:
+            clause = Attr("status").eq(status_val)
+            condition = clause if condition is None else (condition | clause)
+
         items: List[Dict[str, Any]] = []
         last_key = None
         while len(items) < limit:
-            kwargs: Dict[str, Any] = {"FilterExpression": filter_expr}
+            kwargs: Dict[str, Any] = {"FilterExpression": condition}
             if last_key:
                 kwargs["ExclusiveStartKey"] = last_key
             resp = self.table.scan(**kwargs)
-            for item in resp.get("Items", []):
-                items.append(item)
-                if len(items) >= limit:
-                    break
+            items.extend(_without_lock_items(resp.get("Items", [])))
             last_key = resp.get("LastEvaluatedKey")
             if not last_key:
                 break
@@ -558,6 +690,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     user_email TEXT,
                     organization TEXT,
                     status TEXT,
+                    curation_queue TEXT,
                     dataset_mdata TEXT,
                     test INTEGER,
                     created_at TEXT,
@@ -583,6 +716,10 @@ class SqliteSubmissionStore(SubmissionStore):
                     sync_content_hash TEXT,
                     search_synced_hash TEXT,
                     last_synced_at TEXT,
+                    acl TEXT,
+                    source_name TEXT,
+                    root_version TEXT,
+                    previous_version TEXT,
                     PRIMARY KEY (source_id, version)
                 )
                 """
@@ -592,9 +729,6 @@ class SqliteSubmissionStore(SubmissionStore):
             )
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_submissions_org ON submissions(organization, source_id)"
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status)"
             )
             # Publish lock (B-16). A PRIMARY KEY on source_id makes the INSERT
             # itself the mutual-exclusion primitive, mirroring the DynamoDB
@@ -613,6 +747,17 @@ class SqliteSubmissionStore(SubmissionStore):
             # Migrations: add columns if missing
             cur = self.conn.execute("PRAGMA table_info(submissions)")
             col_names = {row["name"] for row in cur.fetchall()}
+            if "curation_queue" not in col_names:
+                self.conn.execute("ALTER TABLE submissions ADD COLUMN curation_queue TEXT")
+            self.conn.execute(
+                "UPDATE submissions SET curation_queue = CASE "
+                "WHEN status IN ('pending_curation', 'approved', 'rejected') "
+                "THEN status ELSE NULL END"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_submissions_curation_queue "
+                "ON submissions(curation_queue, updated_at)"
+            )
             if "dataset_profile" not in col_names:
                 self.conn.execute("ALTER TABLE submissions ADD COLUMN dataset_profile TEXT")
             if "legacy_source_id" not in col_names:
@@ -653,6 +798,12 @@ class SqliteSubmissionStore(SubmissionStore):
                 self.conn.execute(
                     "ALTER TABLE submissions ADD COLUMN last_synced_at TEXT"
                 )
+            # v2.1 record shape: system attributes promoted out of dataset_mdata.
+            for promoted in ("acl", "source_name", "root_version", "previous_version"):
+                if promoted not in col_names:
+                    self.conn.execute(
+                        "ALTER TABLE submissions ADD COLUMN {} TEXT".format(promoted)
+                    )
 
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -679,6 +830,18 @@ class SqliteSubmissionStore(SubmissionStore):
                 )
             except Exception:
                 pass
+        # acl is a list attribute stored as JSON text in SQLite; DynamoDB keeps
+        # it as a native list, so both backends must hand callers a list.
+        if data.get("acl"):
+            try:
+                data["acl"] = json.loads(data["acl"])
+            except Exception:
+                data["acl"] = [data["acl"]]
+        else:
+            data.pop("acl", None)
+        for optional in ("source_name", "root_version", "previous_version"):
+            if not data.get(optional):
+                data.pop(optional, None)
         return data
 
     def get_submission(self, source_id: str, version: str) -> Optional[Dict[str, Any]]:
@@ -711,6 +874,10 @@ class SqliteSubmissionStore(SubmissionStore):
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
     def _write_submission(self, record: Dict[str, Any]) -> None:
+        record = prepare_for_write(record)
+        acl = record.get("acl")
+        if isinstance(acl, (list, tuple)):
+            acl = json.dumps(list(acl))
         dataset_mdata = record.get("dataset_mdata")
         if isinstance(dataset_mdata, dict):
             dataset_mdata = json.dumps(dataset_mdata)
@@ -732,13 +899,13 @@ class SqliteSubmissionStore(SubmissionStore):
                 """
                 INSERT OR REPLACE INTO submissions (
                     source_id, version, versioned_source_id, user_id, user_email,
-                    organization, status, dataset_mdata, test, created_at, updated_at, action_id,
+                    organization, status, curation_queue, dataset_mdata, test, created_at, updated_at, action_id,
                     doi, dataset_doi, legacy_source_id, published_at, approved_at, approved_by, rejected_at, rejected_by,
                     rejection_reason, curation_history, dataset_profile, metadata_updated_at,
                     title_description_embedding, embedding_model, embedding_generated_at,
                     view_count, download_count, sync_content_hash, search_synced_hash,
-                    last_synced_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_synced_at, acl, source_name, root_version, previous_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("source_id"),
@@ -748,6 +915,7 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("user_email"),
                     record.get("organization"),
                     record.get("status"),
+                    record.get("curation_queue"),
                     dataset_mdata,
                     int(record.get("test") or 0),
                     record.get("created_at"),
@@ -773,6 +941,10 @@ class SqliteSubmissionStore(SubmissionStore):
                     record.get("sync_content_hash"),
                     record.get("search_synced_hash"),
                     record.get("last_synced_at"),
+                    acl,
+                    record.get("source_name"),
+                    record.get("root_version"),
+                    record.get("previous_version"),
                 ),
             )
 
@@ -789,46 +961,79 @@ class SqliteSubmissionStore(SubmissionStore):
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with self.conn:
             self.conn.execute(
-                "UPDATE submissions SET status = ?, updated_at = ? WHERE source_id = ? AND version = ?",
-                (status, now, source_id, version),
+                "UPDATE submissions SET status = ?, curation_queue = ?, updated_at = ? "
+                "WHERE source_id = ? AND version = ?",
+                (
+                    status,
+                    status if status in CURATION_QUEUE_STATUSES else None,
+                    now,
+                    source_id,
+                    version,
+                ),
             )
 
-    def list_by_user(self, user_id: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
-        offset = int(start_key.get("offset")) if start_key and "offset" in start_key else 0
+    @staticmethod
+    def _page_offset(start_key: Optional[Dict[str, Any]]) -> int:
+        """Offset carried by a SQLite pagination cursor (0 when absent/bad)."""
+        if not start_key:
+            return 0
+        try:
+            return max(0, int(start_key.get("offset") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _paged_query(
+        self,
+        where_column: str,
+        where_value: str,
+        order_by: str,
+        limit: int,
+        start_key: Optional[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """One page plus a cursor, mirroring DynamoDB's LastEvaluatedKey contract.
+
+        Reads ``limit + 1`` rows so "is there a next page" is answered by the
+        query rather than guessed from ``len(rows) == limit`` — the old guess
+        emitted a cursor for a page that turned out to be the last one, and
+        (worse) the route then discarded it entirely, so ``next_key`` was always
+        null and callers could never reach page 2.
+        """
+        offset = self._page_offset(start_key)
         cur = self.conn.execute(
-            """
-            SELECT * FROM submissions
-            WHERE user_id = ?
-            ORDER BY updated_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            (user_id, limit, offset),
+            "SELECT * FROM submissions WHERE {} = ? ORDER BY {} LIMIT ? OFFSET ?".format(
+                where_column, order_by
+            ),
+            (where_value, limit + 1, offset),
         )
         rows = [self._row_to_dict(row) for row in cur.fetchall()]
-        next_key = {"offset": offset + limit} if len(rows) == limit else None
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_key = {"offset": offset + limit} if has_more else None
         return rows, next_key
 
-    def list_by_org(self, organization: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
-        offset = int(start_key.get("offset")) if start_key and "offset" in start_key else 0
-        cur = self.conn.execute(
-            """
-            SELECT * FROM submissions
-            WHERE organization = ?
-            ORDER BY updated_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            (organization, limit, offset),
+    def list_by_user(self, user_id: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
+        return self._paged_query(
+            "user_id", user_id, "updated_at DESC, source_id, version", limit, start_key
         )
-        rows = [self._row_to_dict(row) for row in cur.fetchall()]
-        next_key = {"offset": offset + limit} if len(rows) == limit else None
-        return rows, next_key
+
+    def list_by_org(self, organization: str, limit: int = 50, start_key: Optional[Dict[str, Any]] = None):
+        return self._paged_query(
+            "organization", organization, "updated_at DESC, source_id, version", limit, start_key
+        )
 
     def list_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
         if not statuses:
             return []
+        unsupported = set(statuses) - CURATION_QUEUE_STATUSES
+        if unsupported:
+            values = ", ".join(sorted(unsupported))
+            raise NotImplementedError(
+                "list_by_status is scan-free only for curation queue statuses; "
+                f"unsupported: {values}"
+            )
         placeholders = ",".join("?" for _ in statuses)
         query = (
-            f"SELECT * FROM submissions WHERE status IN ({placeholders}) "
+            f"SELECT * FROM submissions WHERE curation_queue IN ({placeholders}) "
             "ORDER BY updated_at DESC LIMIT ?"
         )
         cur = self.conn.execute(query, (*statuses, limit))
@@ -920,15 +1125,60 @@ def get_store() -> SubmissionStore:
 
 
 def parse_pagination_key(key_str: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Decode a ``next_key`` cursor handed back by :func:`serialize_pagination_key`.
+
+    Accepts the opaque base64url form and, for one transition window, the raw
+    JSON form that used to be emitted. Anything undecodable is treated as "no
+    cursor" rather than an error: a stale bookmark restarts the listing instead
+    of 400ing.
+    """
     if not key_str:
         return None
+    candidate = key_str.strip()
+
+    padded = candidate + "=" * (-len(candidate) % 4)
     try:
-        return json.loads(key_str)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"), )
+    except Exception:
+        decoded = None
+    if decoded is not None:
+        try:
+            parsed = json.loads(decoded.decode("utf-8"))
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+    try:
+        parsed = json.loads(candidate)
     except Exception:
         return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def serialize_pagination_key(key: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Encode a store cursor as an opaque, URL-safe token.
+
+    The wire format is deliberately opaque: the DynamoDB backend's cursor is a
+    key dict while the SQLite backend's is an offset, and clients must be able
+    to round-trip either through ``?start_key=`` without url-encoding raw JSON
+    (which is what made the previous form unusable in a query string).
+    """
     if not key:
         return None
-    return json.dumps(key)
+    raw = json.dumps(_decimal_safe(key), sort_keys=True, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decimal_safe(value: Any) -> Any:
+    """JSON-encodable copy of a DynamoDB key dict (Decimal -> int/float)."""
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        as_int = int(value)
+        return as_int if as_int == value else float(value)
+    if isinstance(value, dict):
+        return {k: _decimal_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_decimal_safe(v) for v in value]
+    return value

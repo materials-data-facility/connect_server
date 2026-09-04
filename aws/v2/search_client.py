@@ -2,6 +2,31 @@
 
 Provides search ingest and query capabilities via Globus Search indexes.
 Falls back to MockGlobusSearchClient when credentials or indexes are not configured.
+
+RE-INGEST REQUIRED AFTER DEPLOY
+-------------------------------
+``build_gmeta_entry`` now writes a FLAT ``content`` block using v2 field names
+(``title``, ``authors``, ``keywords``, ``publication_year``, ``organization``,
+``domains``, ``ingest_date``, ...) instead of the v1 ``mdf``/``dc``/``data``
+nesting, and ``DEFAULT_FACETS``/the ``/search`` filter map bind to those flat
+names. Entries already in the index still carry the nested layout, so until they
+are rewritten they will not match a flat filter and will contribute nothing to a
+facet bucket. ``_flat_content`` is a tolerant reader that normalizes both
+layouts, which keeps *result rendering* correct in the meantime, but faceting and
+filtering are done inside Globus Search and cannot be shimmed. The whole index
+(935 entries on staging) must therefore be re-ingested right after the deploy —
+the orchestrator runs the existing rebuild tooling, from ``aws/``:
+
+    PYTHONPATH=. python v2/scripts/wipe_search_index.py --env staging --execute
+    PYTHONPATH=. python v2/scripts/rebuild_search_from_converted.py \\
+        --env staging -i converted-latest.json --execute
+
+The rebuild script needs no change: it calls ``build_gmeta_entry`` itself, so it
+emits the new layout automatically. ``subject`` (``{detail_base}/{source_id}``)
+is unchanged, so re-ingest overwrites entries in place rather than duplicating
+them. Verify afterwards with ``v2/scripts/reconcile_migration.py --check-search``
+and by confirming ``GET /search?q=band`` still returns the five facet groups
+(Year, Organization, Authors, Keywords, Domains) with non-empty buckets.
 """
 
 import logging
@@ -10,6 +35,13 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from v2.submission_utils import (
+    record_legacy_source_id,
+    record_previous_version,
+    record_root_version,
+    record_source_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,13 +181,199 @@ def _default_ingest_wait_seconds() -> float:
     """Seconds to wait for an ingest task to reach a terminal state (0 = don't)."""
     return _float_env("SEARCH_INGEST_WAIT_SECONDS", DEFAULT_INGEST_WAIT_SECONDS)
 
+# Facets served on every /search response. ``name`` is the public, client-facing
+# label (the frontend and CLI key their filter UI off these exact strings, so
+# they are part of the API contract and must not change); ``field_name`` is the
+# flat index field it aggregates and may change freely with the index layout.
 DEFAULT_FACETS = [
-    {"name": "Year",         "field_name": "dc.year",          "type": "terms", "size": 20},
-    {"name": "Organization", "field_name": "mdf.organization", "type": "terms", "size": 20},
-    {"name": "Authors",      "field_name": "dc.creators.name", "type": "terms", "size": 20},
-    {"name": "Keywords",     "field_name": "dc.subjects",      "type": "terms", "size": 20},
-    {"name": "Domains",      "field_name": "mdf.domains",      "type": "terms", "size": 20},
+    {"name": "Year",         "field_name": "publication_year", "type": "terms", "size": 20},
+    {"name": "Organization", "field_name": "organization",     "type": "terms", "size": 20},
+    {"name": "Authors",      "field_name": "authors",          "type": "terms", "size": 20},
+    {"name": "Keywords",     "field_name": "keywords",         "type": "terms", "size": 20},
+    {"name": "Domains",      "field_name": "domains",          "type": "terms", "size": 20},
 ]
+
+# The flat content fields the API exposes as facets, hence the only fields it
+# accepts a filter on.
+_FACETED_FIELDS = frozenset(facet["field_name"] for facet in DEFAULT_FACETS)
+
+# Index field names as they were spelled before the flatten. Any caller still
+# passing a dotted v1 path (a stale filter/sort clause, a bookmarked query) is
+# translated rather than silently matching nothing. Retire with _flat_content.
+_LEGACY_FIELD_ALIASES = {
+    "dc.year": "publication_year",
+    "dc.title": "title",
+    "dc.creators.name": "authors",
+    "dc.subjects": "keywords",
+    "dc.description": "description",
+    "dc.license": "license",
+    "dc.doi": "doi",
+    "mdf.organization": "organization",
+    "mdf.domains": "domains",
+    "mdf.ingest_date": "ingest_date",
+    "mdf.source_id": "source_id",
+    "mdf.source_name": "source_name",
+    "mdf.resource_type": "resource_type",
+    "mdf.version": "version",
+    "mdf.latest": "latest",
+    "data.size_bytes": "size_bytes",
+    "data.file_count": "file_count",
+}
+
+# Fail-closed principal for a record whose ACL cannot be determined. Globus
+# Search requires a non-empty visible_to, and "readable by nobody" is the safe
+# outcome for a record we cannot inspect. The nil UUID is a syntactically valid
+# identity that is never issued, so it matches no caller.
+DENY_ALL_PRINCIPAL = "urn:globus:auth:identity:00000000-0000-0000-0000-000000000000"
+
+
+def _canonical_field(field_name: Any) -> str:
+    """Map a pre-flatten dotted field name onto its flat v2 equivalent."""
+    name = str(field_name or "")
+    return _LEGACY_FIELD_ALIASES.get(name, name)
+
+
+def _canonical_filters(
+    filters: Optional[Dict[str, List]],
+) -> Optional[Dict[str, List]]:
+    """Rewrite a filters dict's field names to the flat index layout."""
+    if not filters:
+        return filters
+    return {_canonical_field(field): values for field, values in filters.items()}
+
+
+def _canonical_sort(
+    sort: Optional[List[Dict[str, str]]],
+) -> Optional[List[Dict[str, str]]]:
+    """Rewrite a Globus sort clause's field names to the flat index layout."""
+    if not sort:
+        return sort
+    return [
+        {**clause, "field_name": _canonical_field(clause.get("field_name"))}
+        for clause in sort
+    ]
+
+
+def _author_names(value: Any) -> List[str]:
+    """Author display names from flat strings or v1 ``{"name": ...}`` dicts."""
+    names: List[str] = []
+    for item in value or []:
+        name = item.get("name") if isinstance(item, dict) else item
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _flat_content(content: Any) -> Dict[str, Any]:
+    """Return a GMeta ``content`` block in the flat v2 field layout.
+
+    Tolerant reader for the transition window described in the module docstring:
+    entries ingested before the flatten nest their fields under
+    ``mdf``/``dc``/``data``, so every reader goes through here instead of
+    guessing at the layout. Also strips ``acl`` — no longer written, but present
+    on every pre-flatten entry, and it must never reach a client.
+
+    Delete this function (and ``_LEGACY_FIELD_ALIASES``) once the index has been
+    fully re-ingested.
+    """
+    if not isinstance(content, dict):
+        return {}
+
+    mdf = content.get("mdf")
+    dc = content.get("dc")
+    data_block = content.get("data")
+
+    if not any(isinstance(block, dict) for block in (mdf, dc, data_block)):
+        flat = dict(content)
+        flat["authors"] = _author_names(flat.get("authors"))
+        flat.pop("acl", None)
+        return flat
+
+    mdf = mdf if isinstance(mdf, dict) else {}
+    dc = dc if isinstance(dc, dict) else {}
+    data_block = data_block if isinstance(data_block, dict) else {}
+
+    flat = {k: v for k, v in content.items() if k not in ("mdf", "dc", "data")}
+    flat.update(mdf)
+    flat.update({
+        "title": dc.get("title"),
+        "authors": _author_names(dc.get("creators")),
+        "publisher": dc.get("publisher"),
+        "description": dc.get("description") or "",
+        "keywords": dc.get("subjects") or [],
+        "publication_year": dc.get("year"),
+        "license": dc.get("license") or None,
+        "location": data_block.get("location"),
+        "size_bytes": data_block.get("size_bytes"),
+        "file_count": data_block.get("file_count"),
+    })
+    doi = dc.get("doi") or mdf.get("dataset_doi")
+    if doi:
+        flat["doi"] = doi
+    flat.pop("acl", None)
+    return flat
+
+
+def resolve_visible_to(submission: Dict[str, Any], meta: Any = None) -> List[str]:
+    """``visible_to`` for a submission's GMeta entry.
+
+    Derived from ``v2.search.dataset_is_public`` so the index and every
+    server-side reader share one definition of "public". The inline
+    ``meta.acl or ["public"]`` this replaces failed OPEN on metadata it could not
+    parse — an unreadable ``dataset_mdata`` yielded an empty acl, which read as
+    "public" and published a restricted dataset to the world.
+
+    Semantics are otherwise unchanged: public -> ``["public"]``, restricted ->
+    one Globus principal per acl entry. Each entry is canonicalized by
+    ``submission_utils.normalize_acl_principal``: a bare UUID is prefixed with
+    ``urn:globus:auth:identity:``, an already-qualified ``urn:globus:...``
+    value (an identity URN a client already expanded, or a group URN
+    ``urn:globus:groups:id:<uuid>``) is passed through verbatim, and anything
+    else is dropped with a warning. Blind prefixing produced
+    ``urn:globus:auth:identity:urn:globus:auth:identity:<uuid>``, an unknown
+    principal — the dataset was then invisible to its own collaborators.
+
+    The ACL itself comes from ``submission_utils.resolve_record_acl`` (top-level
+    record attribute first, legacy ``dataset_mdata.acl`` second) rather than the
+    parsed metadata blob, so a backfilled record and an un-backfilled one index
+    identically. ``meta`` is accepted for the legacy call shape and used only as
+    a last resort.
+    """
+    from v2.search import dataset_is_public
+    from v2.submission_utils import normalize_acl_principal, resolve_record_acl
+
+    if dataset_is_public(submission):
+        return ["public"]
+
+    acl = resolve_record_acl(submission)
+    if acl is None and meta is not None:
+        acl = getattr(meta, "acl", None)
+
+    source_id = submission.get("source_id") if isinstance(submission, dict) else None
+    principals: List[str] = []
+    for entry in acl or []:
+        if not entry or entry == "public":
+            continue
+        principal = normalize_acl_principal(entry)
+        if principal is None or principal == "public":
+            # Never widen to public to salvage an unreadable entry.
+            logger.warning(
+                "Dropping unusable acl entry %r on %s; it is neither a Globus "
+                "identity UUID nor a urn:globus: principal",
+                entry,
+                source_id or "<unknown>",
+            )
+            continue
+        if principal not in principals:
+            principals.append(principal)
+    if principals:
+        return principals
+
+    logger.error(
+        "Cannot determine ACL for %s; indexing it visible to nobody",
+        source_id or "<unknown>",
+    )
+    return [DENY_ALL_PRINCIPAL]
 
 
 class GlobusSearchClient:
@@ -197,7 +415,20 @@ class GlobusSearchClient:
     def build_gmeta_entry(
         self, submission: Dict[str, Any], version_count: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Build a GMetaEntry from a submission record."""
+        """Build a GMetaEntry from a submission record.
+
+        ``content`` is FLAT: v2 field names at the top level, no
+        ``mdf``/``dc``/``data`` nesting. See the module docstring for the
+        re-ingest this layout change requires.
+
+        ``acl`` is deliberately absent from ``content``. Access is enforced by
+        ``visible_to``; publishing the list as searchable content handed every
+        anonymous searcher the Globus identity ids of a restricted dataset's
+        readers.
+
+        ``subject`` is unchanged and must stay byte-identical — it is the
+        index's identity key for the dataset.
+        """
         from v2.metadata import parse_metadata
 
         source_id = submission.get("source_id", "unknown")
@@ -206,83 +437,89 @@ class GlobusSearchClient:
 
         subject = f"{_detail_base()}/{source_id}"
 
-        acl = meta.acl or ["public"]
-        visible_to = ["public"] if "public" in acl else [f"urn:globus:auth:identity:{a}" for a in acl]
+        visible_to = resolve_visible_to(submission, meta)
 
         # Extract data location from first data_source
         data_sources = meta.data_sources or []
         location = data_sources[0] if data_sources else None
 
-        # source_name is the v1 dataset-family grouping/facet key. Preserve the
-        # original v1 name when the record carries one (migrated datasets keep it
-        # in extensions.mdf_source_name); otherwise use the full, stable
-        # source_id. Never derive it with rsplit("-", 1): for v2-native
-        # "mdf-<uuid>" ids that collapsed every dataset to source_name="mdf".
-        source_name = (meta.extensions or {}).get("mdf_source_name") or source_id
+        # source_name is the v1 dataset-family grouping/facet key. It is a
+        # top-level record attribute in the v2.1 shape (N4) — it decides a
+        # search facet and must not be rewritable through the user-editable
+        # extensions blob — with the deprecated extensions.mdf_source_name as a
+        # fallback for rows the backfill has not reached. Never derive it with
+        # rsplit("-", 1): for v2-native "mdf-<uuid>" ids that collapsed every
+        # dataset to source_name="mdf".
+        source_name = record_source_name(submission) or source_id
 
-        mdf_block: Dict[str, Any] = {
+        content: Dict[str, Any] = {
+            # --- Identity / lifecycle
             "source_id": source_id,
             "source_name": source_name,
             # v1 parity: the v1 enumeration/extraction queries filter on
-            # mdf.resource_type:"dataset". Without it, v2-native datasets are
-            # invisible to the v1 sync/migration tooling (zero rows on re-sync).
+            # resource_type:"dataset" (spelled mdf.resource_type before the
+            # flatten). Without it, v2-native datasets are invisible to the v1
+            # sync/migration tooling (zero rows on re-sync).
             "resource_type": "dataset",
-            "version": version,
+            # Only published datasets are ever indexed, but carrying the status
+            # explicitly means readers no longer have to hardcode it.
+            "status": submission.get("status") or "published",
+            "version": meta.version or version,
+            "latest": meta.latest,
+            "ingest_date": submission.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            # --- Descriptive (facets bind to publication_year / organization /
+            #     authors / keywords / domains)
+            "title": meta.title,
+            "authors": [a.name for a in meta.authors],
+            "publisher": meta.publisher,
+            "description": meta.description or "",
+            "keywords": meta.keywords,
+            "domains": meta.domains,
             "organization": submission.get("organization", ""),
-            "acl": acl,
-            "ingest_date": submission.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "publication_year": meta.publication_year or datetime.now().year,
+            "license": (meta.license.identifier or meta.license.name) if meta.license else "",
+            # --- Data
+            "location": location,
+            "size_bytes": submission.get("total_bytes"),
+            "file_count": submission.get("file_count"),
         }
 
-        mdf_block["domains"] = meta.domains
-
-        if meta.external:
-            mdf_block["external_source"] = meta.external.source
-            if meta.external.doi:
-                mdf_block["external_doi"] = meta.external.doi
-            if meta.external.url:
-                mdf_block["external_url"] = meta.external.url
+        # doi = version-specific DOI if present, otherwise the dataset DOI.
+        doi = submission.get("doi") or submission.get("dataset_doi")
+        if doi:
+            content["doi"] = doi
 
         dataset_doi = submission.get("dataset_doi")
         if dataset_doi:
-            mdf_block["dataset_doi"] = dataset_doi
+            content["dataset_doi"] = dataset_doi
         if version_count is not None:
-            mdf_block["version_count"] = version_count
+            content["version_count"] = version_count
 
-        # Versioning fields
-        mdf_block["latest"] = meta.latest
-        if meta.root_version:
-            mdf_block["root_version"] = meta.root_version
-        if meta.previous_version:
-            mdf_block["previous_version"] = meta.previous_version
-        if meta.version:
-            mdf_block["version"] = meta.version
+        # Bare version strings (N3), read from the top-level record attributes
+        # with a normalizing fallback to the legacy composite in the blob.
+        root_version = record_root_version(submission)
+        if root_version:
+            content["root_version"] = root_version
+        previous_version = record_previous_version(submission)
+        if previous_version:
+            content["previous_version"] = previous_version
 
-        # Download URL
+        # The original v1 id, so old-id lookups can be resolved from the index
+        # alone. Migrated records keep it in extensions when it duplicates the
+        # canonical source_id (DynamoDB rejects empty/equal GSI keys).
+        legacy_source_id = record_legacy_source_id(submission)
+        if legacy_source_id:
+            content["legacy_source_id"] = legacy_source_id
+
         if meta.download_url:
-            mdf_block["download_url"] = meta.download_url
+            content["download_url"] = meta.download_url
 
-        content = {
-            "mdf": mdf_block,
-            "dc": {
-                "title": meta.title,
-                "creators": [{"name": a.name} for a in meta.authors],
-                "publisher": meta.publisher,
-                "year": meta.publication_year or datetime.now().year,
-                "description": meta.description or "",
-                "subjects": meta.keywords,
-                "license": meta.license.identifier or meta.license.name if meta.license else "",
-            },
-            "data": {
-                "location": location,
-                "size_bytes": submission.get("total_bytes"),
-                "file_count": submission.get("file_count"),
-            },
-        }
-
-        # dc.doi = version-specific DOI if present, otherwise dataset DOI
-        doi = submission.get("doi") or submission.get("dataset_doi")
-        if doi:
-            content["dc"]["doi"] = doi
+        if meta.external:
+            content["external_source"] = meta.external.source
+            if meta.external.doi:
+                content["external_doi"] = meta.external.doi
+            if meta.external.url:
+                content["external_url"] = meta.external.url
 
         return {
             "subject": subject,
@@ -555,11 +792,14 @@ class GlobusSearchClient:
     ) -> Dict[str, Any]:
         """Search with facets and optional filters.
 
-        filters: dict mapping facet field_name → list of selected values
-                 e.g. {"mdf.organization": ["MDF Open"], "dc.year": [2024, 2025]}
+        filters: dict mapping index field_name → list of selected values
+                 e.g. {"organization": ["MDF Open"], "publication_year": [2024, 2025]}
         sort:    Globus Search sort clause, e.g.
-                 [{"field_name": "mdf.ingest_date", "order": "desc"}].
+                 [{"field_name": "ingest_date", "order": "desc"}].
                  None leaves the engine's own relevance ordering in place.
+
+        Pre-flatten dotted field names (``dc.year``, ``mdf.organization``, ...)
+        are accepted and translated; see ``_LEGACY_FIELD_ALIASES``.
 
         Filter values must be the *whole* facet value. These fields are indexed
         as exact keywords — verified against the production index, where a
@@ -573,6 +813,9 @@ class GlobusSearchClient:
 
         for facet in DEFAULT_FACETS:
             sq.add_facet(**facet)
+
+        filters = _canonical_filters(filters)
+        sort = _canonical_sort(sort)
 
         if filters:
             for field_name, values in filters.items():
@@ -738,17 +981,10 @@ class MockGlobusSearchClient:
     def search(self, query: str, limit: int = 20, offset: int = 0) -> Dict[str, Any]:
         # Simple text match over stored entries
         query_lower = query.lower()
-        matches = []
-        for subject, entry in self._entries.items():
-            content = entry.get("content", {})
-            text = " ".join([
-                content.get("dc", {}).get("title", ""),
-                content.get("dc", {}).get("description", ""),
-                " ".join(content.get("dc", {}).get("subjects", [])),
-                content.get("mdf", {}).get("source_id", ""),
-            ]).lower()
-            if query_lower in text:
-                matches.append(entry)
+        matches = [
+            entry for entry in self._entries.values()
+            if query_lower in self._entry_text(entry)
+        ]
 
         paginated = matches[offset:offset + limit]
         results = [self._format_entry(entry) for entry in paginated]
@@ -756,36 +992,25 @@ class MockGlobusSearchClient:
         return {"success": True, "total": len(matches), "results": results, "mock": True}
 
     @staticmethod
+    def _entry_text(entry: Dict[str, Any]) -> str:
+        """Lowercased free-text blob a mock query matches against."""
+        flat = _flat_content(entry.get("content"))
+        return " ".join([
+            flat.get("title") or "",
+            flat.get("description") or "",
+            " ".join(flat.get("keywords") or []),
+            flat.get("source_id") or "",
+        ]).lower()
+
+    @staticmethod
     def _format_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
         """Format a stored entry the way the real client formats a Globus hit.
 
         Shared by search() and faceted_search() so the mock cannot drift into
-        returning a shape the real backend never produces.
+        returning a shape the real backend never produces — hence the shared
+        ``_result_from_content``.
         """
-        content = entry.get("content", {})
-        dc = content.get("dc", {})
-        mdf = content.get("mdf", {})
-        data_block = content.get("data", {})
-        description = dc.get("description", "") or ""
-        return {
-            "type": "dataset",
-            "source_id": mdf.get("source_id"),
-            "version": mdf.get("version"),
-            "title": dc.get("title"),
-            "authors": [c.get("name", "") for c in dc.get("creators", [])],
-            "keywords": dc.get("subjects", []),
-            "description": description[:300] if len(description) > 300 else description,
-            "publication_year": dc.get("year"),
-            "organization": mdf.get("organization"),
-            "domains": mdf.get("domains") or [],
-            "doi": dc.get("doi") or mdf.get("dataset_doi"),
-            "license": dc.get("license") or None,
-            "size_bytes": data_block.get("size_bytes"),
-            "file_count": data_block.get("file_count"),
-            "status": "published",
-            "score": 1.0,
-            "latest": mdf.get("latest", True),
-        }
+        return _result_from_content(entry.get("content", {}), score=1.0)
 
     def faceted_search(
         self, query: str, limit: int = 20, offset: int = 0, filters: Optional[Dict[str, List]] = None,
@@ -793,17 +1018,11 @@ class MockGlobusSearchClient:
     ) -> Dict[str, Any]:
         """Faceted search over in-memory entries with filter and sort support."""
         query_lower = query.lower()
+        filters = _canonical_filters(filters)
         matches = []
-        for subject, entry in self._entries.items():
-            content = entry.get("content", {})
-            text = " ".join([
-                content.get("dc", {}).get("title", ""),
-                content.get("dc", {}).get("description", ""),
-                " ".join(content.get("dc", {}).get("subjects", [])),
-                content.get("mdf", {}).get("source_id", ""),
-            ]).lower()
-            if query_lower == "*" or query_lower in text:
-                if filters and not self._matches_filters(content, filters):
+        for entry in self._entries.values():
+            if query_lower == "*" or query_lower in self._entry_text(entry):
+                if filters and not self._matches_filters(entry.get("content", {}), filters):
                     continue
                 matches.append(entry)
 
@@ -831,11 +1050,11 @@ class MockGlobusSearchClient:
         # Applied last-key-first so the first clause wins, matching a stable
         # multi-key sort.
         for clause in reversed(sort):
-            field = clause.get("field_name") or ""
+            field = _canonical_field(clause.get("field_name"))
             descending = clause.get("order", "asc") == "desc"
 
             def key(entry: Dict[str, Any], field=field) -> str:
-                value: Any = entry.get("content", {})
+                value: Any = _flat_content(entry.get("content"))
                 for part in field.split("."):
                     if not isinstance(value, dict):
                         return ""
@@ -852,59 +1071,81 @@ class MockGlobusSearchClient:
         index: these fields are keyword-mapped, so a match_any on the full
         "Blaiszik, Ben" matches and the bare token "Blaiszik" does not.
         """
-        field_map = {
-            "dc.year": lambda c: [c.get("dc", {}).get("year")],
-            "mdf.organization": lambda c: [c.get("mdf", {}).get("organization")],
-            "dc.creators.name": lambda c: [cr.get("name", "") for cr in c.get("dc", {}).get("creators", [])],
-            "dc.subjects": lambda c: c.get("dc", {}).get("subjects", []),
-            "mdf.domains": lambda c: c.get("mdf", {}).get("domains", []),
-        }
+        flat = _flat_content(content)
         for field_name, values in filters.items():
-            extractor = field_map.get(field_name)
-            if not extractor:
+            field = _canonical_field(field_name)
+            if field not in _FACETED_FIELDS:
                 continue
-            entry_values = [str(v) for v in extractor(content) if v is not None]
+            raw = flat.get(field)
+            candidates = raw if isinstance(raw, list) else [raw]
+            entry_values = [str(v) for v in candidates if v is not None]
             filter_values = [str(v) for v in values]
             if not any(ev in filter_values for ev in entry_values):
                 return False
         return True
 
     def _compute_facets(self, entries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-        """Compute facet counts from a list of matched entries."""
-        counters: Dict[str, Counter] = {
-            "Year": Counter(),
-            "Organization": Counter(),
-            "Authors": Counter(),
-            "Keywords": Counter(),
-            "Domains": Counter(),
-        }
-        for entry in entries:
-            content = entry.get("content", {})
-            dc = content.get("dc", {})
-            mdf = content.get("mdf", {})
+        """Compute facet counts from a list of matched entries.
 
-            year = dc.get("year")
-            if year is not None:
-                counters["Year"][str(year)] += 1
-            org = mdf.get("organization")
-            if org:
-                counters["Organization"][org] += 1
-            for creator in dc.get("creators", []):
-                name = creator.get("name")
-                if name:
-                    counters["Authors"][name] += 1
-            for kw in dc.get("subjects", []):
-                if kw:
-                    counters["Keywords"][kw] += 1
-            for domain in mdf.get("domains", []):
-                if domain:
-                    counters["Domains"][domain] += 1
+        Driven off DEFAULT_FACETS so the mock's bucket names and the fields they
+        aggregate can never drift from what the real index is asked for.
+        """
+        counters: Dict[str, Counter] = {facet["name"]: Counter() for facet in DEFAULT_FACETS}
+        for entry in entries:
+            flat = _flat_content(entry.get("content"))
+            for facet in DEFAULT_FACETS:
+                raw = flat.get(facet["field_name"])
+                values = raw if isinstance(raw, list) else [raw]
+                for value in values:
+                    if value is None or value == "":
+                        continue
+                    counters[facet["name"]][str(value)] += 1
 
         facets = {}
-        for name, counter in counters.items():
-            buckets = [{"value": val, "count": count} for val, count in counter.most_common(20)]
-            facets[name] = buckets
+        for facet in DEFAULT_FACETS:
+            counter = counters[facet["name"]]
+            facets[facet["name"]] = [
+                {"value": val, "count": count}
+                for val, count in counter.most_common(facet.get("size", 20))
+            ]
         return facets
+
+
+def _result_from_content(content: Dict[str, Any], score: Any = 0) -> Dict[str, Any]:
+    """Build one dataset search result from a GMeta ``content`` block.
+
+    These output keys are the public ``/search`` result contract — the frontend
+    and the CLI both index into them by name — so they must stay stable even
+    though the index layout underneath them changed. The tolerant
+    ``_flat_content`` read is what lets a pre-flatten and a post-flatten entry
+    render identically in the same response page.
+    """
+    flat = _flat_content(content)
+    description = flat.get("description") or ""
+    result_entry = {
+        "type": "dataset",
+        "source_id": flat.get("source_id"),
+        "version": flat.get("version"),
+        "title": flat.get("title"),
+        "authors": flat.get("authors") or [],
+        "keywords": flat.get("keywords") or [],
+        "description": description[:300] if len(description) > 300 else description,
+        "publication_year": flat.get("publication_year"),
+        "organization": flat.get("organization"),
+        "domains": flat.get("domains") or [],
+        "doi": flat.get("doi") or flat.get("dataset_doi"),
+        "license": flat.get("license") or None,
+        "size_bytes": flat.get("size_bytes"),
+        "file_count": flat.get("file_count"),
+        "status": flat.get("status") or "published",
+        "score": score,
+        "latest": flat.get("latest", True),
+    }
+    if flat.get("root_version"):
+        result_entry["root_version"] = flat["root_version"]
+    if flat.get("download_url"):
+        result_entry["download_url"] = flat["download_url"]
+    return result_entry
 
 
 def _format_globus_search_results(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -926,34 +1167,7 @@ def _format_globus_search_results(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         for content in contents:
             if not isinstance(content, dict):
                 continue
-            mdf = content.get("mdf", {})
-            dc = content.get("dc", {})
-            data_block = content.get("data", {})
-            description = dc.get("description", "") or ""
-            result_entry = {
-                "type": "dataset",
-                "source_id": mdf.get("source_id"),
-                "version": mdf.get("version"),
-                "title": dc.get("title"),
-                "authors": [c.get("name", "") for c in dc.get("creators", [])],
-                "keywords": dc.get("subjects", []),
-                "description": description[:300] if len(description) > 300 else description,
-                "publication_year": dc.get("year"),
-                "organization": mdf.get("organization"),
-                "domains": mdf.get("domains") or [],
-                "doi": dc.get("doi") or mdf.get("dataset_doi"),
-                "license": dc.get("license") or None,
-                "size_bytes": data_block.get("size_bytes"),
-                "file_count": data_block.get("file_count"),
-                "status": "published",
-                "score": gmeta.get("score", 0),
-                "latest": mdf.get("latest", True),
-            }
-            if mdf.get("root_version"):
-                result_entry["root_version"] = mdf["root_version"]
-            if mdf.get("download_url"):
-                result_entry["download_url"] = mdf["download_url"]
-            results.append(result_entry)
+            results.append(_result_from_content(content, gmeta.get("score", 0)))
     return results
 
 

@@ -56,18 +56,30 @@ def make_version_key(record: dict) -> str:
     return sid
 
 
+def version_string(record: dict) -> str:
+    """The record's normalized "major.minor" version string."""
+    major, minor = parse_version_number(record["version"])
+    return f"{major}.{minor}"
+
+
 def build_version_chains(records: list):
     """Build previous_version and root_version for all records.
 
+    Both pointers are BARE version strings (N3) — e.g. ``"1.0"`` — because
+    dataset identity in v2 is always the ``(source_id, version)`` pair. The
+    earlier encoding mixed bare ids and ``"{source_id}-{version}"`` composites
+    in the same field, which is unparseable for legacy ids that themselves end
+    in a version-like suffix.
+
     Three cases:
     1. Multiple versions present in the index (same source_name, different
-       versions) — chain them together, root is the earliest.
-    2. Single entry but version > 1 — prior versions were superseded and
-       aren't in the index. Use source_name as the root identifier to
-       represent the original dataset lineage.
-    3. Single entry, version 1 — standalone. root_version = its own source_id.
+       versions) — chain them together, root is the earliest version.
+    2. Single entry but version > 1 — prior versions were superseded and are
+       not in the index. v1 lineages always start at version 1, so the root is
+       recorded as "1.0"; no previous_version can be named.
+    3. Single entry, version 1 — standalone. root_version is its own version.
 
-    Returns (prev_map, root_map, stats) where maps are keyed by
+    Returns (prev_map, root_map, latest_set, stats) where maps are keyed by
     make_version_key(record).
     """
     by_source_name = defaultdict(list)
@@ -89,20 +101,13 @@ def build_version_chains(records: list):
             # Case 1: multiple versions present in index
             multi_present += 1
 
-            unique_sids = set(r["source_id"] for r in group)
-            needs_version_suffix = len(unique_sids) == 1
-
-            root_r = group[0]
-            root_ref = make_version_key(root_r) if needs_version_suffix else root_r["source_id"]
+            root_ref = version_string(group[0])
 
             for r in group:
                 root_map[make_version_key(r)] = root_ref
 
             for i in range(1, len(group)):
-                cur_key = make_version_key(group[i])
-                prev_r = group[i - 1]
-                prev_ref = make_version_key(prev_r) if needs_version_suffix else prev_r["source_id"]
-                prev_map[cur_key] = prev_ref
+                prev_map[make_version_key(group[i])] = version_string(group[i - 1])
 
             # Last in sorted order is the latest
             latest_set.add(make_version_key(group[-1]))
@@ -114,12 +119,14 @@ def build_version_chains(records: list):
             latest_set.add(key)
 
             if major > 1:
-                # Case 2: version > 1 but prior versions not in index.
+                # Case 2: version > 1 but prior versions not in index. v1
+                # lineages start at 1.0, so that is the root version; the
+                # intermediate versions simply do not exist in v2.
                 implicit_versioned += 1
-                root_map[key] = source_name
+                root_map[key] = "1.0"
             else:
                 # Case 3: standalone v1 — root is itself
-                root_map[key] = r["source_id"]
+                root_map[key] = version_string(r)
 
     stats = {
         "multi_present": multi_present,

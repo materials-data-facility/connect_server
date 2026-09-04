@@ -57,10 +57,30 @@ def _is_exempt_path(path: str) -> bool:
     return path in {"/health", "/docs", "/openapi.json", "/redoc", "/docs/oauth2-redirect"}
 
 
+def _ip_key(request: Request) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return f"ip:{client_host}"
+
+
+def _ip_limit_per_min() -> int:
+    # A per-IP ceiling that applies regardless of the Authorization header.
+    # Without it an anonymous caller could rotate bogus bearer tokens (each
+    # hashes to a fresh actor bucket) and never be limited. Kept well above the
+    # per-actor default so a shared NAT/institution does not trip it in normal use.
+    return _env_int("RATE_LIMIT_IP_PER_MIN", 600)
+
+
 def _actor_key(request: Request) -> str:
-    user_id = (request.headers.get("x-user-id") or "").strip()
-    if user_id:
-        return f"user:{user_id}"
+    # X-User-Id is only an identity in dev auth mode. In production it is an
+    # arbitrary caller-supplied header, so keying on it would let anyone mint a
+    # fresh rate-limit bucket per request. Lazy import: auth imports nothing
+    # from here, but keep the module graph flat.
+    from v2.app.auth import get_auth_mode
+
+    if get_auth_mode() == "dev":
+        user_id = (request.headers.get("x-user-id") or "").strip()
+        if user_id:
+            return f"user:{user_id}"
     authz = (request.headers.get("authorization") or "").strip()
     if authz:
         digest = hashlib.sha256(authz.encode("utf-8")).hexdigest()[:12]
@@ -126,11 +146,19 @@ def configure_app_middleware(app: FastAPI) -> None:
 
             actor = _actor_key(request)
             limit = _request_limit_for_path(path)
+            route_key = path.split('/', 2)[1] if path.startswith('/') else path
+            # Per-IP ceiling first (defeats bearer-rotation), then per-actor.
             allowed, retry_after = _check_rate_limit(
-                key=f"{actor}:{path.split('/', 2)[1] if path.startswith('/') else path}",
-                limit=limit,
+                key=f"{_ip_key(request)}:{route_key}",
+                limit=_ip_limit_per_min(),
                 window_sec=_rate_limit_window_seconds(),
             )
+            if allowed:
+                allowed, retry_after = _check_rate_limit(
+                    key=f"{actor}:{route_key}",
+                    limit=limit,
+                    window_sec=_rate_limit_window_seconds(),
+                )
             if not allowed:
                 return JSONResponse(
                     status_code=429,

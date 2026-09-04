@@ -249,10 +249,10 @@ class TestVersioningSearchIndex:
         entry = search_client.build_gmeta_entry(submission, version_count=2)
         content = entry["content"]
 
-        assert content["mdf"]["dataset_doi"] == "10.99999/test-ds-1"
-        assert content["mdf"]["version_count"] == 2
+        assert content["dataset_doi"] == "10.99999/test-ds-1"
+        assert content["version_count"] == 2
         # dc.doi falls back to dataset_doi when no version-specific doi
-        assert content["dc"]["doi"] == "10.99999/test-ds-1"
+        assert content["doi"] == "10.99999/test-ds-1"
 
     def test_search_entry_prefers_version_doi(self, env):
         """dc.doi uses version-specific DOI when available."""
@@ -276,9 +276,9 @@ class TestVersioningSearchIndex:
         entry = search_client.build_gmeta_entry(submission, version_count=3)
         content = entry["content"]
 
-        assert content["dc"]["doi"] == "10.99999/test-ds-1-v1.2"
-        assert content["mdf"]["dataset_doi"] == "10.99999/test-ds-1"
-        assert content["mdf"]["version_count"] == 3
+        assert content["doi"] == "10.99999/test-ds-1-v1.2"
+        assert content["dataset_doi"] == "10.99999/test-ds-1"
+        assert content["version_count"] == 3
 
     def test_search_entry_without_doi(self, env):
         """Entry without any DOI should not have dc.doi."""
@@ -297,8 +297,8 @@ class TestVersioningSearchIndex:
         }
 
         entry = search_client.build_gmeta_entry(submission)
-        assert "doi" not in entry["content"]["dc"]
-        assert "dataset_doi" not in entry["content"]["mdf"]
+        assert "doi" not in entry["content"]
+        assert "dataset_doi" not in entry["content"]
 
 
 class TestVersioningSearchEntryOwnership:
@@ -327,8 +327,8 @@ class TestVersioningSearchEntryOwnership:
         # v1.0 owns the entry while it is the only published version
         entry = search.get_entry(source_id)
         assert entry is not None
-        assert entry["content"]["mdf"]["version"] == "1.0"
-        assert entry["content"]["mdf"]["latest"] is True
+        assert entry["content"]["version"] == "1.0"
+        assert entry["content"]["latest"] is True
 
         # Publish v2.0
         r2 = _submit(client, extra={
@@ -342,9 +342,9 @@ class TestVersioningSearchEntryOwnership:
         # One entry per dataset, and it is the new version
         assert len(search._entries) == 1
         entry = search.get_entry(source_id)
-        assert entry["content"]["mdf"]["version"] == "2.0"
-        assert entry["content"]["mdf"]["latest"] is True
-        assert entry["content"]["dc"]["title"] == "Updated Dataset v2.0"
+        assert entry["content"]["version"] == "2.0"
+        assert entry["content"]["latest"] is True
+        assert entry["content"]["title"] == "Updated Dataset v2.0"
 
         # The prior version is marked not-latest in the store
         v10 = _status(client, source_id, version="1.0")
@@ -378,9 +378,9 @@ class TestVersioningSearchEntryOwnership:
 
         assert len(search._entries) == 1
         entry = search.get_entry(source_id)
-        assert entry["content"]["mdf"]["version"] == "2.0"
-        assert entry["content"]["mdf"]["latest"] is True
-        assert entry["content"]["dc"]["title"] == "Updated Dataset v2.0"
+        assert entry["content"]["version"] == "2.0"
+        assert entry["content"]["latest"] is True
+        assert entry["content"]["title"] == "Updated Dataset v2.0"
 
 
 class TestVersioningMockDataCite:
@@ -857,18 +857,15 @@ class TestMajorMinorVersioning:
             "extensions": {"mdf_source_id": source_id},
         })
 
-        # Check v2.0 metadata
+        # v2.1 record shape (N3): the chain pointers are BARE version strings
+        # on top-level record attributes, not "{source_id}-{version}"
+        # composites inside the user-editable dataset_mdata blob.
         v20 = _status(client, source_id, version="2.0")
-        mdata20 = v20.get("dataset_mdata")
-        if isinstance(mdata20, str):
-            mdata20 = json.loads(mdata20)
-        assert mdata20["previous_version"] == f"{source_id}-1.0"
-        assert mdata20["root_version"] == f"{source_id}-1.0"
+        assert v20["previous_version"] == "1.0"
+        assert v20["root_version"] == "1.0"
+        assert "previous_version" not in v20["dataset_mdata"]
+        assert "root_version" not in v20["dataset_mdata"]
 
-        # Check v2.1 metadata
         v21 = _status(client, source_id, version="2.1")
-        mdata21 = v21.get("dataset_mdata")
-        if isinstance(mdata21, str):
-            mdata21 = json.loads(mdata21)
-        assert mdata21["previous_version"] == f"{source_id}-2.0"
-        assert mdata21["root_version"] == f"{source_id}-1.0"
+        assert v21["previous_version"] == "2.0"
+        assert v21["root_version"] == "1.0"

@@ -165,12 +165,20 @@ def _coerce_embedding(raw: Any) -> Optional[List[float]]:
 
 
 def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
-    """Read all published records with embeddings and write a new snapshot.
+    """Read all published, publicly visible records with embeddings into a snapshot.
 
     Returns a summary dict suitable for surfacing to curators. Safe to call
     repeatedly — each build gets its own content-hashed filenames, and the
     `current.json` pointer swaps atomically.
+
+    Published is not sufficient for inclusion: the sidecar carries title,
+    authors, description and DOI, and it is fetched *directly by the browser*
+    (that is the whole point of the public snapshot blob — see the /embed
+    endpoint's docstring), so anything in here is world-readable regardless of
+    which API endpoint reads it back. ``dataset_is_public`` therefore gates entry
+    the same way it gates the search fallback and the author index.
     """
+    from v2.search import dataset_is_public
     from v2.store import get_store
 
     store = get_store()
@@ -181,9 +189,13 @@ def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
     dims: Optional[int] = None
     models: Dict[str, int] = {}
     skipped_stale_dims = 0
+    skipped_not_public = 0
 
     for record in all_subs:
         if record.get("status") != "published":
+            continue
+        if not dataset_is_public(record):
+            skipped_not_public += 1
             continue
         # Skip datasets that aren't flagged as the latest version — avoid showing
         # superseded titles in semantic results.
@@ -207,16 +219,19 @@ def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
         models[model_name] = models.get(model_name, 0) + 1
 
     if not vectors:
-        logger.info("Embedding snapshot build: no vectors to write")
-        return {
-            "success": True,
-            "count": 0,
-            "dims": 0,
-            "skipped_stale_dims": skipped_stale_dims,
-            "built_at": _utc_now(),
-        }
+        # Still publish an EMPTY snapshot and swap the pointer: the browser
+        # fetches the sidecar directly from the public bucket, so leaving the
+        # previous snapshot in place would keep serving titles/authors of
+        # datasets that have since become restricted (or been deleted).
+        logger.info(
+            "Embedding snapshot build: no public vectors to write (skipped_not_public=%s); "
+            "publishing an empty snapshot",
+            skipped_not_public,
+        )
+        dims = 0
+        models = {"none": 0}
 
-    bin_bytes = _pack_vectors(vectors)
+    bin_bytes = _pack_vectors(vectors) if vectors else b""
     sidecar_bytes = json.dumps(rows).encode("utf-8")
 
     # Content hash over the packed bytes — identical corpora produce identical keys
@@ -230,7 +245,7 @@ def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
     backend.put_bytes(json_key, sidecar_bytes, "application/json")
 
     # Pick a single "primary" model for the pointer (most common)
-    primary_model = max(models.items(), key=lambda kv: kv[1])[0]
+    primary_model = max(models.items(), key=lambda kv: kv[1])[0] if models else "none"
 
     pointer = {
         "bin": bin_key,
@@ -253,6 +268,7 @@ def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
         "success": True,
         **pointer,
         "skipped_stale_dims": skipped_stale_dims,
+        "skipped_not_public": skipped_not_public,
         "public_urls": {
             "bin": backend.public_url(bin_key),
             "json": backend.public_url(json_key),

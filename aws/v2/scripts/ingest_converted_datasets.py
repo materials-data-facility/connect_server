@@ -62,6 +62,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # v2 modules are imported lazily (after env vars are resolved) because
 # v2.config reads DYNAMO_SUBMISSIONS_TABLE etc. at import time.
+# submission_utils is the exception: it is a leaf module with no config or
+# boto3 dependency, and it owns the canonical v2.1 record shape.
+from v2.submission_utils import (  # noqa: E402
+    DEFAULT_ACL,
+    record_previous_version,
+    record_root_version,
+)
 
 # Environment variables the ingestion script needs from the Lambda config.
 _RELEVANT_ENV_KEYS = {
@@ -251,6 +258,12 @@ def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
         "source_id": converted["source_id"],
         "version": version_str,
         "versioned_source_id": f"{converted['source_id']}-{version_str}",
+        # v2.1 record shape: system attributes live on the record, not inside
+        # the user-editable dataset_mdata blob. The converter emits the chain
+        # pointers as bare version strings (N3); source_name is the search
+        # facet grouping key (N4); migrated v1 datasets are public (N5).
+        "source_name": converted.get("source_name") or converted["source_id"],
+        "acl": list(metadata.get("acl") or DEFAULT_ACL),
         "user_id": MIGRATION_USER_ID,
         "status": "published",
         "dataset_mdata": json.dumps(metadata),
@@ -261,6 +274,14 @@ def build_submission_record(converted: Dict[str, Any]) -> Dict[str, Any]:
         "published_at": ingest_date,
         "sync_content_hash": sync_content_hash,
     }
+
+    for field, reader in (
+        ("root_version", record_root_version),
+        ("previous_version", record_previous_version),
+    ):
+        pointer = reader({"source_id": converted["source_id"], "dataset_mdata": metadata})
+        if pointer:
+            record[field] = pointer
 
     # Top-level legacy_source_id powers the legacy-source-id GSI so old v1 ids
     # resolve to this record. Omit when empty/equal — DynamoDB rejects empty
@@ -396,14 +417,19 @@ def _merge_migration_update(
         and isinstance(existing_metadata, dict)
         and isinstance(incoming_metadata, dict)
     ):
-        for field in ("previous_version", "root_version"):
-            incoming_value = incoming_metadata.get(field)
-            existing_value = existing_metadata.get(field)
-            if incoming_value in (None, "", [], {}) and existing_value not in (
-                None, "", [], {}
-            ):
-                incoming_metadata[field] = existing_value
         merged["dataset_mdata"] = json.dumps(incoming_metadata)
+
+    # Chain pointers are top-level record attributes (N3). A delta conversion
+    # that covers only part of a lineage cannot name the neighbours it did not
+    # load, so keep whatever the stored record already knew.
+    for field, reader in (
+        ("root_version", record_root_version),
+        ("previous_version", record_previous_version),
+    ):
+        if not reader(submission):
+            preserved = reader(existing)
+            if preserved:
+                merged[field] = preserved
     # An updated v1 payload invalidates embeddings derived from the old title
     # and description. Do not set metadata_updated_at: that field marks v2
     # user edits and would turn the migration's own update into a conflict.
@@ -432,16 +458,15 @@ def _metadata_dict(value: Any) -> Optional[Dict[str, Any]]:
 def _chain_fields_need_repair(
     existing: Dict[str, Any], submission: Dict[str, Any]
 ) -> bool:
-    """Return whether meaningful incoming chain fields differ in storage."""
-    incoming = _metadata_dict(submission.get("dataset_mdata"))
-    if incoming is None:
-        return False
-    stored = _metadata_dict(existing.get("dataset_mdata"))
-    for field in ("previous_version", "root_version"):
-        incoming_value = incoming.get(field)
-        if incoming_value not in (None, "", [], {}) and (
-            stored is None or stored.get(field) != incoming_value
-        ):
+    """Return whether meaningful incoming chain pointers differ in storage.
+
+    Compares the normalized top-level pointers (N3), so a stored row still
+    carrying the legacy ``"{source_id}-1.0"`` composite is not mistaken for a
+    mismatch against the equivalent bare ``"1.0"``.
+    """
+    for reader in (record_previous_version, record_root_version):
+        incoming_value = reader(submission)
+        if incoming_value and reader(existing) != incoming_value:
             return True
     return False
 

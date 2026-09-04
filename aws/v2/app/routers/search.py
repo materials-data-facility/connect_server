@@ -18,13 +18,19 @@ from v2.search import (
 
 router = APIRouter()
 
-# Maps query param names to Globus Search field names
+# Maps public query param names to Globus Search index field names.
+#
+# The param names on the left are the API contract (the frontend and CLI build
+# query strings from them) and must not change. The field names on the right are
+# the FLAT content fields written by search_client.build_gmeta_entry and
+# aggregated by its DEFAULT_FACETS — before the content flatten these were
+# dc.year / mdf.organization / dc.creators.name / dc.subjects / mdf.domains.
 FILTER_FIELD_MAP = {
-    "year": "dc.year",
-    "organization": "mdf.organization",
-    "author": "dc.creators.name",
-    "keyword": "dc.subjects",
-    "domain": "mdf.domains",
+    "year": "publication_year",
+    "organization": "organization",
+    "author": "authors",
+    "keyword": "keywords",
+    "domain": "domains",
 }
 
 # Filter params whose values may be comma-separated inside a single occurrence.
@@ -32,12 +38,12 @@ FILTER_FIELD_MAP = {
 # Multi-select is expressed by REPEATING a param (?keyword=a&keyword=b), which is
 # delimiter-safe. Comma splitting is kept only as backward compatibility for the
 # params whose facet values provably never contain a comma. Measured against the
-# production index (935 datasets): dc.year, mdf.organization, dc.subjects and
-# mdf.domains have zero comma-bearing facet values, while 476 of 500
-# dc.creators.name values contain one, because authors are indexed as
-# "Family, Given" ("Blaiszik, Ben"). Comma-splitting an author therefore shredded
-# one name into two non-matching terms, which is why the Authors filter selected
-# nothing. Author values are always taken verbatim.
+# production index (935 datasets): year, organization, keyword and domain have
+# zero comma-bearing facet values, while 476 of 500 author values contain one,
+# because authors are indexed as "Family, Given" ("Blaiszik, Ben").
+# Comma-splitting an author therefore shredded one name into two non-matching
+# terms, which is why the Authors filter selected nothing. Author values are
+# always taken verbatim.
 COMMA_SPLIT_PARAMS = frozenset({"year", "organization", "keyword", "domain"})
 
 
@@ -235,6 +241,16 @@ async def related_datasets_endpoint(
 
     - `by=author` — co-author lookup over the in-memory author index
     - `by=similar` — nearest neighbors over the embedding snapshot
+
+    Unauthenticated by design, and safe to leave that way *because* both
+    backing indexes are built from ``dataset_is_public`` records only
+    (``v2.search.build_author_index``, ``v2.embedding_snapshot.build_snapshot``).
+    Both are single process-wide caches shared across callers, so they cannot be
+    filtered per-request — restricting at build time is the only correct place,
+    and it means a restricted dataset is invisible here to every caller rather
+    than only to anonymous ones. If per-caller visibility is ever wanted, the
+    indexes have to be keyed by principal first; do not add an auth dependency
+    here and assume it filters anything.
     """
     limit_val = max(1, min(int(limit), MAX_SEARCH_RESULTS))
     if by == "author":

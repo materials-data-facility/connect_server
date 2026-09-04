@@ -3,14 +3,15 @@
 The filter-parsing and mock-index expectations here are pinned to measured
 behaviour of the production Globus Search index (935 datasets):
 
-  * ``dc.creators.name`` is keyword-mapped, not tokenized. Its facet buckets are
+  * the ``authors`` field (``dc.creators.name`` before the content flatten) is
+    keyword-mapped, not tokenized. Its facet buckets are
     whole names ("Blaiszik, Ben", count 20), and a ``match_any`` filter on that
     whole value returns those 20 datasets while the bare token "Blaiszik"
     returns 0.
   * 476 of 500 author facet values contain a comma (authors are indexed
-    "Family, Given"); dc.year, mdf.organization, dc.subjects and mdf.domains
-    have zero comma-bearing values.
-  * ``mdf.ingest_date`` is sortable and orders newest-first as expected.
+    "Family, Given"); publication_year, organization, keywords and domains have
+    zero comma-bearing values.
+  * ``ingest_date`` is sortable and orders newest-first as expected.
 
 That is why multi-select is expressed with repeated query params and why author
 values are never split on commas.
@@ -48,37 +49,37 @@ class TestParseFilters:
     def test_author_with_comma_is_kept_whole(self):
         """The bug: "Blaiszik, Ben" must not become ["Blaiszik", "Ben"]."""
         filters = _parse_filters(None, None, ["Blaiszik, Ben"], None, None)
-        assert filters == {"dc.creators.name": ["Blaiszik, Ben"]}
+        assert filters == {"authors": ["Blaiszik, Ben"]}
 
     def test_author_with_initials_is_kept_whole(self):
         filters = _parse_filters(None, None, ["Hersam, Mark C."], None, None)
-        assert filters == {"dc.creators.name": ["Hersam, Mark C."]}
+        assert filters == {"authors": ["Hersam, Mark C."]}
 
     def test_repeated_author_params_are_multi_select(self):
         filters = _parse_filters(
             None, None, ["Blaiszik, Ben", "Ward, Logan"], None, None,
         )
-        assert filters == {"dc.creators.name": ["Blaiszik, Ben", "Ward, Logan"]}
+        assert filters == {"authors": ["Blaiszik, Ben", "Ward, Logan"]}
 
     def test_comma_joined_keyword_still_splits(self):
-        """Backward compatibility: no dc.subjects value contains a comma."""
+        """Backward compatibility: no keywords value contains a comma."""
         filters = _parse_filters(None, None, None, ["perovskite,DFT"], None)
-        assert filters == {"dc.subjects": ["perovskite", "DFT"]}
+        assert filters == {"keywords": ["perovskite", "DFT"]}
 
     def test_repeated_keyword_params_also_work(self):
         filters = _parse_filters(None, None, None, ["metals and alloys", "DFT"], None)
-        assert filters == {"dc.subjects": ["metals and alloys", "DFT"]}
+        assert filters == {"keywords": ["metals and alloys", "DFT"]}
 
     def test_comma_joined_year_and_organization_split(self):
         filters = _parse_filters(["2024,2025"], ["MDF Open"], None, None, None)
         assert filters == {
-            "dc.year": ["2024", "2025"],
-            "mdf.organization": ["MDF Open"],
+            "publication_year": ["2024", "2025"],
+            "organization": ["MDF Open"],
         }
 
     def test_values_are_trimmed_and_deduped(self):
         filters = _parse_filters(None, None, None, ["a , b, a"], None)
-        assert filters == {"dc.subjects": ["a", "b"]}
+        assert filters == {"keywords": ["a", "b"]}
 
     def test_blank_and_missing_params_yield_no_filters(self):
         assert _parse_filters(None, None, None, None, None) is None
@@ -89,11 +90,11 @@ class TestParseFilters:
             ["2024"], ["MDF Open"], ["Ward, Logan"], ["DFT"], ["batteries"],
         )
         assert filters == {
-            "dc.year": ["2024"],
-            "mdf.organization": ["MDF Open"],
-            "dc.creators.name": ["Ward, Logan"],
-            "dc.subjects": ["DFT"],
-            "mdf.domains": ["batteries"],
+            "publication_year": ["2024"],
+            "organization": ["MDF Open"],
+            "authors": ["Ward, Logan"],
+            "keywords": ["DFT"],
+            "domains": ["batteries"],
         }
 
 
@@ -126,7 +127,7 @@ class TestResolveSort:
 
     def test_newest_sorts_on_ingest_date(self):
         assert resolve_sort(SORT_NEWEST) == [
-            {"field_name": "mdf.ingest_date", "order": "desc"}
+            {"field_name": "ingest_date", "order": "desc"}
         ]
 
     def test_most_viewed_is_a_declared_strategy(self):
@@ -193,7 +194,7 @@ class TestMockIndexMatchesRealIndex:
     def test_filtering_on_a_whole_author_name_matches(self):
         client = self._seeded_client()
         result = client.faceted_search(
-            "*", filters={"dc.creators.name": ["Blaiszik, Ben"]},
+            "*", filters={"authors": ["Blaiszik, Ben"]},
         )
         assert result["total"] == 2
         assert {r["source_id"] for r in result["results"]} == {"ds-a", "ds-c"}
@@ -203,14 +204,14 @@ class TestMockIndexMatchesRealIndex:
         client = self._seeded_client()
         for fragment in ("Blaiszik", "Ben"):
             result = client.faceted_search(
-                "*", filters={"dc.creators.name": [fragment]},
+                "*", filters={"authors": [fragment]},
             )
             assert result["total"] == 0, fragment
 
     def test_multiple_authors_filter_as_or(self):
         client = self._seeded_client()
         result = client.faceted_search(
-            "*", filters={"dc.creators.name": ["Ward, Logan", "Hersam, Mark C."]},
+            "*", filters={"authors": ["Ward, Logan", "Hersam, Mark C."]},
         )
         assert {r["source_id"] for r in result["results"]} == {"ds-a", "ds-b"}
 

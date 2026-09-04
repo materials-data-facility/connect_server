@@ -154,7 +154,7 @@ class TestStatusTransitions:
         # The bare status write used to skip the index entirely
         entry = mock_search.get_entry(source_id)
         assert entry is not None
-        assert entry["content"]["mdf"]["source_id"] == source_id
+        assert entry["content"]["source_id"] == source_id
 
     def test_status_update_to_published_surfaces_index_failure(self, env, mock_search):
         """If indexing fails, /status/update cannot report a published record."""
@@ -476,7 +476,7 @@ class TestPublishFailureAndIdempotency:
 
         entry = mock_search.get_entry(source_id)
         assert entry is not None
-        assert entry["content"]["mdf"]["source_id"] == source_id
+        assert entry["content"]["source_id"] == source_id
         assert len(mock_search._entries) == 1
         assert len(shared_datacite._dois) == 1
 
@@ -810,8 +810,8 @@ class TestDomainsAndExternalImport:
         mock_client = sc.get_search_client()
         assert len(mock_client._entries) >= 1
         entry = list(mock_client._entries.values())[0]
-        mdf_block = entry["content"]["mdf"]
-        assert mdf_block["domains"] == ["materials", "chemistry"]
+        content = entry["content"]
+        assert content["domains"] == ["materials", "chemistry"]
 
     def test_external_import_still_mints_own_doi(self, env):
         """Submit with external_doi, approve with mint_doi=True, verify MDF mints its own DOI."""

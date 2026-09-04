@@ -14,6 +14,7 @@ dispatch helper are both monkeypatched at the module level.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +31,13 @@ from v2.storage import reset_storage_backend
 
 
 CURATOR_HEADERS = {"X-User-Id": "curator-user"}
+
+
+def test_application_logging_keeps_dependency_loggers_quiet():
+    assert logging.getLogger().level == logging.INFO
+    assert logging.getLogger("v2").level == logging.INFO
+    for name in ("botocore", "boto3", "urllib3", "httpx"):
+        assert logging.getLogger(name).level == logging.WARNING
 
 
 @pytest.fixture()

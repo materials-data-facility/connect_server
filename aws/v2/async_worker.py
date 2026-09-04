@@ -5,7 +5,9 @@ import time
 from typing import Any, Dict
 
 from v2.async_jobs import handle_sqs_event, run_sqlite_worker_once
+from v2.config import configure_logging
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

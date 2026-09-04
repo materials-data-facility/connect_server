@@ -110,6 +110,37 @@ def _status(client, source_id, version=None, headers=None):
     return resp.json().get("submission", {})
 
 
+class TestSubmitPublicationYear:
+    """`publication_year` supplied vs defaulted must both reach the store.
+
+    A local ``from datetime import datetime, timezone`` inside ``submit()`` used
+    to shadow the module-level import for the whole function body, so the branch
+    that defaults the year was the ONLY thing binding the name. Every submission
+    that DID supply ``publication_year`` skipped it and then 500'd on the next
+    ``datetime.now(...)`` with ``UnboundLocalError``. The suite missed it because
+    ``BASE_SUBMISSION`` omits the field — so the tests only ever walked the
+    defaulting path. These two cases walk both.
+    """
+
+    def test_supplied_publication_year_is_kept(self, env):
+        client = TestClient(app)
+
+        result = _submit(client, {"publication_year": 2024})
+
+        record = _status(client, result["source_id"])
+        assert record["dataset_mdata"]["publication_year"] == 2024
+
+    def test_omitted_publication_year_defaults_to_the_current_year(self, env):
+        from datetime import datetime, timezone
+
+        client = TestClient(app)
+
+        result = _submit(client)
+
+        record = _status(client, result["source_id"])
+        assert record["dataset_mdata"]["publication_year"] == datetime.now(timezone.utc).year
+
+
 @pytest.mark.parametrize("test_index_id", [None, "not-configured"])
 def test_submit_rejects_test_mode_without_configured_index(
     env, monkeypatch, test_index_id,
@@ -1489,7 +1520,7 @@ class TestMetadataEditAdvanced:
         client = TestClient(app)
         source_id = _submit(client)["source_id"]
         _approve(client, source_id, mint_doi=True)
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Test Dataset"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "Test Dataset"
 
         mock_search.fail_next_ingests = 1
         resp = client.post(
@@ -1503,7 +1534,7 @@ class TestMetadataEditAdvanced:
         assert v11["status"] == "approved"
         assert not v11.get("published_at")
         # The index still describes the last successfully published version
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Test Dataset"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "Test Dataset"
 
         # The curator can retry the publish through the approve endpoint
         retry = client.post(
@@ -1516,9 +1547,9 @@ class TestMetadataEditAdvanced:
 
         assert _status(client, source_id, version="1.1")["status"] == "published"
         entry = mock_search.get_entry(source_id)
-        assert entry["content"]["dc"]["title"] == "Edit That Fails To Index"
-        assert entry["content"]["mdf"]["version"] == "1.1"
-        assert entry["content"]["mdf"]["latest"] is True
+        assert entry["content"]["title"] == "Edit That Fails To Index"
+        assert entry["content"]["version"] == "1.1"
+        assert entry["content"]["latest"] is True
 
     def test_edit_published_reports_publish_job(self, env, mock_search):
         """The successful edit response reports the new version and its status."""
@@ -1536,7 +1567,7 @@ class TestMetadataEditAdvanced:
         assert body["new_version"] == "1.1"
         assert body["status"] == "published"
         assert body["publish_job"]["job_type"] == "publish_submission"
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "Indexed Edit"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "Indexed Edit"
 
     def test_edit_with_explicit_version(self, env):
         """Edit targets a specific version, not latest."""
@@ -2000,12 +2031,17 @@ class TestStatusSanitization:
         client = TestClient(app)
         source_id = _publish_restricted(client)
 
-        # The owner shares it with a curator, who is privileged and sees everything.
+        # The owner shares it with a curator, who is privileged and sees
+        # everything. In the v2.1 record shape the acl is a top-level record
+        # attribute, no longer buried in the dataset_mdata blob.
         curator_view = client.get(f"/status/{source_id}", headers=CURATOR_HEADERS).json()["submission"]
-        assert curator_view["dataset_mdata"]["acl"] == RESTRICTED_ACL
+        assert curator_view["acl"] == RESTRICTED_ACL
+        assert "acl" not in curator_view["dataset_mdata"]
 
-        outsider = client.get(f"/status/{source_id}", headers=OTHER_HEADERS).json()["submission"]
-        assert "acl" not in outsider["dataset_mdata"]
+        # A restricted dataset is not merely sanitized for outsiders — it is
+        # invisible to them, indistinguishable from a record that does not exist.
+        outsider = client.get(f"/status/{source_id}", headers=OTHER_HEADERS).json()
+        assert outsider == {"success": False, "error": "Submission not found"}
 
     def test_owner_and_curator_still_get_the_full_record(self, env, strict_curators):
         client = TestClient(app)
@@ -2131,7 +2167,7 @@ class TestDeleteReconcilesSearch:
             "extensions": {"mdf_source_id": source_id},
         })
         _approve(client, source_id, mint_doi=False, version="2.0")
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V2 Title"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "V2 Title"
 
         resp = client.post(
             f"/submissions/{source_id}/delete",
@@ -2141,7 +2177,7 @@ class TestDeleteReconcilesSearch:
         assert resp.status_code == 200
         assert resp.json()["search_index"]["action"] == "reingested"
         assert resp.json()["search_index"]["version"] == "1.0"
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V1 Title"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "V1 Title"
 
     def test_deleting_unpublished_version_leaves_the_index_alone(self, env, mock_search):
         client = TestClient(app)
@@ -2161,7 +2197,7 @@ class TestDeleteReconcilesSearch:
         )
         assert resp.status_code == 200
         assert "search_index" not in resp.json()
-        assert mock_search.get_entry(source_id)["content"]["dc"]["title"] == "V1 Title"
+        assert mock_search.get_entry(source_id)["content"]["title"] == "V1 Title"
 
 
 # ---------------------------------------------------------------------------

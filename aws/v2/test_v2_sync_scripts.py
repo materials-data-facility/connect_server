@@ -489,14 +489,17 @@ def test_delta_reingest_preserves_chain_and_is_unchanged(sync_runtime):
     result = ingest.ingest_records([delta])
     assert result["unchanged"] == 1
     stored = store.get_submission("dataset", "2.0")
-    assert stored["dataset_mdata"]["previous_version"] == "dataset-1.0"
-    assert stored["dataset_mdata"]["root_version"] == "dataset-1.0"
+    # v2.1 record shape (N3): the chain lives on top-level record attributes as
+    # bare version strings. The converter's legacy "dataset-1.0" composite is
+    # normalized on the way in.
+    assert stored["previous_version"] == "1.0"
+    assert stored["root_version"] == "1.0"
 
     delta["metadata"]["title"] = "Two updated"
     assert ingest.ingest_records([delta])["updated"] == 1
     stored = store.get_submission("dataset", "2.0")
-    assert stored["dataset_mdata"]["previous_version"] == "dataset-1.0"
-    assert stored["dataset_mdata"]["root_version"] == "dataset-1.0"
+    assert stored["previous_version"] == "1.0"
+    assert stored["root_version"] == "1.0"
 
 
 def test_unchanged_content_repairs_corrupted_nonempty_chain(sync_runtime):
@@ -506,20 +509,26 @@ def test_unchanged_content_repairs_corrupted_nonempty_chain(sync_runtime):
         previous_version="dataset-1.0", root_version="dataset-1.0"
     )
     stored = ingest.build_submission_record(incoming)
+    # Corrupt the chain in both places it can appear: the top-level pointers
+    # (v2.1 shape) and the legacy blob copy the reader falls back to. Neither
+    # value carries a version, so both normalize to None and the chain has to
+    # be repaired from the incoming record.
     stored_metadata = json.loads(stored["dataset_mdata"])
     stored_metadata.update(
         previous_version="wrong-previous", root_version="wrong-root"
     )
     stored["dataset_mdata"] = stored_metadata
+    stored["previous_version"] = "wrong-previous"
+    stored["root_version"] = "wrong-root"
     store.upsert_submission(stored)
 
     result = ingest.ingest_records([incoming], skip_search=True)
 
     assert result["updated"] == 1
     assert result["unchanged"] == 0
-    repaired = store.get_submission("dataset", "2.0")["dataset_mdata"]
-    assert repaired["previous_version"] == "dataset-1.0"
-    assert repaired["root_version"] == "dataset-1.0"
+    repaired = store.get_submission("dataset", "2.0")
+    assert repaired["previous_version"] == "1.0"
+    assert repaired["root_version"] == "1.0"
 
 
 def test_malformed_stored_metadata_is_best_effort_merge(sync_runtime):

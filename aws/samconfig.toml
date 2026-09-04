@@ -60,14 +60,50 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 #   ApiCustomDomainCertArn="arn:aws:acm:us-east-1:<account>:certificate/<uuid>"
 #   AlarmEmail="mdf-ops@uchicago.edu"
 # Then point DNS at the ApiCustomDomainRegionalDomainName stack output.
-# UseMockDatacite=true until the DataCite TEST repository credentials are
-# stored in SSM (/mdf/staging/datacite-username|password) — the previous
-# staging deploy only ever carried the "not-configured" placeholder, so no
-# real test-DOI behavior is being given up. Flip back to false once stored.
+#
+# UseMockDatacite=false so staging exercises the REAL DataCite TEST API rather
+# than handing out fake 10.99999 DOIs — otherwise nothing touches the DataCite
+# path until prod does. This REQUIRES /mdf/staging/datacite-username and
+# -password in SSM; deploy.sh hard-errors without them, so a premature deploy
+# fails loudly instead of silently breaking DOI minting.
+#
+# PortalUrl/CurationPortalUrl point at the hosted staging frontend so curation
+# emails and redirects lead to staging instead of production.
+#
+# SearchSubjectBase is pinned to the CANONICAL portal on purpose, and must not be
+# changed to match PortalUrl. The subject is the Globus Search index's identity
+# key ({base}/{source_id}); the 935 records already in the staging index were
+# ingested with the canonical base, so deriving it from the new PortalUrl would
+# orphan every one of them — duplicated on the next publish and un-deletable by
+# delete_entry. Display URLs move; dataset identity does not.
+#
 # ApiReservedConcurrency must be EXPLICIT here: changing a template default
 # does nothing on stack updates (CloudFormation keeps the previous value for
 # any parameter not listed in the overrides).
-parameter_overrides = 'Environment=staging AuthMode=production AllowAllCurators=true ApiReservedConcurrency=50 AsyncWorkerBatchWindowSeconds=0 DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=true SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
+#
+# AllowAllCurators=false, matching prod. It was true, which made is_curator()
+# return true for every authenticated caller regardless of group — so nothing
+# ever exercised the group-membership path that prod relies on, and staging
+# curation was open to anyone who could log in. CuratorGroupIds is stated
+# explicitly rather than left to the template default for the same reason
+# ApiReservedConcurrency is: an unlisted parameter keeps its previous stack
+# value, so a default is not a guarantee.
+#
+# CuratorUserIds — break-glass for Ben Blaiszik, the primary curator in every
+# environment. Needed because curator rights otherwise depend entirely on a
+# Globus Groups lookup, and the server's dependent-token fallback is inoperable
+# (see the Globus notes in Moment #204), so a Groups API outage would lock out
+# ALL curators at once. is_curator() matches these against userinfo['sub'], the
+# EFFECTIVE identity of the presented token — and Ben has two linked identities
+# that produce different subs, so both are listed or the break-glass silently
+# fails depending on which one was used to sign in:
+#   c8741264-d274-11e5-bee7-f30dff9f1ea8  blaiszik@globusid.org  (what the CLI presents)
+#   c8745ef4-d274-11e5-bee8-3b6845397ac9  blaiszik@uchicago.edu
+# The comma separating them is PLAIN — do not escape it as '\,'. SAM's shorthand
+# parser splits parameter_overrides on spaces, not commas, and passes a backslash
+# through literally; '\,' would deploy CURATOR_USER_IDS with a stray backslash so
+# the first id could never match, breaking the break-glass silently.
+parameter_overrides = 'Environment=staging AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 CuratorUserIds=c8741264-d274-11e5-bee7-f30dff9f1ea8,c8745ef4-d274-11e5-bee8-3b6845397ac9 ApiReservedConcurrency=50 AsyncWorkerBatchWindowSeconds=0 DataCiteApiUrl=https://api.test.datacite.org DataCitePrefix=10.23677 UseMockDatacite=false SearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc TestSearchIndexUUID=ab19b80b-0887-4337-b9f8-b8cc7feb1fdc PortalUrl=https://staging.materialsdatafacility.org CurationPortalUrl=https://staging.materialsdatafacility.org/curation SearchSubjectBase=https://materialsdatafacility.org/detail ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=blaiszik@uchicago.edu'
 tags = "Project=mdf-connect Environment=staging Team=MDF"
 
 # ===========================================================================
@@ -82,8 +118,12 @@ s3_prefix = "mdf-connect-v2"
 region = "us-east-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 # Curation is gated to members of the MDF curators Globus group
-# (AllowAllCurators=false + CuratorGroupIds). Add named break-glass admins via
-# CuratorUserIds=<sub>,<sub> if the group-membership path needs a fallback.
+# (AllowAllCurators=false + CuratorGroupIds), with Ben Blaiszik — the primary
+# curator in every environment — named directly in CuratorUserIds as break-glass,
+# so a Globus Groups outage cannot lock out every curator at once. Both of his
+# linked identities are listed because is_curator() matches userinfo['sub'], the
+# effective identity of the presented token, and the two produce different subs.
+# See the staging block above for why that comma must NOT be escaped.
 # DataCite credentials are resolved from SSM by deploy.sh, never stored here.
 #
 # Custom domain: the CLI/docs expect prod at https://api.materialsdatafacility.org.
@@ -98,5 +138,5 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 #   AlarmEmail="mdf-ops@uchicago.edu"
 # Production has no test index. The API rejects test submissions while this
 # sentinel is configured, preventing them from targeting staging or a mock.
-parameter_overrides = 'Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=not-configured ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
+parameter_overrides = 'Environment=prod AuthMode=production AllowAllCurators=false CuratorGroupIds=3ce2c53e-3752-11e8-891c-0e00fd09bf20 CuratorUserIds=c8741264-d274-11e5-bee7-f30dff9f1ea8,c8745ef4-d274-11e5-bee8-3b6845397ac9 DataCiteApiUrl=https://api.datacite.org DataCitePrefix=10.18126 UseMockDatacite=false SearchIndexUUID=fed3e94e-ddab-4f2d-97fd-8243f36dc676 TestSearchIndexUUID=not-configured ApiCustomDomainName="" ApiCustomDomainCertArn="" AlarmEmail=""'
 tags = "Project=mdf-connect Environment=prod Team=MDF"

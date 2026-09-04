@@ -22,6 +22,10 @@ DATACITE_TEST_API = "https://api.test.datacite.org"
 DATACITE_PROD_API = "https://api.datacite.org"
 
 
+class DOICollisionError(RuntimeError):
+    """Raised when a generated DOI is already owned by another dataset."""
+
+
 class DataCiteClient:
     """Client for DataCite DOI registration."""
 
@@ -90,11 +94,15 @@ class DataCiteClient:
             url = f"https://materialsdatafacility.org/detail/{source_id}"
 
         # Build DataCite payload
-        payload = self._build_payload(doi, url, metadata, publish, related_identifiers)
+        payload = self._build_payload(doi, url, metadata, publish, related_identifiers, source_id=source_id)
 
         # Check if DOI already exists
         existing = self.get_doi(doi)
         if existing and existing.get("data"):
+            if not self._doi_belongs_to_source(existing, source_id):
+                raise DOICollisionError(
+                    f"DOI {doi} already belongs to a different dataset"
+                )
             # Update existing DOI
             return self._update_doi(doi, payload)
         else:
@@ -179,13 +187,38 @@ class DataCiteClient:
             }
 
     def _generate_suffix(self, source_id: str) -> str:
-        """Generate DOI suffix from source ID."""
-        # Clean source_id for DOI
-        suffix = source_id.replace("_", "-").lower()
-        # Ensure it's valid for DOI
-        valid_chars = "abcdefghijklmnopqrstuvwxyz0123456789-."
-        suffix = "".join(c if c in valid_chars else "-" for c in suffix)
-        return suffix
+        """Generate a DOI suffix from a source_id.
+
+        Lowercase and keep only ``[a-z0-9._-]`` (DOI-safe); ``_`` is preserved
+        on purpose so ``my_dataset`` and ``my-dataset`` stay distinct. Legacy
+        ids may carry uppercase or non-ASCII characters, which this maps to
+        ``-``; ``_doi_belongs_to_source`` guards the resulting collisions.
+        """
+        import re
+
+        return re.sub(r"[^a-z0-9._-]", "-", source_id.lower())
+
+    @staticmethod
+    def _doi_belongs_to_source(existing: Dict[str, Any], source_id: str) -> bool:
+        """Check that an existing DataCite record identifies ``source_id``."""
+        attributes = (existing.get("data") or {}).get("attributes") or {}
+        url = attributes.get("url")
+        if isinstance(url, str):
+            # Landing URLs are minted as f"{_detail_base()}/{source_id}" (and
+            # historically ".../detail/{source_id}"); accept either, and a
+            # version-specific landing page below it.
+            from v2.search_client import _detail_base
+
+            candidates = {f"{_detail_base().rstrip('/')}/{source_id}", f"/detail/{source_id}"}
+            stripped = url.rstrip("/")
+            if any(stripped == c or stripped.endswith(c) or stripped.startswith(c + "/") for c in candidates):
+                return True
+        for identifier in attributes.get("alternateIdentifiers") or []:
+            if isinstance(identifier, str) and identifier == source_id:
+                return True
+            if isinstance(identifier, dict) and identifier.get("alternateIdentifier") == source_id:
+                return True
+        return False
 
     def _build_payload(
         self,
@@ -194,6 +227,7 @@ class DataCiteClient:
         metadata: Dict[str, Any],
         publish: bool = True,
         related_identifiers: Optional[List[Dict[str, str]]] = None,
+        source_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build DataCite API payload."""
         # Extract metadata fields
@@ -257,6 +291,14 @@ class DataCiteClient:
         if related_identifiers:
             attributes["relatedIdentifiers"] = related_identifiers
 
+        # Record which dataset this DOI belongs to independently of the landing
+        # URL, so _doi_belongs_to_source can refuse cross-dataset overwrites even
+        # if the portal base URL changes later.
+        if source_id:
+            attributes["alternateIdentifiers"] = [
+                {"alternateIdentifier": source_id, "alternateIdentifierType": "mdf-source-id"}
+            ]
+
         # State: draft, registered, or findable
         if publish:
             attributes["event"] = "publish"
@@ -289,9 +331,7 @@ class MockDataCiteClient:
         self._dois: Dict[str, Dict] = {}
 
     def _generate_suffix(self, source_id: str) -> str:
-        suffix = source_id.replace("_", "-").lower()
-        valid_chars = "abcdefghijklmnopqrstuvwxyz0123456789-."
-        return "".join(c if c in valid_chars else "-" for c in suffix)
+        return source_id.lower()
 
     def mint_doi(
         self,
@@ -302,7 +342,7 @@ class MockDataCiteClient:
         doi_suffix: Optional[str] = None,
         related_identifiers: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        suffix = doi_suffix or source_id.replace("_", "-").lower()
+        suffix = doi_suffix or self._generate_suffix(source_id)
         doi = f"{self.prefix}/{suffix}"
 
         if not url:

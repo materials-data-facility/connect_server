@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +13,7 @@ from v2.async_jobs import dispatch_publish_job, enqueue_profile_job, enqueue_tra
 from v2.dataset_card import build_dataset_card
 from v2.transfer import check_transfer_status, cleanup_transfer_acl
 from v2.app.auth import (
+    can_view_dataset,
     ensure_submission_owner_or_curator,
     get_auth,
     get_optional_auth,
@@ -40,7 +41,20 @@ from v2.store import (
     publish_lock,
     serialize_pagination_key,
 )
-from v2.submission_utils import deep_merge, generate_source_id, increment_version, latest_version
+from v2.submission_utils import (
+    DEFAULT_ACL,
+    DEPRECATED_EXTENSION_ALIASES,
+    deep_merge,
+    generate_source_id,
+    increment_version,
+    latest_version,
+    record_previous_version,
+    record_root_version,
+    reserved_extension_keys,
+    resolve_record_acl,
+    validate_source_id,
+    validate_source_id_lenient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +65,12 @@ MAX_SUBMIT_DATA_SOURCES = int(os.environ.get("MAX_SUBMIT_DATA_SOURCES", "2000"))
 MAX_SUBMIT_AUTHORS = int(os.environ.get("MAX_SUBMIT_AUTHORS", "1000"))
 
 DATA_LOCATION_EDIT_FIELDS = frozenset({"data_sources", "download_url", "external"})
+
+# GET /submissions?include_counts=true computes status counts over a single
+# large batch and then pages that batch in-process; the cursor it hands back
+# carries an offset into the batch under this key.
+COUNTS_SCAN_LIMIT = int(os.environ.get("SUBMISSIONS_COUNTS_SCAN_LIMIT", "1000"))
+COUNTS_CURSOR_FIELD = "counts_offset"
 
 
 _UUID_RE = re.compile(
@@ -93,16 +113,98 @@ def _is_v1_payload(metadata: dict) -> bool:
     return isinstance(dc, dict) and ("titles" in dc or "creators" in dc)
 
 
-def _source_id_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
-    """Extract source_id from either v1 or v2 payload."""
-    # v1 format
-    mdf = metadata.get("mdf", {})
-    sid = mdf.get("source_id") or mdf.get("source_name")
-    if sid:
-        return sid
-    # v2 format: check extensions
-    ext = metadata.get("extensions", {})
-    return ext.get("mdf_source_id") or ext.get("mdf_source_name")
+def _submitted_extensions(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``extensions`` blob of a submit payload ({} when absent/malformed)."""
+    ext = metadata.get("extensions")
+    return ext if isinstance(ext, dict) else {}
+
+
+def _identity_from_metadata(
+    metadata: Dict[str, Any],
+) -> Tuple[Optional[str], Optional[str], List[str]]:
+    """Extract ``(source_id, source_name, deprecated_keys_used)`` from a payload.
+
+    Dataset identity is a system attribute, not user metadata (N4): it decides
+    the partition key of the record and the search facet grouping key, so it is
+    read from a dedicated top-level field instead of the user-editable
+    ``extensions`` blob. Preference order:
+
+      1. top-level ``source_id`` / ``source_name`` — the v2.1 contract
+      2. v1 ``mdf.source_id`` / ``mdf.source_name`` — auto-migrated payloads
+      3. ``extensions.mdf_source_id`` / ``extensions.mdf_source_name`` —
+         DEPRECATED; still accepted so released CLIs keep working, copied to the
+         top level and stripped from what gets stored.
+    """
+    deprecated: List[str] = []
+
+    source_id = metadata.get("source_id") or None
+    source_name = metadata.get("source_name") or None
+
+    mdf = metadata.get("mdf")
+    mdf = mdf if isinstance(mdf, dict) else {}
+    source_id = source_id or mdf.get("source_id") or mdf.get("source_name")
+    source_name = source_name or mdf.get("source_name")
+
+    ext = _submitted_extensions(metadata)
+    for key, target in DEPRECATED_EXTENSION_ALIASES.items():
+        value = ext.get(key)
+        if not value:
+            continue
+        deprecated.append(key)
+        if target == "source_id" and not source_id:
+            source_id = value
+        elif target == "source_name" and not source_name:
+            source_name = value
+    # mdf_source_name doubles as a source_id of last resort (v1 promoted
+    # source_name to the canonical identity during migration).
+    if not source_id:
+        source_id = ext.get("mdf_source_name") or None
+
+    return (
+        str(source_id) if source_id else None,
+        str(source_name) if source_name else None,
+        deprecated,
+    )
+
+
+def _reject_reserved_extensions(
+    metadata: Dict[str, Any], allow_deprecated: bool = True
+) -> None:
+    """400 on ``mdf_*`` keys in ``extensions``.
+
+    ``extensions`` is user metadata and is deep-merged wholesale on edit, so any
+    system attribute living there is writable by the submitter. The two
+    historical identity keys are grandfathered on submit only (they are copied
+    to the top level and stripped); everything else namespaced ``mdf_*`` is
+    reserved and rejected outright.
+    """
+    reserved = reserved_extension_keys(_submitted_extensions(metadata))
+    if allow_deprecated:
+        reserved = [key for key in reserved if key not in DEPRECATED_EXTENSION_ALIASES]
+    if reserved:
+        raise HTTPException(
+            400,
+            "extensions keys {} are reserved for MDF system attributes; "
+            "use the top-level source_id/source_name fields instead".format(
+                ", ".join(repr(key) for key in reserved)
+            ),
+        )
+
+
+def _validate_source_id_path(source_id: str) -> str:
+    """Validate a route source ID without disclosing its grammar.
+
+    Deliberately LENIENT: this id addresses an existing record, and the live
+    corpus predates the strict grammar (uppercase, non-ASCII and >64-character
+    ids all exist). Holding path parameters to the strict grammar would 404
+    those datasets. Only genuinely unsafe shapes — path separators, control
+    characters, ``..`` traversal — are rejected, and as a 404 so the endpoint
+    reveals nothing about the id space.
+    """
+    try:
+        return validate_source_id_lenient(source_id)
+    except ValueError:
+        raise HTTPException(404, "Submission not found")
 
 
 def _normalize_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -292,7 +394,7 @@ def _can_access_submission(auth: Optional[AuthContext], record: Dict[str, Any]) 
         return False
     if is_submission_owner_or_curator(auth, record):
         return True
-    return record.get("status") == "published"
+    return can_view_dataset(auth, record)
 
 
 def _is_privileged(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
@@ -319,6 +421,10 @@ _SENSITIVE_RECORD_FIELDS = frozenset({
     "transfer_acl_rule_ids", "transfer_bytes_transferred",
     "transfer_files_transferred",
     "metadata_updated_at",
+    # Now a top-level record attribute (v2.1 record shape). Serving it would
+    # enumerate the Globus identities a restricted dataset is shared with —
+    # exactly what the dataset_mdata.acl scrub below has always prevented.
+    "acl",
 })
 
 
@@ -327,8 +433,9 @@ def _public_submission_view(record: Dict[str, Any]) -> Dict[str, Any]:
 
     Strips submitter identity/email, the curation history (curator ids, review
     notes and rejection reasons) and the internal transfer bookkeeping. Also
-    drops ``dataset_mdata.acl``, which would otherwise enumerate the Globus
-    identities a restricted dataset is shared with.
+    drops the ACL — both the top-level ``acl`` attribute and the legacy
+    ``dataset_mdata.acl`` on un-backfilled rows — which would otherwise
+    enumerate the Globus identities a restricted dataset is shared with.
     """
     rec = _normalize_record(dict(record))
     public = {k: v for k, v in rec.items() if k not in _SENSITIVE_RECORD_FIELDS}
@@ -340,13 +447,45 @@ def _public_submission_view(record: Dict[str, Any]) -> Dict[str, Any]:
     return public
 
 
+class MetadataEditPayload(MetadataEditRequest):
+    """Metadata edit body plus the ACL.
+
+    ``acl`` is a top-level record attribute in the v2.1 shape, not dataset
+    metadata, so it is declared here rather than on ``MetadataEditRequest``
+    (whose remaining fields all deep-merge into ``dataset_mdata``). Owner edits
+    to visibility keep working through this same route.
+    """
+
+    acl: Optional[List[str]] = None
+
+
+def _validated_acl(acl: Optional[List[str]]) -> List[str]:
+    """Coerce an edited ACL, rejecting shapes that would fail open."""
+    if acl is None:
+        return list(DEFAULT_ACL)
+    entries = [str(entry).strip() for entry in acl if str(entry or "").strip()]
+    if not entries:
+        raise HTTPException(
+            400,
+            'acl may not be empty; use ["public"] to make the dataset public',
+        )
+    if "public" in entries and len(entries) > 1:
+        raise HTTPException(
+            400,
+            'acl may not mix "public" with specific identities; '
+            'use ["public"] or a list of Globus identity ids',
+        )
+    return entries
+
+
 @router.post("/submissions/{source_id}/metadata")
 async def edit_metadata(
     source_id: str,
-    payload: MetadataEditRequest,
+    payload: MetadataEditPayload,
     auth: AuthContext = Depends(get_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     submission = _resolve_submission(store, source_id, payload.version)
     ensure_submission_owner_or_curator(auth, submission)
 
@@ -373,8 +512,18 @@ async def edit_metadata(
         exclude_none=True,
     )
 
-    if not updates:
+    # acl is a record attribute, never metadata: it must not deep-merge into
+    # dataset_mdata (where it used to live) nor show up as a metadata field.
+    acl_update = _validated_acl(payload.acl) if payload.acl is not None else None
+
+    if not updates and acl_update is None:
         raise HTTPException(400, "No metadata fields provided")
+
+    if "extensions" in updates:
+        # Stricter than submit: an edit may never touch identity, so even the
+        # grandfathered mdf_source_id/mdf_source_name aliases are rejected here
+        # rather than silently repointing the record's search facet key.
+        _reject_reserved_extensions(updates, allow_deprecated=False)
 
     if "data_sources" in updates:
         data_sources = updates["data_sources"]
@@ -412,6 +561,19 @@ async def edit_metadata(
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     version = submission.get("version")
 
+    # Visibility follows the dataset across an edit. Without this, the new
+    # version record (whose dataset_mdata no longer carries acl) would fall back
+    # to the ["public"] default and silently publish a restricted dataset.
+    existing_acl = resolve_record_acl(submission)
+    effective_acl = acl_update or existing_acl
+    if effective_acl is None:
+        raise HTTPException(
+            409,
+            "Cannot determine this dataset's access control list; "
+            "contact support before editing it",
+        )
+    updated_fields = list(updates.keys()) + (["acl"] if acl_update else [])
+
     if status == "published":
         # Auto-create a minor version bump
         new_version = increment_version(version, major=False)
@@ -423,8 +585,10 @@ async def edit_metadata(
 
         existing_mdata["version"] = new_version
         existing_mdata["latest"] = True
-        existing_mdata["previous_version"] = "{}-{}".format(source_id, version)
-        existing_mdata["root_version"] = existing_mdata.get("root_version") or "{}-{}".format(source_id, "1.0")
+        # Chain pointers are bare version strings on the record, not in the
+        # metadata blob (N3). Inherit the root from the version being edited.
+        new_previous_version = version
+        new_root_version = record_root_version(submission) or "1.0"
 
         # Created in the pre-publish state, exactly like a curator-approved
         # submission: the publish job refreshes the DOI and the search entry and
@@ -451,7 +615,14 @@ async def edit_metadata(
             "created_at": now,
             "updated_at": now,
             "metadata_updated_at": now,
+            "acl": effective_acl,
+            "source_name": submission.get("source_name") or source_id,
+            "root_version": new_root_version,
+            "previous_version": new_previous_version,
         }
+        legacy_source_id = submission.get("legacy_source_id")
+        if legacy_source_id:
+            new_record["legacy_source_id"] = legacy_source_id
         if not requires_curation:
             new_record["approved_at"] = now
             new_record["approved_by"] = auth.user_id
@@ -482,7 +653,7 @@ async def edit_metadata(
                 "new_version": new_version,
                 "status": "pending_curation",
                 "message": "Data-location changes require curator approval before publication.",
-                "updated_fields": list(updates.keys()),
+                "updated_fields": updated_fields,
                 "card": build_dataset_card(new_record),
             }
 
@@ -504,12 +675,13 @@ async def edit_metadata(
             "new_version": new_version,
             "status": published["status"],
             "publish_job": published["publish_job"],
-            "updated_fields": list(updates.keys()),
+            "updated_fields": updated_fields,
             "card": build_dataset_card(fresh),
         }
 
     # pending_curation or rejected: update in-place
     submission["dataset_mdata"] = json.dumps(existing_mdata)
+    submission["acl"] = effective_acl
     submission["updated_at"] = now
     submission["metadata_updated_at"] = now
     store.upsert_submission(submission)
@@ -518,7 +690,7 @@ async def edit_metadata(
         "success": True,
         "source_id": source_id,
         "version": version,
-        "updated_fields": list(updates.keys()),
+        "updated_fields": updated_fields,
         "card": build_dataset_card(submission),
     }
 
@@ -530,6 +702,7 @@ async def withdraw(
     auth: AuthContext = Depends(get_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     submission = _resolve_submission(store, source_id, payload.version)
     ensure_submission_owner_or_curator(auth, submission)
 
@@ -560,21 +733,19 @@ async def withdraw(
     submission["updated_at"] = now
     store.upsert_submission(submission)
 
-    # If this was latest=True, restore latest on prior version
+    # If this was latest=True, restore latest on prior version. previous_version
+    # is a bare version string (N3), so no composite parsing is needed; the
+    # reader still normalizes legacy "{source_id}-{version}" values.
     mdata = _parse_mdata(submission)
-    if mdata.get("latest") and mdata.get("previous_version"):
-        prev_vsid = mdata["previous_version"]
-        # Extract version from "source_id-version"
-        parts = prev_vsid.rsplit("-", 1)
-        if len(parts) == 2:
-            prev_version = parts[1]
-            prev_record = store.get_submission(source_id, prev_version)
-            if prev_record:
-                prev_mdata = _parse_mdata(prev_record)
-                prev_mdata["latest"] = True
-                prev_record["dataset_mdata"] = json.dumps(prev_mdata)
-                prev_record["updated_at"] = now
-                store.upsert_submission(prev_record)
+    prev_version = record_previous_version(submission)
+    if mdata.get("latest") and prev_version:
+        prev_record = store.get_submission(source_id, prev_version)
+        if prev_record:
+            prev_mdata = _parse_mdata(prev_record)
+            prev_mdata["latest"] = True
+            prev_record["dataset_mdata"] = json.dumps(prev_mdata)
+            prev_record["updated_at"] = now
+            store.upsert_submission(prev_record)
 
     return {
         "success": True,
@@ -591,6 +762,7 @@ async def resubmit(
     auth: AuthContext = Depends(get_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     submission = _resolve_submission(store, source_id, payload.version)
     ensure_submission_owner_or_curator(auth, submission)
 
@@ -636,6 +808,7 @@ async def delete_submission(
     auth: AuthContext = Depends(require_curator),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     submission = _resolve_submission(store, source_id, payload.version)
     version = submission.get("version")
 
@@ -757,6 +930,7 @@ async def version_diff(
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     from_record = store.get_submission(source_id, from_version)
     if not from_record:
         raise HTTPException(404, f"Version {from_version} not found")
@@ -852,9 +1026,15 @@ async def submit(
         if not (a.get("name") or "").strip():
             raise HTTPException(400, f"Author at position {i + 1} has an empty name")
 
-    # Default publication_year to current year if not provided
+    # Default publication_year to current year if not provided.
+    #
+    # No local `from datetime import ...` here: rebinding a name that submit()
+    # already uses from module scope (line 6) makes it local for the WHOLE
+    # function body, so every request that DID supply publication_year skipped
+    # this line and then died on the `datetime.now(...)` further down with
+    # "UnboundLocalError: cannot access local variable 'datetime'" — a 500 on the
+    # commonest submit path, including the frontend's.
     if not flat.get("publication_year"):
-        from datetime import datetime, timezone
         flat["publication_year"] = datetime.now(timezone.utc).year
 
     if len(flat.get("data_sources", [])) > MAX_SUBMIT_DATA_SOURCES:
@@ -883,7 +1063,26 @@ async def submit(
             )
     update = flat.get("update", False)
 
-    source_id = _source_id_from_metadata(metadata)
+    _reject_reserved_extensions(metadata)
+    source_id, submitted_source_name, deprecated_keys = _identity_from_metadata(metadata)
+    if deprecated_keys:
+        logger.warning(
+            "Submission used deprecated extensions identity keys %s "
+            "(user_id=%s); use the top-level source_id/source_name fields",
+            ", ".join(deprecated_keys),
+            user_id,
+        )
+    if source_id:
+        # Strict grammar for a NEW id, lenient for one that addresses an
+        # existing dataset: `update=True` on a pre-grammar legacy id
+        # (uppercase / non-ASCII / >64 chars) must keep working.
+        validator = (
+            validate_source_id_lenient if flat.get("update") else validate_source_id
+        )
+        try:
+            source_id = validator(source_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
     existing_versions = []
     if source_id:
         existing_versions = store.list_versions(source_id)
@@ -921,27 +1120,23 @@ async def submit(
             if ddoi and v.get("status") == "published":
                 inherited_dataset_doi = ddoi
                 break
-        # Build version chain: previous_version = the latest existing version's id
-        previous_version_id = "{}-{}".format(source_id, latest_ver)
+        # Version chain pointers are BARE version strings (N3): dataset identity
+        # is always the (source_id, version) pair, so a pointer only has to name
+        # the version. The old "{source_id}-{version}" composite was ambiguous
+        # for legacy ids that themselves end in a version-like suffix.
+        previous_version_id = latest_ver
         # Root version: inherit from prior, or use the earliest version
         prior_record = next(
             (v for v in existing_versions if v.get("version") == latest_ver), None
         )
         if prior_record:
-            prior_mdata = prior_record.get("dataset_mdata")
-            if isinstance(prior_mdata, str):
-                try:
-                    prior_mdata = json.loads(prior_mdata)
-                except Exception:
-                    prior_mdata = {}
-            if isinstance(prior_mdata, dict):
-                root_version_id = prior_mdata.get("root_version")
+            root_version_id = record_root_version(prior_record)
         if not root_version_id:
             # Earliest version is the root. Numeric-aware (and shared with the
             # ownership check above) so a chain that reached 10.0 does not
             # suddenly re-root itself onto 10.0 under a string sort.
             earliest = root_version_record(existing_versions) or {}
-            root_version_id = "{}-{}".format(source_id, earliest.get("version", "1.0"))
+            root_version_id = earliest.get("version") or "1.0"
 
     # Inherit data_sources from prior version for metadata-only updates
     if update and not has_new_data and prior_record:
@@ -954,20 +1149,32 @@ async def submit(
         if isinstance(prior_mdata, dict):
             flat["data_sources"] = prior_mdata.get("data_sources", [])
 
-    # Populate versioning fields in metadata
+    # Populate versioning fields in metadata. version/latest stay in the
+    # metadata blob (they are part of the published dataset description); the
+    # chain pointers are top-level record attributes, set on the record below.
     flat["version"] = version
     flat["latest"] = True
-    if update:
-        flat["previous_version"] = previous_version_id
-        flat["root_version"] = root_version_id
-    else:
-        flat["root_version"] = versioned_source_id
+    if not update:
+        root_version_id = version
+
+    # ACL is a top-level record attribute (v2.1 shape), not metadata. A submit
+    # carries full metadata, so an explicit acl wins; when the caller omits it
+    # on an *update* the prior version's visibility is inherited rather than
+    # silently reset to public.
+    acl = [str(entry) for entry in (flat.get("acl") or []) if entry]
+    if not acl and prior_record is not None:
+        acl = resolve_record_acl(prior_record) or list(DEFAULT_ACL)
+    if not acl:
+        acl = list(DEFAULT_ACL)
 
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
         "source_id": source_id,
         "version": version,
         "versioned_source_id": versioned_source_id,
+        "source_name": submitted_source_name or source_id,
+        "root_version": root_version_id,
+        "acl": acl,
         "user_id": user_id,
         "user_email": user_email,
         "organization": organization,
@@ -979,6 +1186,8 @@ async def submit(
         "updated_at": now,
         "metadata_updated_at": now,
     }
+    if previous_version_id:
+        record["previous_version"] = previous_version_id
     if inherited_dataset_doi:
         record["dataset_doi"] = inherited_dataset_doi
 
@@ -1057,6 +1266,7 @@ async def list_versions(
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     versions = store.list_versions(source_id)
     if not versions:
         return {"success": False, "error": "No versions found for this source_id"}
@@ -1068,8 +1278,10 @@ async def list_versions(
         )
     )
     if not is_privileged:
-        versions = [v for v in versions if v.get("status") == "published"]
+        versions = [v for v in versions if can_view_dataset(auth, v)]
         if not versions:
+            # Same body as the no-such-source_id branch above: a hidden
+            # dataset must not be distinguishable from a nonexistent one.
             return {"success": False, "error": "No versions found for this source_id"}
 
     # Numeric-aware: a plain string sort orders 1.0, 10.0, 2.0 and makes the
@@ -1096,6 +1308,10 @@ async def list_versions(
             "doi": v.get("dataset_doi") or v.get("doi") or mdata.get("doi"),
             "created_at": v.get("created_at", ""),
             "updated_at": v.get("updated_at", ""),
+            # Bare version strings (N3), normalized on read so rows that still
+            # carry the legacy "{source_id}-{version}" composite look the same.
+            "root_version": record_root_version(v),
+            "previous_version": record_previous_version(v),
         })
 
     # Find the dataset-level DOI (from any published version)
@@ -1118,11 +1334,13 @@ async def list_versions(
 @router.get("/stats/{source_id}")
 async def dataset_stats(
     source_id: str,
+    auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     """Public access/download stats for a published dataset."""
+    _validate_source_id_path(source_id)
     versions = store.list_versions(source_id)
-    published = [v for v in versions if v.get("status") == "published"]
+    published = [v for v in versions if can_view_dataset(auth, v)]
     if not published:
         raise HTTPException(404, "No published dataset found")
 
@@ -1159,6 +1377,7 @@ async def get_status(
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(source_id)
     if version:
         record = store.get_submission(source_id, version)
         if not record:
@@ -1170,7 +1389,9 @@ async def get_status(
         latest_ver = latest_version(versions)
         record = next((item for item in versions if item.get("version") == latest_ver), versions[-1])
 
-    # If unauthenticated (or not owner/curator), only allow published
+    # If unauthenticated (or not owner/curator), only allow viewable records.
+    # Mirror the not-found shape above exactly: a hidden record must be
+    # indistinguishable from a nonexistent one (no existence oracle).
     if not _can_access_submission(auth, record):
         return {"success": False, "error": "Submission not found"}
 
@@ -1360,9 +1581,18 @@ async def list_submissions(
         status_filter = {s.strip() for s in status.split(",") if s.strip()}
 
     # When include_counts is requested, fetch a larger batch to compute counts
-    fetch_limit = max(limit, 1000) if include_counts else limit
+    # across the whole listing. That batch is then paginated in-process, so its
+    # cursor is a plain offset into the batch rather than a store cursor.
+    fetch_limit = max(limit, COUNTS_SCAN_LIMIT) if include_counts else limit
 
-    parsed_key = parse_pagination_key(start_key) if not include_counts else None
+    parsed_key = parse_pagination_key(start_key)
+    counts_offset = 0
+    if include_counts:
+        try:
+            counts_offset = max(0, int((parsed_key or {}).get(COUNTS_CURSOR_FIELD) or 0))
+        except (TypeError, ValueError):
+            counts_offset = 0
+        parsed_key = None
 
     if organization:
         if not is_curator(auth):
@@ -1392,10 +1622,20 @@ async def list_submissions(
     if status_filter:
         items = [item for item in items if item.get("status") in status_filter]
 
-    # Apply pagination limit after filtering
+    # Apply pagination limit after filtering.
+    #
+    # In counts mode the page is carved out of the in-memory batch, so the
+    # cursor has to be an offset into that batch. Previously this branch threw
+    # ``last_key`` away unconditionally, which is why GET /submissions answered
+    # ``next_key: null`` even when ``limit`` had clearly truncated the result
+    # (limit=2 over 19 rows) — page 2 was unreachable.
     if include_counts:
-        items = items[:limit]
-        last_key = None
+        page = items[counts_offset:counts_offset + limit]
+        has_more = len(items) > counts_offset + limit
+        items = page
+        last_key = (
+            {COUNTS_CURSOR_FIELD: counts_offset + limit} if has_more else None
+        )
 
     response["submissions"] = items
     response["next_key"] = serialize_pagination_key(last_key)

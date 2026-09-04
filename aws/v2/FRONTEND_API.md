@@ -373,7 +373,9 @@ Optional auth. Without auth (or for non-owner/non-curator), only published versi
       "status": "published",
       "doi": "10.18126/abc123",
       "created_at": "2023-01-01T00:00:00Z",
-      "updated_at": "2023-01-01T00:00:00Z"
+      "updated_at": "2023-01-01T00:00:00Z",
+      "root_version": "1.0",
+      "previous_version": null
     },
     {
       "version": "1.1",
@@ -381,13 +383,22 @@ Optional auth. Without auth (or for non-owner/non-curator), only published versi
       "status": "published",
       "doi": "10.18126/abc123",
       "created_at": "2023-06-01T00:00:00Z",
-      "updated_at": "2023-06-01T00:00:00Z"
+      "updated_at": "2023-06-01T00:00:00Z",
+      "root_version": "1.0",
+      "previous_version": "1.0"
     }
   ],
   "total_count": 2,
   "dataset_doi": "10.18126/abc123"
 }
 ```
+
+`root_version` and `previous_version` are **bare version strings** — the version
+of this dataset they point at, never a composite id. Dataset identity is always
+the `(source_id, version)` pair. `null` means there is no such link (the root
+version has no previous, and a lineage whose earlier versions never made it into
+v2 has no nameable root). Rows migrated before this change may still carry the
+old `"{source_id}-1.0"` composite in storage; the API normalizes it on read.
 
 ---
 
@@ -553,11 +564,37 @@ Requires submitter group membership in production.
   },
   "tags": ["featured"],
   "extensions": {"custom_field": "value"},
+  "source_id": "my-dataset-id",
+  "source_name": "my_dataset_family",
+  "acl": ["public"],
   "test": false
 }
 ```
 
 **Required fields:** `title`, `authors` (at least one with `name`), `data_sources` (unless `update: true` metadata-only)
+
+**System fields (top level, not metadata):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `source_id` | string | Optional. The dataset id you want. Must match `^[a-z0-9][a-z0-9._-]{2,63}$` (no `..`) or the request is rejected with 400 and the grammar in `detail`. Omit it and the server mints `mdf-<hex>`. If the id is already taken by a *different* dataset (and `update` is false) a short suffix is appended. |
+| `source_name` | string | Optional. Dataset-family grouping key behind the search facet. Defaults to `source_id`. |
+| `acl` | string[] | Optional. `["public"]` (the default) or a list of Globus identity/group principals. Bare identity UUIDs are accepted and canonicalized to `urn:globus:auth:identity:<uuid>`; `urn:globus:...` values are stored verbatim. On `update: true`, omitting `acl` **inherits** the prior version's visibility. |
+
+`source_id`, `source_name`, `acl`, `legacy_source_id`, `root_version` and
+`previous_version` are top-level *record* attributes, not dataset metadata — see
+"Record shape (v2.1)" in `v2.md`. Do not put them in `extensions`.
+
+**`extensions` is user metadata only.** Any key namespaced `mdf_*` is reserved
+and rejected with 400 on both submit and edit. Two exceptions are grandfathered
+**on submit only**, for released CLI versions:
+
+- `extensions.mdf_source_id` → copied to top-level `source_id` (DEPRECATED)
+- `extensions.mdf_source_name` → copied to top-level `source_name` (DEPRECATED)
+
+Both are stripped from what gets stored and logged as a deprecation warning.
+Send the top-level fields instead. On the **edit** route every `mdf_*` key
+(including these two) is rejected: an edit may not repoint dataset identity.
 
 **`data_sources` formats:**
 - `globus://{collection_uuid}/path/to/data` — Globus transfer
@@ -568,10 +605,18 @@ Requires submitter group membership in production.
 ```json
 {
   "update": true,
-  "extensions": {"mdf_source_id": "existing_source_id"},
+  "source_id": "existing_source_id",
   ...
 }
 ```
+
+On `update: true` the `source_id` is validated **leniently** — it addresses an
+existing record, and the live corpus contains ids that predate the strict
+grammar (uppercase, non-ASCII, longer than 64 characters). Only genuinely
+unsafe shapes are rejected: path separators, whitespace/control characters,
+`..`, a leading `-`/`.`, and lengths above 160. The same lenient rule applies to
+every `{source_id}` **path parameter**; an unsafe one is answered with 404 and
+no grammar is disclosed.
 
 **Response:**
 ```json
@@ -615,10 +660,15 @@ Owner or curator. Only fields explicitly provided (non-null) are applied — omi
 | `ml` | object | |
 | `geo_locations` | `[{place}]` | |
 | `tags` | `[string]` | |
-| `extensions` | object | **Deep-merged** into existing extensions — existing keys not in the update are preserved |
+| `extensions` | object | **Deep-merged** into existing extensions — existing keys not in the update are preserved. Any `mdf_*` key is rejected with 400. |
+| `acl` | `[string]` | Dataset visibility. `["public"]` or a list of Globus identity/group principals. Applied to the top-level record attribute, never merged into metadata. May not be empty, and may not mix `"public"` with specific identities. |
 | `version` | string | Targets a specific version (defaults to latest) |
 
 Not editable: `data_sources`, `organization`, `publisher`, `test`, `update`.
+
+Editing a `published` version creates a new minor version that **inherits the
+current `acl`** — visibility follows the dataset and is never silently reset to
+public.
 
 **Request body (any subset of the above):**
 ```json
@@ -764,11 +814,28 @@ Returns the caller's own submissions. Add `?organization=X` to see all org submi
   ],
   "counts": {"pending_curation": 3, "published": 12, "rejected": 1},
   "total": 16,
-  "next_key": null
+  "next_key": "eyJvZmZzZXQiOjJ9"
 }
 ```
 
-`counts` and `total` only present when `include_counts=true`. `next_key` is `null` when no more pages.
+`counts` and `total` are only present when `include_counts=true`.
+
+**Paging.** `next_key` is an **opaque cursor**: base64url text with no internal
+structure a client may rely on (it encodes a DynamoDB key on the deployed
+backend and an offset locally). Feed it back verbatim as `?start_key=` to get
+the next page, and stop when it comes back `null`.
+
+```
+GET /submissions?limit=2                      -> next_key: "eyJvZmZzZXQiOjJ9"
+GET /submissions?limit=2&start_key=eyJvZmZ... -> next_key: "eyJvZmZzZXQiOjR9"
+GET /submissions?limit=2&start_key=eyJvZmZ... -> next_key: null
+```
+
+`next_key` is now returned in **counts mode too**. Previously
+`include_counts=true` always answered `next_key: null` even when `limit` had
+truncated the result (`limit=2` over 19 rows returned 2 rows and no cursor), so
+page 2 was unreachable. An unrecognized or stale cursor is treated as "no
+cursor" and restarts the listing rather than returning an error.
 
 ---
 
@@ -973,8 +1040,30 @@ Authorization: Bearer <token>
 - `source_id` — unique dataset identifier (UUID or human-readable name)
 - `version` — semver-style string: `"1.0"`, `"1.1"`, `"2.0"`
 - `versioned_source_id` — `"{source_id}-{version}"`
+- `root_version`, `previous_version` — **bare version strings** naming another
+  version of the *same* `source_id`, or `null`
 - **Major bump** (1.0 → 2.0): new data sources provided
 - **Minor bump** (1.0 → 1.1): metadata-only edit on a published dataset
+
+Dataset identity is the `(source_id, version)` pair. Do not parse a version out
+of a `versioned_source_id` or a chain pointer: legacy ids legitimately end in
+version-like suffixes (`levine_abo2179_database_v2.1`), so the split is
+ambiguous. Read `source_id` and `version` as separate fields.
+
+### Record attributes vs. dataset metadata
+
+Six fields are properties of the *record*, not of the dataset description, and
+live at the top level of a submission (never inside `dataset_mdata` or
+`extensions`). See "Record shape (v2.1)" in `v2.md`.
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `acl` | `[string]` | Visibility. `["public"]` or Globus principals. **Never served to a caller who is not the owner or a curator.** |
+| `source_name` | string | Dataset-family grouping key behind the search facet |
+| `legacy_source_id` | string | Original v1 id, for old-id redirects |
+| `root_version` | string | Bare version of the lineage's first version |
+| `previous_version` | string | Bare version of the immediately prior version |
+| `curation_queue` | string | Internal: mirrors `status` while in the curation queue |
 
 ### Key Metadata Fields
 

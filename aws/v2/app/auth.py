@@ -29,22 +29,36 @@ _auth_cache: Dict[str, Tuple[float, AuthContext]] = {}
 _dependent_grant_unsupported = False
 
 
-def _token_cache_key(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+def _token_cache_key(token: str, groups_token: Optional[str] = None) -> str:
+    """Hash of everything the cached AuthContext was derived from.
+
+    The Groups token belongs in the key, not just the bearer token: group
+    memberships come from it, so two requests with the same bearer token but
+    different (or absent) Groups tokens legitimately produce different contexts.
+    Keying on the bearer alone let the first request of a session decide, for the
+    whole TTL, whether the caller appeared to have any groups — so a user who
+    loaded the app before their client started sending X-Groups-Token stayed
+    group-less (no submit, no curation) for up to five minutes afterwards, and a
+    later group-less request could likewise serve a cached context that still had
+    groups.
+    """
+    material = token if not groups_token else f"{token}\x00{groups_token}"
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
-def _auth_cache_get(token: str) -> Optional[AuthContext]:
-    entry = _auth_cache.get(_token_cache_key(token))
+def _auth_cache_get(token: str, groups_token: Optional[str] = None) -> Optional[AuthContext]:
+    key = _token_cache_key(token, groups_token)
+    entry = _auth_cache.get(key)
     if not entry:
         return None
     expires_at, ctx = entry
     if time.monotonic() >= expires_at:
-        _auth_cache.pop(_token_cache_key(token), None)
+        _auth_cache.pop(key, None)
         return None
     return ctx
 
 
-def _auth_cache_put(token: str, ctx: AuthContext) -> None:
+def _auth_cache_put(token: str, ctx: AuthContext, groups_token: Optional[str] = None) -> None:
     if AUTH_CACHE_TTL_SECONDS <= 0:
         return
     if len(_auth_cache) >= _AUTH_CACHE_MAX_ENTRIES:
@@ -53,7 +67,7 @@ def _auth_cache_put(token: str, ctx: AuthContext) -> None:
             : _AUTH_CACHE_MAX_ENTRIES // 4
         ]:
             _auth_cache.pop(key, None)
-    _auth_cache[_token_cache_key(token)] = (
+    _auth_cache[_token_cache_key(token, groups_token)] = (
         time.monotonic() + AUTH_CACHE_TTL_SECONDS,
         ctx,
     )
@@ -74,6 +88,42 @@ def get_auth_mode() -> str:
         logger.error("AUTH_MODE=dev requested without local runtime guard; forcing production auth")
         return "production"
     return normalized
+
+
+def _bearer_identity_ids(user_id: str, userinfo: Dict[str, Any]) -> set:
+    """Every identity the bearer token vouches for: ``sub`` plus its linked identity set."""
+    ids = {user_id}
+    for identity in userinfo.get("identity_set") or []:
+        sub = identity.get("sub") if isinstance(identity, dict) else None
+        if sub:
+            ids.add(sub)
+    return ids
+
+
+def _memberships_for_identities(groups: list, identity_ids: set) -> Dict[str, Dict[str, Any]]:
+    """Keep only groups where an ACTIVE membership belongs to one of ``identity_ids``.
+
+    ``GET /v2/groups/my_groups`` returns, per group, ``my_memberships`` — the
+    memberships held by the identities behind the *Groups* token. A group counts
+    for the bearer only if one of those memberships is the bearer's own identity
+    (or a linked one). A group with no ``my_memberships`` at all cannot be bound
+    and is dropped rather than trusted.
+    """
+    bound: Dict[str, Dict[str, Any]] = {}
+    for group in groups:
+        memberships = group.get("my_memberships") or []
+        matched = any(
+            m.get("identity_id") in identity_ids
+            and (m.get("status") or "active").lower() == "active"
+            for m in memberships
+            if isinstance(m, dict)
+        )
+        if matched:
+            bound[group["id"]] = {
+                "name": group.get("name"),
+                "description": group.get("description"),
+            }
+    return bound
 
 
 async def get_auth(
@@ -106,7 +156,7 @@ async def get_auth(
     if not token:
         raise HTTPException(status_code=401, detail="Missing Bearer token")
 
-    cached = _auth_cache_get(token)
+    cached = _auth_cache_get(token, x_groups_token)
     if cached is not None:
         return cached
 
@@ -131,10 +181,25 @@ async def get_auth(
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
         # Fetch group memberships.
-        # Strategy 1: Use the direct groups token from X-Groups-Token header
-        #             (CLI requests Groups scope during login and sends it here).
-        # Strategy 2: Dependent token exchange via X-MDF-Token / Bearer token
-        #             (works if the Globus app has Groups as a dependent scope).
+        #
+        # Strategy 1 (the supported path): the caller sends its own Globus Groups
+        #   token in X-Groups-Token. Both clients request
+        #   groups.api.globus.org:view_my_groups_and_memberships at login — the CLI
+        #   in mdf/auth/globus.py, the web app in mdf-next2 app/providers.tsx — and
+        #   forward the token on every request.
+        #
+        # Strategy 2 (fallback, currently inoperable): exchange the caller's token
+        #   for a dependent Groups token. This cannot succeed with the deployed
+        #   credentials: GLOBUS_CLIENT_ID is 86e4853e-9bdd-4ea5-9130-e4a0b0638400,
+        #   a different Globus app from 4d5f8e8b-a61d-40d8-bb58-5a3f5d1d200a, the
+        #   resource server that issues MDF Connect tokens. A dependent-token grant
+        #   may only be performed by the app owning the scope the token was issued
+        #   for, so Globus answers UNAUTHORIZED_CLIENT ("Client not configured to
+        #   use the urn:globus:auth:grant_type:dependent_token grant") — registering
+        #   a dependent scope on 86e4853e would not change that. Making it work
+        #   would mean redeploying with the 4d5f8e8b client's own credentials.
+        #   Kept because it costs one guarded attempt per container and would start
+        #   working the moment those credentials are deployed.
         client_id = os.environ.get("GLOBUS_CLIENT_ID")
         client_secret = os.environ.get("GLOBUS_CLIENT_SECRET")
         group_info = {}
@@ -161,8 +226,11 @@ async def get_auth(
                 if getattr(exc, "code", "") == "UNAUTHORIZED_CLIENT":
                     _dependent_grant_unsupported = True
                     logger.warning(
-                        "Globus client not configured for dependent-token grant; "
-                        "disabling groups exchange for this container"
+                        "Globus client %s cannot perform the dependent-token grant "
+                        "for this token (it is not the token's resource server); "
+                        "disabling groups exchange for this container. Callers must "
+                        "send their own Groups token in X-Groups-Token.",
+                        client_id,
                     )
                 else:
                     logger.warning("Failed dependent token exchange for groups", exc_info=True)
@@ -174,13 +242,28 @@ async def get_auth(
                 groups_client = globus_sdk.GroupsClient(
                     authorizer=globus_sdk.AccessTokenAuthorizer(groups_token)
                 )
-                groups = groups_client.get_my_groups()
-                group_info = {
-                    group["id"]: {"name": group["name"], "description": group["description"]}
-                    for group in groups
-                }
+                groups = list(groups_client.get_my_groups())
             except Exception:
+                groups = []
                 logger.warning("Failed to fetch group memberships", exc_info=True)
+            # Bind the Groups token to the bearer identity. The header is
+            # caller-supplied, so without this check any authenticated caller
+            # could pair their own bearer token with a curator's leaked Groups
+            # token and inherit that curator's memberships.
+            bearer_identity_ids = _bearer_identity_ids(user_id, userinfo)
+            group_info = _memberships_for_identities(groups, bearer_identity_ids)
+            if groups and not group_info:
+                logger.warning(
+                    "X-Groups-Token identity does not match bearer identity set for user %s",
+                    user_id,
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        "X-Groups-Token belongs to a different Globus identity than the "
+                        "bearer token. Re-authenticate so both tokens come from the same login."
+                    ),
+                )
 
         ctx = AuthContext(
             user_id=user_id,
@@ -190,7 +273,7 @@ async def get_auth(
             group_info=group_info,
             dependent_token=dependent_token,
         )
-        _auth_cache_put(token, ctx)
+        _auth_cache_put(token, ctx, x_groups_token)
         return ctx
     except HTTPException:
         raise
@@ -290,11 +373,33 @@ def ensure_stream_owner_or_curator(auth: AuthContext, stream: Dict[str, Any]) ->
     raise HTTPException(status_code=403, detail="You do not have permission for this stream")
 
 
+def _groups_unresolved_hint(auth: AuthContext) -> str:
+    """Extra 403 detail when the caller's groups could not be resolved at all.
+
+    An empty ``group_info`` is indistinguishable from "member of nothing" to the
+    permission checks, but the two need very different fixes: a real non-member
+    must be added to the group, whereas a caller whose Groups token never arrived
+    just needs to re-authenticate so the client requests the Groups scope. Saying
+    so here is what keeps the previous cycle's "you must be a member" red herring
+    from being rediscovered.
+    """
+    if auth.group_info:
+        return ""
+    return (
+        " No Globus group memberships could be resolved for this request — the"
+        " caller sent no X-Groups-Token. Re-authenticate (`mdf login`, or log out"
+        " and back in on the web app) so the Groups scope is requested."
+    )
+
+
 async def require_curator(
     auth: AuthContext = Depends(get_auth),
 ) -> AuthContext:
     if not is_curator(auth):
-        raise HTTPException(status_code=403, detail="You do not have curator permissions")
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have curator permissions." + _groups_unresolved_hint(auth),
+        )
     return auth
 
 
@@ -321,6 +426,9 @@ async def require_submitter(
     if not is_submitter(auth):
         raise HTTPException(
             status_code=403,
-            detail="You must be a member of the MDF submitters group to submit datasets",
+            detail=(
+                "You must be a member of the MDF submitters group to submit datasets."
+                + _groups_unresolved_hint(auth)
+            ),
         )
     return auth

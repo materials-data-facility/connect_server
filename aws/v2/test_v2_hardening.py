@@ -472,7 +472,7 @@ def test_gmeta_entry_writes_resource_type_and_stable_source_name():
             "extensions": {"mdf_source_name": "pub_42_smith"},
         }),
     }
-    mdf = client.build_gmeta_entry(migrated)["content"]["mdf"]
+    mdf = client.build_gmeta_entry(migrated)["content"]
     assert mdf["resource_type"] == "dataset"
     assert mdf["source_name"] == "pub_42_smith"
 
@@ -481,7 +481,7 @@ def test_gmeta_entry_writes_resource_type_and_stable_source_name():
         "version": "1.0",
         "dataset_mdata": _json.dumps({"title": "T2", "authors": [{"name": "A"}], "acl": ["public"]}),
     }
-    mdf_native = client.build_gmeta_entry(native)["content"]["mdf"]
+    mdf_native = client.build_gmeta_entry(native)["content"]
     assert mdf_native["resource_type"] == "dataset"
     assert mdf_native["source_name"] == "mdf-deadbeefcafe"
 
