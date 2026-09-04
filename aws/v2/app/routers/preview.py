@@ -5,13 +5,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from v2.app.auth import can_view_dataset, get_optional_auth
-from v2.app.deps import get_submission_store
+from v2.app.deps import get_submission_store, guard_source_id_path
 from v2.app.models import AuthContext
 from v2.store import SubmissionStore
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(guard_source_id_path)])
 
 
 # Note: stream-level preview endpoints (GET /stream/{id}/preview and

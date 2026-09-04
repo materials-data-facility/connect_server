@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from v2.app.deps import guard_source_id_path
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ from v2.search import (
     search_semantic,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(guard_source_id_path)])
 
 # Maps public query param names to Globus Search index field names.
 #

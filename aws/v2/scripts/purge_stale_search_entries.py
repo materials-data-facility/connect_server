@@ -82,7 +82,11 @@ def _source_id_from_subject(subject: str) -> str:
 
 
 def _title_from_content(content: Dict[str, Any]) -> str:
-    dc = content.get("dc") or {}
+    # Entries may be old (nested dc/mdf) or new (flat v2); normalize first.
+    from v2.search_client import _flat_content
+
+    content = _flat_content(content)
+    dc = {"title": content.get("title")}
     title = dc.get("title")
     if isinstance(title, str):
         return title

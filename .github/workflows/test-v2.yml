@@ -1,10 +1,25 @@
 name: V2 Backend Tests
 
 on:
-  pull_request:
+  push:
     branches:
+      - main
       - prod
       - v2-backend-curation
+      - release-burndown-wave1
+    paths:
+      - "aws/v2/**"
+      - "aws/template.yaml"
+      - "aws/samconfig.toml"
+      - "aws/requirements.txt"
+      - ".github/workflows/test-v2.yml"
+  pull_request:
+    branches:
+      - main
+      - prod
+      - v2-backend-curation
+      - release-burndown-wave1
+  workflow_dispatch:
 
 jobs:
   test:
@@ -26,12 +41,19 @@ jobs:
 
       - name: Install dependencies
         working-directory: aws
+        # No "|| true": a dependency that fails to install must fail the gate,
+        # otherwise CI silently tests a different dependency set than the SAM build.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt 2>/dev/null || true
-          pip install fastapi uvicorn mangum pydantic httpx globus-sdk pytest boto3
+          pip install -r requirements.txt
+          pip install -r v2/requirements-test.txt
+          pip install aws-sam-cli
+
+      - name: Validate SAM template
+        working-directory: aws
+        run: sam validate --lint
 
       - name: Run tests
         working-directory: aws
         run: |
-          PYTHONPATH=. pytest v2/test_v2_*.py -v
+          PYTHONPATH=. pytest v2/test_v2_*.py -q

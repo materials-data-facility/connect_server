@@ -220,3 +220,19 @@ def test_restricted_published_submission_routes_are_owner_only(env):
         assert anon["success"] is False
         assert anon == client.get(f"{route}/{ghost}").json()
         assert client.get(f"{route}/{source_id}", headers=OWNER_HEADERS).json()["success"] is True
+
+
+def test_other_routers_reject_path_hostile_source_ids_as_not_found(env):
+    """cards/preview/search/curation share the lenient path guard via a router dependency."""
+    client = TestClient(app)
+    for path in ("/card/-bad", "/preview/..evil", "/citation/a%20b", "/datasets/-bad/related"):
+        resp = client.get(path)
+        assert resp.status_code == 404, path
+        assert "grammar" not in resp.text.lower()
+
+    # Legacy-shaped ids (uppercase, non-ASCII) are still addressable through the guard:
+    # they fall through to the store lookup instead of being rejected up front.
+    for path in ("/card/Dataset_Li_conductivity", "/card/kononov_identifying_native_αalumina"):
+        resp = client.get(path)
+        assert resp.status_code in (200, 404), path
+        assert resp.json().get("detail") in (None, "Dataset not found")

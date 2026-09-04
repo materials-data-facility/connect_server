@@ -9,14 +9,14 @@ logger = logging.getLogger(__name__)
 
 from v2.async_jobs import dispatch_publish_job
 from v2.app.auth import require_curator
-from v2.app.deps import get_submission_store
+from v2.app.deps import get_submission_store, guard_source_id_path
 from v2.app.models import AuthContext, CurationApproveRequest, CurationRejectRequest
 from v2.email_utils import notify_submitter_rejected
 from v2.metadata import parse_metadata
 from v2.store import SubmissionStore
 from v2.submission_utils import deep_merge, latest_version
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(guard_source_id_path)])
 
 
 def _resolve_submission_for_curation(

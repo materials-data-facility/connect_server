@@ -2,11 +2,19 @@ name: CI
 
 # Controls when the action will run. Triggers the workflow on push or pull request
 # events but only for the master branch
+# LEGACY v1 deploy. Path-filtered so v2 work (aws/v2/**, template.yaml) merged
+# to prod does NOT redeploy the v1 Lambdas; only changes to the v1 modules do.
 on:
   push:
     branches:
       - "dev"
       - "prod"
+    paths:
+      - "aws/*.py"
+      - "aws/Dockerfile"
+      - "aws/tests/**"
+      - "aws/requirements.txt"
+      - ".github/workflows/deploy-lambda.yml"
   workflow_dispatch:
 
 permissions:
