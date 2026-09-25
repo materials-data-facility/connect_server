@@ -4,7 +4,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from v2.app.auth import can_view_dataset, get_optional_auth, is_curator
+from v2.app.auth import (
+    can_view_dataset,
+    get_optional_auth,
+    is_curator,
+    is_submission_owner_or_curator,
+)
 from v2.app.deps import get_submission_store, guard_source_id_path
 from v2.app.models import AuthContext
 from v2.citation import generate_apa, generate_bibtex, generate_datacite_xml, generate_ris
@@ -95,6 +100,16 @@ def _newest_visible(
     return None
 
 
+def _attach_owner_fields(
+    card: Dict[str, Any], auth: Optional[AuthContext], record: Dict[str, Any]
+) -> None:
+    """Curator feedback is for the submitter and curators only."""
+    if record.get("status") != "rejected" or not record.get("rejection_reason"):
+        return
+    if is_submission_owner_or_curator(auth, record):
+        card["rejection_reason"] = record["rejection_reason"]
+
+
 def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> Dict[str, bool]:
     """Compute user permissions for a dataset record."""
     if not auth:
@@ -146,6 +161,7 @@ async def get_card(
         except Exception:
             logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
+    _attach_owner_fields(card, auth, record)
     resp = {"success": True, "card": card, "permissions": _build_permissions(auth, record)}
     if fmt == "agent":
         resp["format"] = "agent"

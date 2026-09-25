@@ -428,7 +428,7 @@ def is_submission_owner_or_curator(
 
 
 #: Unpublished statuses a dataset's owner (and curators) may read.
-OWNER_VISIBLE_UNPUBLISHED_STATUSES = frozenset({"pending_curation", "approved", "rejected"})
+OWNER_VISIBLE_UNPUBLISHED_STATUSES = frozenset({"pending_curation", "approved", "rejected", "withdrawn"})
 
 
 def can_view_dataset(auth: Optional[AuthContext], record: Optional[Dict[str, Any]]) -> bool:

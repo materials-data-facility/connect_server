@@ -102,7 +102,8 @@ async def dataset_files(
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
-    _increment_view(source_id, record, store)
+    # Views are counted once per page view, by /card (and /preview/{id});
+    # the file browser and sample calls on the same page must not add more.
 
     files = []
     for fp in profile.get("files", []):
@@ -129,7 +130,8 @@ async def dataset_file_detail(
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
-    _increment_view(source_id, record, store)
+    # Views are counted once per page view, by /card (and /preview/{id});
+    # the file browser and sample calls on the same page must not add more.
 
     for fp in profile.get("files", []):
         if fp.get("path") == path or fp.get("filename") == path:
@@ -149,7 +151,8 @@ async def dataset_sample(
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
-    _increment_view(source_id, record, store)
+    # Views are counted once per page view, by /card (and /preview/{id});
+    # the file browser and sample calls on the same page must not add more.
 
     # Find the first file with sample_rows
     for fp in profile.get("files", []):

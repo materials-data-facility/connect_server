@@ -21,7 +21,7 @@ def _curators(monkeypatch):
     monkeypatch.delenv("ALLOW_ALL_CURATORS", raising=False)
 
 
-@pytest.mark.parametrize("status", ["pending_curation", "approved", "rejected"])
+@pytest.mark.parametrize("status", ["pending_curation", "approved", "rejected", "withdrawn"])
 def test_unpublished_versions_visible_to_owner_and_curator_only(status):
     record = {"source_id": "ds", "version": "1.1", "status": status, "user_id": "owner-1"}
     assert can_view_dataset(OWNER, record) is True
@@ -30,7 +30,7 @@ def test_unpublished_versions_visible_to_owner_and_curator_only(status):
     assert can_view_dataset(None, record) is False
 
 
-@pytest.mark.parametrize("status", ["withdrawn", "deleted", "draft", None])
+@pytest.mark.parametrize("status", ["deleted", "draft", None])
 def test_other_statuses_stay_hidden_even_from_the_owner(status):
     record = {"source_id": "ds", "version": "1.0", "status": status, "user_id": "owner-1"}
     assert can_view_dataset(OWNER, record) is False
@@ -239,3 +239,19 @@ def test_legacy_id_with_explicit_version_resolves_on_canonical(api):
 def test_citation_accepts_version_latest(api):
     _put("ds", "1.0", "published")
     assert api.get("/citation/ds", params={"version": "latest"}).status_code == 200
+
+
+def test_rejection_reason_only_for_owner(api):
+    _put("rj", "1.0", "rejected", rejection_reason="Missing license")
+    owner = api.get("/card/rj", params={"version": "1.0"}, headers=OWNER_H).json()
+    assert owner["card"]["rejection_reason"] == "Missing license"
+    assert api.get("/card/rj", params={"version": "1.0"}, headers=ANON_OTHER).status_code == 404
+
+
+def test_file_browser_calls_do_not_count_views(api):
+    from v2.store import get_store
+
+    _put("fv", "1.0", "published", view_count=0)
+    api.get("/preview/fv/files")
+    api.get("/preview/fv/sample")
+    assert int(get_store().get("fv", version="1.0").get("view_count") or 0) == 0
