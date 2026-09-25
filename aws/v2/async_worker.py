@@ -16,7 +16,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     # template.yaml passes an Input naming its job; a schedule without one is
     # the original transfer-cleanup rule.
     if event.get("source") == "aws.events" or "job" in event:
-        from v2.async_jobs import JOB_CLEANUP_TRANSFERS, JOB_LINK_HEALTH_SWEEP, process_job
+        from v2.async_jobs import (
+            JOB_CLEANUP_TRANSFERS, JOB_LINK_HEALTH_SWEEP, fanout_time_budget, process_job,
+        )
 
         job = event.get("job") or JOB_CLEANUP_TRANSFERS
         allowed = {JOB_CLEANUP_TRANSFERS, JOB_LINK_HEALTH_SWEEP}
@@ -24,9 +26,10 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             logger.warning("Ignoring scheduled event for unknown job %r", job)
             return {"ignored": job}
         logger.info("Handling scheduled job %s (%s)", job, event.get("detail-type"))
-        return process_job(job, dict(event.get("payload") or {}))
+        with fanout_time_budget(context):
+            return process_job(job, dict(event.get("payload") or {}))
 
-    return handle_sqs_event(event)
+    return handle_sqs_event(event, context)
 
 
 def main() -> None:

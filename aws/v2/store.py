@@ -277,6 +277,10 @@ class SubmissionStore:
         """List all submissions (for search)."""
         raise NotImplementedError
 
+    def list_fanout_candidates(self, limit: int = 100000) -> List[Dict[str, Any]]:
+        """List small fields needed by the embedding and link-health dispatchers."""
+        raise NotImplementedError
+
     def update_embedding(
         self,
         source_id: str,
@@ -697,6 +701,32 @@ class DynamoSubmissionStore(SubmissionStore):
         while len(items) < limit:
             page_limit = min(limit - len(items), 1000)
             kwargs: Dict[str, Any] = {"Limit": page_limit}
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = self.table.scan(**kwargs)
+            items.extend(_without_lock_items(resp.get("Items", [])))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        return items[:limit]
+
+    def list_fanout_candidates(self, limit: int = 100000) -> List[Dict[str, Any]]:
+        fields = (
+            "source_id", "version", "status", "dataset_mdata", "embedding_model",
+            "embedding_generated_at", "metadata_updated_at",
+            "link_health_checked_at",
+        )
+        names = {f"#f{i}": field for i, field in enumerate(fields)}
+        names.update({"#lh": "link_health", "#lhs": "status", "#lhc": "checked_at"})
+        items: List[Dict[str, Any]] = []
+        last_key = None
+        while len(items) < limit:
+            kwargs: Dict[str, Any] = {
+                "Limit": min(limit - len(items), 1000),
+                "ProjectionExpression": ", ".join(f"#f{i}" for i in range(len(fields)))
+                + ", #lh.#lhs, #lh.#lhc",
+                "ExpressionAttributeNames": names,
+            }
             if last_key:
                 kwargs["ExclusiveStartKey"] = last_key
             resp = self.table.scan(**kwargs)
@@ -1226,6 +1256,15 @@ class SqliteSubmissionStore(SubmissionStore):
     def list_all(self, limit: int = 1000) -> List[Dict[str, Any]]:
         cur = self.conn.execute(
             "SELECT * FROM submissions ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_dict(row) for row in cur.fetchall()]
+
+    def list_fanout_candidates(self, limit: int = 100000) -> List[Dict[str, Any]]:
+        cur = self.conn.execute(
+            "SELECT source_id, version, status, dataset_mdata, embedding_model, "
+            "embedding_generated_at, metadata_updated_at, link_health, "
+            "link_health_checked_at FROM submissions ORDER BY source_id, version LIMIT ?",
             (limit,),
         )
         return [self._row_to_dict(row) for row in cur.fetchall()]

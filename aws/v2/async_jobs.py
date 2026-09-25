@@ -67,6 +67,17 @@ class JobDispatcher:
     def dispatch(self, job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def dispatch_batch(self, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        failures = []
+        sent = 0
+        for job in jobs:
+            try:
+                self.dispatch(job["job_type"], job["payload"])
+                sent += 1
+            except Exception as exc:
+                failures.append({**job["payload"], "error": str(exc)})
+        return {"enqueued": sent, "enqueue_failures": failures}
+
 
 class InlineJobDispatcher(JobDispatcher):
     def dispatch(self, job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,6 +135,41 @@ class SQSJobDispatcher(JobDispatcher):
             "job_type": job_type,
             "message_id": resp.get("MessageId"),
         }
+
+    def dispatch_batch(self, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        sent = 0
+        failures = []
+        for offset in range(0, len(jobs), 10):
+            chunk = jobs[offset:offset + 10]
+            entries = [{
+                "Id": str(i),
+                "MessageBody": json.dumps({
+                    "job_type": job["job_type"], "payload": job["payload"],
+                    "created_at": _utc_now(),
+                }),
+            } for i, job in enumerate(chunk)]
+            pending = entries
+            for attempt in range(2):
+                try:
+                    response = self.client.send_message_batch(
+                        QueueUrl=self.queue_url, Entries=pending,
+                    )
+                    failed_by_id = {item["Id"]: item for item in response.get("Failed", [])}
+                    sent += len(pending) - len(failed_by_id)
+                    pending = [entry for entry in pending if entry["Id"] in failed_by_id]
+                    if not pending:
+                        break
+                    error = {key: str(value.get("Message") or value.get("Code"))
+                             for key, value in failed_by_id.items()}
+                except Exception as exc:
+                    error = {entry["Id"]: str(exc) for entry in pending}
+                if attempt == 1:
+                    for entry in pending:
+                        failures.append({
+                            **chunk[int(entry["Id"])]["payload"],
+                            "error": error[entry["Id"]],
+                        })
+        return {"enqueued": sent, "enqueue_failures": failures}
 
 
 class SqliteJobDispatcher(JobDispatcher):
@@ -1103,6 +1149,121 @@ def _is_embedding_stale_record(record: Dict[str, Any]) -> bool:
     return gen_at < mdata_at
 
 
+_fanout_remaining = contextvars.ContextVar("fanout_remaining", default=None)
+
+
+@contextmanager
+def fanout_time_budget(context: Any):
+    token = _fanout_remaining.set(_remaining_time_fn(context) if context is not None else None)
+    try:
+        yield
+    finally:
+        _fanout_remaining.reset(token)
+
+
+def _fanout_clock():
+    remaining = _fanout_remaining.get()
+    if remaining is not None:
+        return remaining
+    started = time.monotonic()
+    budget = float(os.environ.get("FANOUT_MAX_SECONDS", "90"))
+    return lambda: budget - (time.monotonic() - started)
+
+
+def _fanout_send(jobs: List[Dict[str, Any]], job_type: str) -> Dict[str, Any]:
+    dispatcher = get_job_dispatcher()
+    if isinstance(dispatcher, SQSJobDispatcher):
+        return dispatcher.dispatch_batch(jobs)
+    # Keep the established enqueue entry points for inline/sqlite callers.
+    sent = 0
+    failures = []
+    enqueue = enqueue_embedding_job if job_type == JOB_GENERATE_EMBEDDING else enqueue_link_health_job
+    for job in jobs:
+        item = job["payload"]
+        try:
+            enqueue(item["source_id"], item["version"])
+            sent += 1
+        except Exception as exc:
+            failures.append({"source_id": item["source_id"], "error": str(exc)})
+            logger.exception("Failed to enqueue %s for %s", job_type, item["source_id"])
+    return {"enqueued": sent, "enqueue_failures": failures}
+
+
+def _fanout(payload: Dict[str, Any], job_type: str, selected, current) -> Dict[str, Any]:
+    from v2.store import get_store
+
+    remaining = _fanout_clock()
+    margin = float(os.environ.get("FANOUT_SAFETY_MARGIN_SECONDS", "20"))
+    records = sorted(get_store().list_fanout_candidates(),
+                     key=lambda sub: (sub.get("source_id") or "", sub.get("version") or ""))
+    cursor = tuple(payload.get("start_after") or ())
+    enqueued = skipped_current = considered = 0
+    failures: List[Dict[str, Any]] = []
+    pending: List[Dict[str, Any]] = []
+    last_key = cursor
+    safe_cursor = cursor
+    continued = False
+    total_enqueued = int(payload.get("enqueued_so_far", 0))
+    limit = payload.get("limit")
+
+    def flush():
+        nonlocal enqueued, continued, safe_cursor, last_key
+        if pending:
+            if remaining() < margin:
+                continued = True
+                pending.clear()
+                last_key = safe_cursor
+                return
+            result = _fanout_send(pending, job_type)
+            enqueued += result["enqueued"]
+            failures.extend(result["enqueue_failures"])
+            pending.clear()
+            safe_cursor = last_key
+
+    for sub in records:
+        key = (sub.get("source_id") or "", sub.get("version") or "")
+        if key <= cursor:
+            continue
+        if remaining() < margin:
+            continued = True
+            last_key = safe_cursor
+            break
+        last_key = key
+        if not selected(sub):
+            if not pending:
+                safe_cursor = key
+            continue
+        considered += 1
+        if not payload.get("force") and current(sub):
+            skipped_current += 1
+            if not pending:
+                safe_cursor = key
+            continue
+        if not all(key):
+            if not pending:
+                safe_cursor = key
+            continue
+        pending.append({"job_type": job_type,
+                        "payload": {"source_id": key[0], "version": key[1]}})
+        if len(pending) == 10:
+            flush()
+            if continued:
+                break
+        if limit and total_enqueued + enqueued + len(pending) >= int(limit):
+            break
+    flush()
+    if continued:
+        continuation = dict(payload)
+        continuation["start_after"] = list(last_key)
+        continuation["enqueued_so_far"] = total_enqueued + enqueued
+        get_job_dispatcher().dispatch(
+            JOB_DISPATCH_EMBEDDING_REBUILD if job_type == JOB_GENERATE_EMBEDDING
+            else JOB_LINK_HEALTH_SWEEP, continuation,
+        )
+    return {"continued": continued, "considered": considered, "enqueued": enqueued,
+            "skipped_current": skipped_current, "enqueue_failures": failures}
+
+
 def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Scan all published submissions and fan out one embedding job per pending record.
 
@@ -1111,48 +1272,19 @@ def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, An
     `build_snapshot` is true.
     """
     from v2.embeddings import EMBEDDING_MODEL
-    from v2.store import get_store
 
-    force = bool(payload.get("force"))
     build_snapshot_flag = payload.get("build_snapshot", True)
-    limit = payload.get("limit")
-
-    store = get_store()
-    all_subs = store.list_all(limit=100000)
-
-    enqueued = 0
-    skipped_current = 0
-    failed_enqueue: List[Dict[str, Any]] = []
-
-    for sub in all_subs:
-        if sub.get("status") != "published":
-            continue
-        if dataset_mdata_dict(sub).get("latest") is False:
-            continue
-        if not force:
-            has_vec = bool(sub.get("title_description_embedding"))
-            same_model = sub.get("embedding_model") == EMBEDDING_MODEL
-            if has_vec and same_model and not _is_embedding_stale_record(sub):
-                skipped_current += 1
-                continue
-
-        source_id = sub.get("source_id")
-        version = sub.get("version")
-        if not source_id or not version:
-            continue
-        try:
-            enqueue_embedding_job(source_id, version)
-            enqueued += 1
-        except Exception as exc:
-            failed_enqueue.append({"source_id": source_id, "error": str(exc)})
-            logger.exception(
-                "Dispatch: failed to enqueue embedding job for %s v%s", source_id, version
-            )
-        if limit and enqueued >= int(limit):
-            break
+    result = _fanout(
+        payload, JOB_GENERATE_EMBEDDING,
+        lambda sub: sub.get("status") == "published"
+        and dataset_mdata_dict(sub).get("latest") is not False,
+        lambda sub: bool(sub.get("embedding_model"))
+        and sub.get("embedding_model") == EMBEDDING_MODEL
+        and not _is_embedding_stale_record(sub),
+    )
 
     snapshot_job: Dict[str, Any] = {"enqueued": False, "skipped": True}
-    if build_snapshot_flag:
+    if build_snapshot_flag and not result["continued"]:
         try:
             snapshot_job = enqueue_snapshot_build_job()
             snapshot_job["enqueued"] = True
@@ -1160,14 +1292,8 @@ def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, An
             snapshot_job = {"enqueued": False, "error": str(exc)}
             logger.exception("Dispatch: failed to enqueue snapshot build job")
 
-    return {
-        "success": True,
-        "model": EMBEDDING_MODEL,
-        "enqueued": enqueued,
-        "skipped_current": skipped_current,
-        "enqueue_failures": failed_enqueue,
-        "snapshot_job": snapshot_job,
-    }
+    return {"success": True, "model": EMBEDDING_MODEL, **result,
+            "snapshot_job": snapshot_job}
 
 
 # ---------------------------------------------------------------------------
@@ -1259,51 +1385,13 @@ def _process_link_health_sweep(payload: Dict[str, Any]) -> Dict[str, Any]:
     budget) so the scan and the fan-out never touch the API request, and skips
     records whose last check is still current unless `force` is set.
     """
-    from v2.store import get_store
-
-    force = bool(payload.get("force"))
-    limit = payload.get("limit")
-
-    store = get_store()
-    all_subs = store.list_all(limit=100000)
-
-    enqueued = 0
-    skipped_current = 0
-    considered = 0
-    failed_enqueue: List[Dict[str, Any]] = []
-
-    for sub in all_subs:
-        if sub.get("status") != "published":
-            continue
-        if dataset_mdata_dict(sub).get("latest") is False:
-            continue
-        considered += 1
-        if not force and _link_health_is_current(sub):
-            skipped_current += 1
-            continue
-
-        source_id = sub.get("source_id")
-        version = sub.get("version")
-        if not source_id or not version:
-            continue
-        try:
-            enqueue_link_health_job(source_id, version)
-            enqueued += 1
-        except Exception as exc:
-            failed_enqueue.append({"source_id": source_id, "error": str(exc)})
-            logger.exception(
-                "Sweep: failed to enqueue link health job for %s v%s", source_id, version
-            )
-        if limit and enqueued >= int(limit):
-            break
-
-    return {
-        "success": True,
-        "considered": considered,
-        "enqueued": enqueued,
-        "skipped_current": skipped_current,
-        "enqueue_failures": failed_enqueue,
-    }
+    result = _fanout(
+        payload, JOB_LINK_HEALTH,
+        lambda sub: sub.get("status") == "published"
+        and dataset_mdata_dict(sub).get("latest") is not False,
+        _link_health_is_current,
+    )
+    return {"success": True, **result}
 
 
 def run_sqlite_worker_once(limit: int = 20) -> Dict[str, Any]:
@@ -1392,7 +1480,8 @@ def handle_sqs_event(event: Dict[str, Any], context: Any = None) -> Dict[str, An
         try:
             body = json.loads(record.get("body") or "{}")
             with record_time_budget(None if left == float("inf") else left - BATCH_SAFETY_MARGIN_SECONDS):
-                process_job(body["job_type"], body["payload"])
+                with fanout_time_budget(context):
+                    process_job(body["job_type"], body["payload"])
         except Exception:
             logger.exception("Failed processing SQS async job message_id=%s", message_id)
             failures.append({"itemIdentifier": message_id})
