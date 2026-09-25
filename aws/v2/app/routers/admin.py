@@ -25,6 +25,7 @@ from v2.app.auth import require_curator
 from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext
 from v2.store import SubmissionStore
+from v2.submission_utils import dataset_mdata_dict
 
 logger = logging.getLogger(__name__)
 
@@ -358,8 +359,7 @@ async def embedding_status(
         if sub.get("status") != "published":
             continue
         total_published += 1
-        mdata = sub.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(sub).get("latest") is False:
             continue
         emb = sub.get("title_description_embedding")
         model = sub.get("embedding_model") or ""
@@ -535,8 +535,7 @@ async def link_health_summary(
     for sub in all_submissions:
         if sub.get("status") != "published":
             continue
-        mdata = sub.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(sub).get("latest") is False:
             continue
         published_total += 1
 

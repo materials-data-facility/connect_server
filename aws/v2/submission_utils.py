@@ -17,6 +17,20 @@ MAX_LENIENT_SOURCE_ID_LENGTH = 160
 _UNSAFE_SOURCE_ID_CHARS = ("/", "\\", "\x00")
 
 
+def dataset_mdata_dict(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Read dataset metadata from either SQLite's dict or DynamoDB's JSON string."""
+    value = record.get("dataset_mdata")
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def validate_source_id(value: str) -> str:
     """Return a valid NEW MDF source ID or raise ``ValueError``.
 

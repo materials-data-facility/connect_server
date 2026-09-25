@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from v2.config import AWS_REGION
+from v2.submission_utils import dataset_mdata_dict
 
 logger = logging.getLogger(__name__)
 
@@ -604,7 +605,7 @@ def _mark_prior_versions_not_latest(
                 mdata = json.loads(mdata)
             except Exception:
                 continue
-        if isinstance(mdata, dict) and mdata.get("latest") is not False:
+        if isinstance(mdata, dict) and dataset_mdata_dict(v_record).get("latest") is not False:
             mdata["latest"] = False
             v_record["dataset_mdata"] = json.dumps(mdata)
             v_record["updated_at"] = _utc_now()
@@ -1126,8 +1127,7 @@ def _process_dispatch_embedding_rebuild(payload: Dict[str, Any]) -> Dict[str, An
     for sub in all_subs:
         if sub.get("status") != "published":
             continue
-        mdata = sub.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(sub).get("latest") is False:
             continue
         if not force:
             has_vec = bool(sub.get("title_description_embedding"))
@@ -1275,8 +1275,7 @@ def _process_link_health_sweep(payload: Dict[str, Any]) -> Dict[str, Any]:
     for sub in all_subs:
         if sub.get("status") != "published":
             continue
-        mdata = sub.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(sub).get("latest") is False:
             continue
         considered += 1
         if not force and _link_health_is_current(sub):

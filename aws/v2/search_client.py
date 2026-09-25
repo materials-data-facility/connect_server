@@ -1101,14 +1101,13 @@ class MockGlobusSearchClient:
                         continue
                     counters[facet["name"]][str(value)] += 1
 
-        facets = {}
-        for facet in DEFAULT_FACETS:
-            counter = counters[facet["name"]]
-            facets[facet["name"]] = [
+        return {
+            facet["name"]: _clean_facet_buckets([
                 {"value": val, "count": count}
-                for val, count in counter.most_common(facet.get("size", 20))
-            ]
-        return facets
+                for val, count in counters[facet["name"]].most_common(facet.get("size", 20))
+            ], facet["name"])
+            for facet in DEFAULT_FACETS
+        }
 
 
 def _result_from_content(content: Dict[str, Any], score: Any = 0) -> Dict[str, Any]:
@@ -1181,8 +1180,24 @@ def _format_facet_results(facet_results: List[Dict[str, Any]]) -> Dict[str, List
             for b in fr.get("buckets", [])
             if b.get("count", 0) > 0
         ]
-        facets[name] = buckets
+        facets[name] = _clean_facet_buckets(buckets, name)
     return facets
+
+
+def _clean_facet_buckets(buckets: List[Dict[str, Any]], name: str) -> List[Dict[str, Any]]:
+    """Drop blank values; show years newest first and other facets by count."""
+    cleaned = [b for b in buckets if str(b.get("value") or "").strip()]
+    if name == "Year":
+        def year_key(bucket):
+            value = str(bucket["value"]).strip()
+            try:
+                return (1, float(value), value)
+            except ValueError:
+                return (0, 0, value)
+        cleaned.sort(key=year_key, reverse=True)
+    else:
+        cleaned.sort(key=lambda b: b.get("count", 0), reverse=True)
+    return cleaned
 
 
 # Singleton for mock client to persist in-memory state within a Lambda invocation

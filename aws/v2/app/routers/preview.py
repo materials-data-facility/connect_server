@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from v2.app.auth import can_view_dataset, get_optional_auth
 from v2.app.deps import get_submission_store, guard_source_id_path
@@ -35,8 +35,13 @@ def _get_profile_and_record(
 
     Returns (profile_dict, record_dict) or (None, None).
     """
-    record = store.get(source_id)
-    if not can_view_dataset(auth, record):
+    # Same resolution as the dataset card: the newest published version the
+    # caller may view (a pending update must not hide the published preview),
+    # including pre-migration ids.
+    from v2.app.routers.cards import _resolve_published
+
+    record, _canonical = _resolve_published(store, source_id, None, auth)
+    if not record or not can_view_dataset(auth, record):
         return None, None
     profile = record.get("dataset_profile")
     if profile is None:
@@ -64,7 +69,7 @@ def _increment_view(source_id: str, record: Optional[dict], store: SubmissionSto
     if not record:
         return
     try:
-        store.increment_counter(source_id, record["version"], "view_count")
+        store.increment_counter(record.get("source_id", source_id), record["version"], "view_count")
     except Exception:
         logger.debug("Failed to increment view_count for %s", source_id, exc_info=True)
 
@@ -72,6 +77,7 @@ def _increment_view(source_id: str, record: Optional[dict], store: SubmissionSto
 @router.get("/preview/{source_id}")
 async def dataset_preview(
     source_id: str,
+    track: bool = Query(True),
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
@@ -80,7 +86,8 @@ async def dataset_preview(
     if not profile:
         raise HTTPException(404, "No profile found for this dataset")
 
-    _increment_view(source_id, record, store)
+    if track:
+        _increment_view(source_id, record, store)
     return {"success": True, "profile": profile}
 
 

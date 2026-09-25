@@ -421,6 +421,7 @@ _SENSITIVE_RECORD_FIELDS = frozenset({
     "transfer_acl_rule_ids", "transfer_bytes_transferred",
     "transfer_files_transferred",
     "metadata_updated_at",
+    "title_description_embedding", "embedding_model", "embedding_generated_at",
     # Now a top-level record attribute (v2.1 record shape). Serving it would
     # enumerate the Globus identities a restricted dataset is shared with —
     # exactly what the dataset_mdata.acl scrub below has always prevented.
@@ -931,20 +932,26 @@ def _reconcile_search_after_removal(
 @router.get("/versions/{source_id}/diff")
 async def version_diff(
     source_id: str,
-    from_version: str = Query(..., alias="from"),
-    to_version: str = Query(..., alias="to"),
+    from_version: Optional[str] = Query(None, alias="from"),
+    to_version: Optional[str] = Query(None, alias="to"),
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     _validate_source_id_path(source_id)
+    if not from_version or not to_version:
+        raise HTTPException(400, "Both 'from' and 'to' versions are required")
+
     from_record = store.get_submission(source_id, from_version)
     if not from_record:
         raise HTTPException(404, f"Version {from_version} not found")
+    if not _can_access_submission(auth, from_record):
+        raise HTTPException(404, f"Version {from_version} not found")
+
     to_record = store.get_submission(source_id, to_version)
     if not to_record:
         raise HTTPException(404, f"Version {to_version} not found")
-    if not _can_access_submission(auth, from_record) or not _can_access_submission(auth, to_record):
-        raise HTTPException(404, "Submission not found")
+    if not _can_access_submission(auth, to_record):
+        raise HTTPException(404, f"Version {to_version} not found")
 
     from_mdata = _parse_mdata(from_record)
     to_mdata = _parse_mdata(to_record)
@@ -1362,7 +1369,10 @@ async def dataset_stats(
     """Public access/download stats for a published dataset."""
     _validate_source_id_path(source_id)
     canonical_source_id, versions = _versions_for_public_id(store, source_id)
-    published = [v for v in versions if can_view_dataset(auth, v)]
+    published = [
+        v for v in versions
+        if v.get("status") == "published" and can_view_dataset(auth, v)
+    ]
     if not published:
         raise HTTPException(404, "No published dataset found")
 
@@ -1505,6 +1515,7 @@ async def get_status_all(
 ):
     if not source_id:
         raise HTTPException(400, "Missing source_id")
+    _validate_source_id_path(source_id)
     if version:
         record = store.get_submission(source_id, version)
         if not record:
@@ -1532,6 +1543,7 @@ async def update_status(
     auth: AuthContext = Depends(get_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    _validate_source_id_path(payload.source_id)
     if not is_curator(auth):
         raise HTTPException(403, "Only curators may update submission status")
 

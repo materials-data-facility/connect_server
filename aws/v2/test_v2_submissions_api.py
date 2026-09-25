@@ -1831,14 +1831,18 @@ class TestACLGates:
         data = resp.json()
         assert len(data["versions"]) == 1
 
-    def test_card_unpublished_returns_404(self, env):
-        """Card endpoint returns 404 for unpublished datasets."""
+    def test_card_unpublished_returns_404(self, env, monkeypatch):
+        """Card endpoint returns 404 for unpublished datasets to anyone but the
+        owner and curators (GAP-3: owners may open their own pending record)."""
+        monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
         client = TestClient(app)
-        result = _submit(client)
+        result = _submit(client, headers=HEADERS)
         source_id = result["source_id"]
 
-        resp = client.get(f"/card/{source_id}")
-        assert resp.status_code == 404
+        assert client.get(f"/card/{source_id}", headers=OTHER_HEADERS).status_code == 404
+        owner = client.get(f"/card/{source_id}", headers=HEADERS)
+        assert owner.status_code == 200
+        assert owner.json()["card"]["status"] == "pending_curation"
 
     def test_card_published_returns_200(self, env):
         """Card endpoint works for published datasets."""
@@ -1851,14 +1855,15 @@ class TestACLGates:
         assert resp.status_code == 200
         assert resp.json()["success"]
 
-    def test_citation_unpublished_returns_404(self, env):
-        """Citation endpoint returns 404 for unpublished datasets."""
+    def test_citation_unpublished_returns_404(self, env, monkeypatch):
+        """Citation endpoint returns 404 for unpublished datasets to non-owners."""
+        monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
         client = TestClient(app)
-        result = _submit(client)
+        result = _submit(client, headers=HEADERS)
         source_id = result["source_id"]
 
-        resp = client.get(f"/citation/{source_id}")
-        assert resp.status_code == 404
+        assert client.get(f"/citation/{source_id}", headers=OTHER_HEADERS).status_code == 404
+        assert client.get(f"/citation/{source_id}", headers=HEADERS).status_code == 200
 
 
 # ---------------------------------------------------------------------------

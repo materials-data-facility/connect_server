@@ -19,6 +19,34 @@ from v2.submission_utils import deep_merge, latest_version
 router = APIRouter(dependencies=[Depends(guard_source_id_path)])
 
 
+class _ApproveRequest(CurationApproveRequest):
+    # Local extension keeps the shared request model owned by the other lane intact.
+    expected_updated_at: Optional[str] = None
+    metadata_updates: Any = None
+
+
+_RESERVED_METADATA_KEYS = frozenset({
+    "source_id", "source_name", "version", "versioned_source_id",
+    "root_version", "previous_version", "legacy_source_id", "status",
+    "curation_queue", "user_id", "user_email", "acl", "doi", "dataset_doi",
+    "curation_history", "latest", "created_at", "updated_at",
+    "metadata_updated_at", "published_at", "approved_at", "approved_by",
+    "rejected_at", "rejected_by", "rejection_reason", "action_id", "test",
+    "dataset_mdata", "dataset_profile", "view_count",
+    "download_count", "title_description_embedding", "embedding_model",
+    "embedding_generated_at", "sync_content_hash", "search_synced_hash",
+    "last_synced_at", "link_health", "link_health_checked_at",
+    "file_count", "total_bytes", "transfer_status", "transfer_task_ids",
+    "transfer_destination", "transfer_acl_rule_ids", "transfer_bytes_transferred",
+    "transfer_files_transferred", "deleted_at", "deleted_by",
+    "publish_error", "publish_error_at",
+})
+
+
+def _metadata_timestamp(record: Dict[str, Any]) -> Optional[str]:
+    return record.get("metadata_updated_at") or record.get("updated_at")
+
+
 def _resolve_submission_for_curation(
     store: SubmissionStore,
     source_id: str,
@@ -116,12 +144,28 @@ async def get_curation(
 @router.post("/curation/{source_id}/approve")
 async def approve(
     source_id: str,
-    payload: CurationApproveRequest,
+    payload: _ApproveRequest,
     auth: AuthContext = Depends(require_curator),
     store: SubmissionStore = Depends(get_submission_store),
 ):
     submission = _resolve_submission_for_curation(store, source_id, payload.version)
     version = submission.get("version")
+
+    if payload.expected_updated_at is not None and payload.expected_updated_at != _metadata_timestamp(submission):
+        raise HTTPException(409, "Submission metadata changed since review; refresh before approving")
+
+    if "metadata_updates" in payload.model_fields_set:
+        if not isinstance(payload.metadata_updates, dict):
+            raise HTTPException(400, "metadata_updates must be an object")
+        reserved = _RESERVED_METADATA_KEYS.intersection(payload.metadata_updates)
+        if reserved:
+            raise HTTPException(400, "metadata_updates contains reserved fields: " + ", ".join(sorted(reserved)))
+        try:
+            update_size = len(json.dumps(payload.metadata_updates, ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "metadata_updates must be JSON serializable")
+        if update_size > 64 * 1024:
+            raise HTTPException(400, "metadata_updates exceeds 64 KB")
 
     status = submission.get("status")
     # "approved" is accepted as well as "pending_curation": approval persists the
@@ -144,6 +188,8 @@ async def approve(
         "timestamp": now,
         "notes": payload.notes or "",
     }
+    if curator_id == submission.get("user_id"):
+        curation_record["self_approved"] = True
 
     curation_history = submission.get("curation_history") or []
     if isinstance(curation_history, str):
@@ -179,6 +225,10 @@ async def approve(
     submission["approved_by"] = curator_id
     submission["updated_at"] = now
 
+    if payload.expected_updated_at is not None:
+        current = store.get_submission(source_id, version)
+        if not current or _metadata_timestamp(current) != payload.expected_updated_at:
+            raise HTTPException(409, "Submission metadata changed since review; refresh before approving")
     store.upsert_submission(submission)
 
     logger.info("Submission approved source_id=%s version=%s by=%s", source_id, version, curator_id)
@@ -198,6 +248,11 @@ async def approve(
     # the submission stays "approved" and re-approving retries it.
     publish_job = dispatch_publish_job(source_id, version, mint_doi=payload.mint_doi)
     result["publish_job"] = publish_job
+    if publish_job.get("queued"):
+        result["publish_queued"] = True
+        for key in ("job_id", "message_id"):
+            if publish_job.get(key):
+                result[key] = publish_job[key]
     if not publish_job.get("queued"):
         publish_result = publish_job.get("result", {})
         if publish_result.get("doi", {}).get("success"):
@@ -278,5 +333,4 @@ async def reject(
         "rejected_at": now,
         "reason": reason,
     }
-
 

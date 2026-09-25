@@ -680,8 +680,8 @@ class TestNewestVisibleResolution:
         assert card["version"] != pending_version
 
     def test_owner_also_gets_newest_published_version(self, env):
-        """Cards serve only published content, owner or not (can_view_dataset
-        is deliberately status-gated). The guarantee here is that the owner's
+        """Without ?version=, cards serve the newest PUBLISHED version, owner or
+        not; unpublished versions need an explicit ?version=. The guarantee here is that the owner's
         refresh during the publish window gets the previous version with a
         200 — never a 404. The owner sees their in-flight content via the
         card returned by the save response, not via a card refetch."""
@@ -699,8 +699,23 @@ class TestNewestVisibleResolution:
         client = TestClient(app)
         source_id, pending_version = self._publish_v10_with_pending_update(client)
 
-        resp = client.get(f"/card/{source_id}", params={"version": pending_version})
-        assert resp.status_code == 404
+        import os
+        os.environ["ALLOW_ALL_CURATORS"] = "false"
+        try:
+            resp = client.get(
+                f"/card/{source_id}",
+                params={"version": pending_version},
+                headers={"X-User-Id": "someone-else"},
+            )
+            assert resp.status_code == 404
+            # The owner may open their own pending version explicitly (GAP-3).
+            owner = client.get(
+                f"/card/{source_id}", params={"version": pending_version}, headers=HEADERS
+            )
+            assert owner.status_code == 200
+            assert owner.json()["card"]["version"] == pending_version
+        finally:
+            os.environ["ALLOW_ALL_CURATORS"] = "true"
 
 
 class TestMajorMinorVersioning:

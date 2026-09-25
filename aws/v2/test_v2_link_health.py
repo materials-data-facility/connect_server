@@ -889,9 +889,15 @@ class TestAgentCard:
         resp = client.get("/card/ds-1", params={"format": "agent"}, headers=HEADERS)
         assert resp.status_code == 200, resp.json()
 
-    def test_agent_format_404s_for_unpublished_datasets(self, env):
+    def test_agent_format_404s_for_unpublished_datasets(self, env, monkeypatch):
         from v2.store import get_store
 
+        # Owners and curators may read their own pending record (GAP-3); any
+        # other caller must still get a 404.
+        monkeypatch.setenv("ALLOW_ALL_CURATORS", "false")
         get_store().put_submission(_record(status="pending_curation"))
         client = TestClient(app)
-        assert client.get("/card/ds-1", params={"format": "agent"}).status_code == 404
+        resp = client.get(
+            "/card/ds-1", params={"format": "agent"}, headers={"X-User-Id": "not-the-owner"}
+        )
+        assert resp.status_code == 404

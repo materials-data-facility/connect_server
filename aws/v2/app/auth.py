@@ -58,6 +58,47 @@ def _auth_cache_get(token: str, groups_token: Optional[str] = None) -> Optional[
     return ctx
 
 
+#: Bearer tokens Globus has rejected, keyed by token hash. Without this, every
+#: request carrying a garbage bearer (optional-auth routes answer anonymously on
+#: failure) costs a Globus Auth userinfo call, so a token spray could push MDF
+#: into Globus rate limits and break sign-in for real users (SEC-M1). Only
+#: definitive rejections are cached, never transport errors.
+AUTH_NEGATIVE_CACHE_TTL_SECONDS = float(os.environ.get("AUTH_NEGATIVE_CACHE_TTL_SECONDS", "60"))
+_AUTH_NEGATIVE_CACHE_MAX_ENTRIES = 4096
+_auth_negative_cache: Dict[str, float] = {}
+#: Globus Auth answers that mean "this token is bad", as opposed to throttling
+#: (429) or timeouts (408), which say nothing about the token.
+_DEFINITIVE_REJECTION_STATUSES = frozenset({400, 401, 403})
+
+
+def _auth_rejected_recently(token: str) -> bool:
+    key = _token_cache_key(token, None)
+    expires_at = _auth_negative_cache.get(key)
+    if expires_at is None:
+        return False
+    if time.monotonic() >= expires_at:
+        _auth_negative_cache.pop(key, None)
+        return False
+    return True
+
+
+def _auth_remember_rejection(token: str) -> None:
+    if AUTH_NEGATIVE_CACHE_TTL_SECONDS <= 0:
+        return
+    now = time.monotonic()
+    if len(_auth_negative_cache) >= _AUTH_NEGATIVE_CACHE_MAX_ENTRIES:
+        for key in [k for k, exp in _auth_negative_cache.items() if exp <= now]:
+            _auth_negative_cache.pop(key, None)
+        if len(_auth_negative_cache) >= _AUTH_NEGATIVE_CACHE_MAX_ENTRIES:
+            # Evict the soonest-to-expire quarter rather than clearing, so a
+            # spray of fresh garbage tokens cannot flush the whole cache.
+            for key in sorted(_auth_negative_cache, key=_auth_negative_cache.get)[
+                : _AUTH_NEGATIVE_CACHE_MAX_ENTRIES // 4
+            ]:
+                _auth_negative_cache.pop(key, None)
+    _auth_negative_cache[_token_cache_key(token, None)] = now + AUTH_NEGATIVE_CACHE_TTL_SECONDS
+
+
 def _auth_cache_put(token: str, ctx: AuthContext, groups_token: Optional[str] = None) -> None:
     if AUTH_CACHE_TTL_SECONDS <= 0:
         return
@@ -159,6 +200,8 @@ async def get_auth(
     cached = _auth_cache_get(token, x_groups_token)
     if cached is not None:
         return cached
+    if _auth_rejected_recently(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     try:
         import globus_sdk
@@ -173,11 +216,20 @@ async def get_auth(
                 authorizer=globus_sdk.AccessTokenAuthorizer(token)
             )
             userinfo = ac.userinfo()
-        except globus_sdk.AuthAPIError:
+        except globus_sdk.AuthAPIError as exc:
+            status = int(getattr(exc, "http_status", 0) or 0)
+            if status >= 500 or status in (408, 429):
+                # Globus is down or throttling us: not the caller's fault, so
+                # never cache it and don't tell them their token is bad.
+                logger.warning("Globus Auth unavailable (HTTP %s) during token check", status)
+                raise HTTPException(status_code=503, detail="Authentication service unavailable")
+            if status in _DEFINITIVE_REJECTION_STATUSES:
+                _auth_remember_rejection(token)
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
         user_id = userinfo.get("sub")
         if not user_id:
+            _auth_remember_rejection(token)
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
         # Fetch group memberships.
@@ -277,8 +329,9 @@ async def get_auth(
         return ctx
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
+    except Exception:
+        logger.warning("Authentication failed", exc_info=True)
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
 
 async def get_optional_auth(
@@ -330,6 +383,37 @@ def ensure_submission_owner_or_curator(auth: AuthContext, submission: Dict[str, 
     raise HTTPException(status_code=403, detail="You do not have permission for this submission")
 
 
+def _caller_identity_ids(auth: Optional[AuthContext]) -> set:
+    """The caller's primary Globus identity plus every linked identity."""
+    if not auth:
+        return set()
+    ids = {auth.user_id} if auth.user_id else set()
+    for identity in auth.identities or []:
+        sub = identity.get("sub") if isinstance(identity, dict) else identity
+        if isinstance(sub, str) and sub:
+            ids.add(sub)
+    return ids
+
+
+def _caller_in_acl(auth: Optional[AuthContext], record: Dict[str, Any]) -> bool:
+    """True when one of the caller's identities or groups is in the record's acl.
+
+    Mirrors the principals ``search_client.resolve_visible_to`` writes into the
+    index, so a collaborator who can find a restricted dataset in search can
+    also open it.
+    """
+    if not auth:
+        return False
+    from v2.submission_utils import normalize_acl_principal, resolve_record_acl
+
+    acl = resolve_record_acl(record) or []
+    principals = {normalize_acl_principal(entry) for entry in acl if entry}
+    principals.discard(None)
+    mine = {f"urn:globus:auth:identity:{i}" for i in _caller_identity_ids(auth)}
+    mine |= {f"urn:globus:groups:id:{g}" for g in (auth.group_info or {})}
+    return bool(principals & mine)
+
+
 def is_submission_owner_or_curator(
     auth: Optional[AuthContext], submission: Dict[str, Any]
 ) -> bool:
@@ -337,21 +421,37 @@ def is_submission_owner_or_curator(
     if not auth or not submission:
         return False
     owner_id = submission.get("user_id")
-    if owner_id and owner_id == auth.user_id:
+    # A user may log in with any identity linked to the one that submitted.
+    if owner_id and owner_id in _caller_identity_ids(auth):
         return True
     return is_curator(auth)
+
+
+#: Unpublished statuses a dataset's owner (and curators) may read.
+OWNER_VISIBLE_UNPUBLISHED_STATUSES = frozenset({"pending_curation", "approved", "rejected"})
 
 
 def can_view_dataset(auth: Optional[AuthContext], record: Optional[Dict[str, Any]]) -> bool:
     """True when the caller may read a dataset's content.
 
-    A dataset is viewable when it is published AND (it is public, OR the caller
-    is its owner or a curator). "published" alone is not enough: a restricted
+    Unpublished versions (pending_curation / approved / rejected) are viewable
+    by their owner and curators only. A published dataset is viewable when it
+    is public, OR the caller is its owner or a curator. "published" alone is
+    not enough: a restricted
     dataset is published into Globus Search with a ``visible_to`` limited to its
     acl identities, so serving it to anonymous callers through cards, citations,
     detail pages or previews is an ACL bypass around that gate.
     """
-    if not record or record.get("status") != "published":
+    if not record:
+        return False
+    status = record.get("status")
+    if status in OWNER_VISIBLE_UNPUBLISHED_STATUSES:
+        # In-flight and rejected versions exist only for their submitter and
+        # the curators: /my-datasets links owners to them, and OwnerTools
+        # (withdraw / resubmit) lives on that page. Everyone else gets the
+        # same 404 as for a nonexistent dataset.
+        return is_submission_owner_or_curator(auth, record)
+    if status != "published":
         return False
     if is_submission_owner_or_curator(auth, record):
         return True
@@ -360,7 +460,7 @@ def can_view_dataset(auth: Optional[AuthContext], record: Optional[Dict[str, Any
     # close an import cycle through the app package.
     from v2.search import dataset_is_public
 
-    return dataset_is_public(record)
+    return dataset_is_public(record) or _caller_in_acl(auth, record)
 
 
 def ensure_stream_owner_or_curator(auth: AuthContext, stream: Dict[str, Any]) -> None:

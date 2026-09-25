@@ -14,12 +14,13 @@ import math
 import os
 import re
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
 from v2.metadata import parse_metadata
-from v2.submission_utils import resolve_record_acl
+from v2.submission_utils import dataset_mdata_dict, resolve_record_acl
 from v2.store import get_store
 from v2.stream_store import get_stream_store
 
@@ -585,6 +586,7 @@ def _cosine_scores(query_vec: List[float], matrix: Any) -> List[float]:
 
 _author_index_lock = threading.Lock()
 _cached_author_index: Optional[Dict[str, Any]] = None
+_cached_author_index_at = 0.0
 
 
 def normalize_author_key(author: Dict[str, Any]) -> Optional[str]:
@@ -644,8 +646,7 @@ def build_author_index(limit: int = 100000) -> Dict[str, Any]:
             continue
         if not dataset_is_public(record):
             continue
-        mdata = record.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(record).get("latest") is False:
             continue
 
         keys = _author_keys_for_record(record)
@@ -680,17 +681,21 @@ def build_author_index(limit: int = 100000) -> Dict[str, Any]:
 
 
 def get_author_index(force_rebuild: bool = False) -> Dict[str, Any]:
-    global _cached_author_index
+    global _cached_author_index, _cached_author_index_at
     with _author_index_lock:
-        if _cached_author_index is None or force_rebuild:
+        ttl = _env_int("AUTHOR_INDEX_TTL_SECONDS", 600, minimum=0)
+        if (_cached_author_index is None or force_rebuild
+                or time.monotonic() - _cached_author_index_at >= ttl):
             _cached_author_index = build_author_index()
+            _cached_author_index_at = time.monotonic()
         return _cached_author_index
 
 
 def invalidate_author_index() -> None:
-    global _cached_author_index
+    global _cached_author_index, _cached_author_index_at
     with _author_index_lock:
         _cached_author_index = None
+        _cached_author_index_at = 0.0
 
 
 def find_related_by_author(source_id: str, limit: int = 20) -> Dict[str, Any]:
@@ -773,6 +778,7 @@ def search_all(
         "query": query,
         "total": total,
         "offset": offset,
+        "limit": limit,
         "results": results[:limit],
         "facets": facets,
     }

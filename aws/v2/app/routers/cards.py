@@ -10,7 +10,7 @@ from v2.app.models import AuthContext
 from v2.citation import generate_apa, generate_bibtex, generate_datacite_xml, generate_ris
 from v2.dataset_card import build_agent_card, build_dataset_card
 from v2.store import SubmissionStore
-from v2.submission_utils import latest_version
+from v2.submission_utils import latest_version, validate_source_id_lenient
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,13 @@ def _resolve_published(
     metadata that Globus Search deliberately withholds.
     """
     record = store.get(source_id, version=version)
-    if can_view_dataset(auth, record):
+    # Without an explicit version, the dataset page is its newest PUBLISHED
+    # version for everyone, owners included; an owner's pending or rejected
+    # version is served only when asked for by ?version= (the /my-datasets
+    # links), or when the dataset has never been published.
+    if can_view_dataset(auth, record) and (
+        version is not None or record.get("status") == "published"
+    ):
         return record, record.get("source_id", source_id)
 
     # "Latest" means the newest version the CALLER may see. The absolute
@@ -54,8 +60,16 @@ def _resolve_published(
             return fallback, fallback.get("source_id", source_id)
 
     legacy = store.get_by_legacy_source_id(source_id)
-    if can_view_dataset(auth, legacy):
-        return legacy, legacy.get("source_id")
+    canonical = legacy.get("source_id") if legacy else None
+    if canonical and canonical != source_id:
+        if version is not None:
+            # An explicit version always refers to the canonical dataset.
+            return _resolve_published(store, canonical, version, auth)
+        # A v1 id names one specific migrated version; serve it when it is
+        # published and visible, otherwise resolve the canonical dataset.
+        if can_view_dataset(auth, legacy) and legacy.get("status") == "published":
+            return legacy, canonical
+        return _resolve_published(store, canonical, None, auth)
 
     return None, None
 
@@ -71,6 +85,9 @@ def _newest_visible(
     ]
     if not viewable:
         return None
+    published = [r for r in viewable if r.get("status") == "published"]
+    if published:
+        viewable = published
     target = latest_version(viewable)
     for r in viewable:
         if r.get("version") == target:
@@ -98,6 +115,7 @@ def _build_permissions(auth: Optional[AuthContext], record: Dict[str, Any]) -> D
 async def get_card(
     source_id: str,
     version: Optional[str] = Query(None),
+    track: bool = Query(True),
     format: Optional[str] = Query(
         None,
         description='Card shape: omitted/"full" for the UI card, "agent" for the compact machine-readable one.',
@@ -122,10 +140,11 @@ async def get_card(
 
     # Fire-and-forget view count increment (use the canonical id in case the
     # request came in on a legacy id).
-    try:
-        store.increment_counter(record["source_id"], record["version"], "view_count")
-    except Exception:
-        logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
+    if track:
+        try:
+            store.increment_counter(record["source_id"], record["version"], "view_count")
+        except Exception:
+            logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
     resp = {"success": True, "card": card, "permissions": _build_permissions(auth, record)}
     if fmt == "agent":
@@ -144,6 +163,8 @@ async def get_citation(
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
+    if version and version.lower() == "latest":
+        version = None
     record, canonical = _resolve_published(store, source_id, version, auth)
     if not record:
         raise HTTPException(404, "Dataset not found")
@@ -197,6 +218,7 @@ def _parse_detail_slug(slug: str) -> Tuple[str, Optional[str]]:
 async def get_card_by_slug(
     slug: str,
     version: Optional[str] = Query(None),
+    track: bool = Query(True),
     auth: Optional[AuthContext] = Depends(get_optional_auth),
     store: SubmissionStore = Depends(get_submission_store),
 ):
@@ -209,6 +231,11 @@ async def get_card_by_slug(
     The ?version query param takes precedence over a version embedded in the slug.
     """
     source_id, slug_version = _parse_detail_slug(slug)
+    try:
+        source_id = validate_source_id_lenient(source_id)
+    except ValueError:
+        raise HTTPException(404, "Dataset not found")
+
     version = version or slug_version
     if version and version.lower() == "latest":
         version = None
@@ -219,10 +246,11 @@ async def get_card_by_slug(
 
     card = build_dataset_card(record)
 
-    try:
-        store.increment_counter(record["source_id"], record["version"], "view_count")
-    except Exception:
-        logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
+    if track:
+        try:
+            store.increment_counter(record["source_id"], record["version"], "view_count")
+        except Exception:
+            logger.debug("Failed to increment view_count for %s", record.get("source_id"), exc_info=True)
 
     resp = {
         "success": True,

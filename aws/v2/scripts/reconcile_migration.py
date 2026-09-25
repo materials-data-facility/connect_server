@@ -397,6 +397,14 @@ def reconcile_legacy(
     mismatch_records = []
     for expected, stored in chosen:
         actual = stored.get("dataset_mdata") or {}
+        if isinstance(actual, str):
+            # DynamoDB stores dataset_mdata as a JSON string.
+            try:
+                actual = json.loads(actual)
+            except ValueError:
+                actual = {}
+        if not isinstance(actual, dict):
+            actual = {}
         actual_doi = _normalize_doi(
             stored.get("doi")
             or stored.get("dataset_doi")

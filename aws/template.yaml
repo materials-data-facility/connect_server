@@ -759,6 +759,32 @@ Resources:
       OKActions:
         - !Ref AlarmTopic
 
+  # Lambda Errors misses handled 500s (the global exception handler returns a
+  # response instead of crashing), so alert on what clients actually see.
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlarms
+    Properties:
+      AlarmName: !Sub "mdf-connect-v2-${Environment}-api-5xx"
+      AlarmDescription: "The HTTP API returned 5xx responses to clients."
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref HttpApi
+        - Name: Stage
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
   AsyncWorkerErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Condition: HasAlarms

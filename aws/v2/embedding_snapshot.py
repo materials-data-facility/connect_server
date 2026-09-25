@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from v2.submission_utils import dataset_mdata_dict
+
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_PREFIX = os.environ.get("EMBEDDING_SNAPSHOT_PREFIX", "embeddings/v1/")
@@ -199,8 +201,7 @@ def build_snapshot(limit: int = 100000) -> Dict[str, Any]:
             continue
         # Skip datasets that aren't flagged as the latest version — avoid showing
         # superseded titles in semantic results.
-        mdata = record.get("dataset_mdata") or {}
-        if isinstance(mdata, dict) and mdata.get("latest") is False:
+        if dataset_mdata_dict(record).get("latest") is False:
             continue
 
         vec = _coerce_embedding(record.get("title_description_embedding"))
