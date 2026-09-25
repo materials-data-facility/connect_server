@@ -498,6 +498,12 @@ print(cfg.get('${env}', {}).get('deploy', {}).get('parameters', {}).get('paramet
     if [[ "$NON_INTERACTIVE" == "1" ]]; then
         confirm_flag=(--no-confirm-changeset)
     fi
+    # MDF_CHANGESET_ONLY=1 creates the changeset and stops, so it can be
+    # reviewed (aws cloudformation describe-change-set) before
+    # `aws cloudformation execute-change-set`. Use it from any non-TTY harness.
+    if [[ -n "${MDF_CHANGESET_ONLY:-}" ]]; then
+        confirm_flag+=(--no-execute-changeset)
+    fi
 
     log "Deploying stack $stack_name..."
     sam deploy \
