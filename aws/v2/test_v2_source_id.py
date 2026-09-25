@@ -211,15 +211,20 @@ def test_restricted_published_submission_routes_are_owner_only(env):
         assert client.get(path).status_code == 404
         assert client.get(path, headers=OWNER_HEADERS).status_code == 200
 
-    # /status and /versions keep their historical 200 + {"success": false}
-    # not-found shape, and a hidden record must be byte-identical to a
-    # nonexistent one (no existence oracle).
+    # A hidden record must be indistinguishable from a nonexistent one (no
+    # existence oracle). /status keeps its historical 200 + {"success": false}
+    # shape; /versions answers 404 like /card and /stats.
     ghost = "mdf-000000000000000000000000000000ff"
-    for route in ("/status", "/versions"):
-        anon = client.get(f"{route}/{source_id}").json()
-        assert anon["success"] is False
-        assert anon == client.get(f"{route}/{ghost}").json()
-        assert client.get(f"{route}/{source_id}", headers=OWNER_HEADERS).json()["success"] is True
+    anon = client.get(f"/status/{source_id}").json()
+    assert anon["success"] is False
+    assert anon == client.get(f"/status/{ghost}").json()
+    assert client.get(f"/status/{source_id}", headers=OWNER_HEADERS).json()["success"] is True
+
+    hidden = client.get(f"/versions/{source_id}")
+    missing = client.get(f"/versions/{ghost}")
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json() == missing.json()
+    assert client.get(f"/versions/{source_id}", headers=OWNER_HEADERS).json()["success"] is True
 
 
 def test_other_routers_reject_path_hostile_source_ids_as_not_found(env):

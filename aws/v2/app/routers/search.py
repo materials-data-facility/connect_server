@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 from v2.app.auth import get_auth, get_optional_auth
+from v2.app.deps import get_submission_store
 from v2.app.models import AuthContext
+from v2.app.routers.cards import _resolve_published
+from v2.store import SubmissionStore
 from v2.search import (
     find_related_by_author,
     find_similar_by_embedding,
@@ -169,6 +172,8 @@ async def search_endpoint(
     except ValueError:
         offset_val = 0
     offset_val = max(0, offset_val)
+    if offset_val + limit_val > 10000:
+        raise HTTPException(400, "offset + limit must not exceed 10000")
 
     filters = _parse_filters(year, organization, author, keyword, domain)
 
@@ -237,6 +242,7 @@ async def related_datasets_endpoint(
         description="Relation type: 'author' (shared authors) or 'similar' (embedding cosine).",
     ),
     limit: int = Query(20),
+    store: SubmissionStore = Depends(get_submission_store),
 ):
     """Related datasets.
 
@@ -253,9 +259,18 @@ async def related_datasets_endpoint(
     indexes have to be keyed by principal first; do not add an auth dependency
     here and assume it filters anything.
     """
+    record, canonical = _resolve_published(store, source_id, None)
+    if not record:
+        raise HTTPException(404, "Dataset not found")
+
     limit_val = max(1, min(int(limit), MAX_SEARCH_RESULTS))
     if by == "author":
-        return find_related_by_author(source_id, limit=limit_val)
-    if by == "similar":
-        return find_similar_by_embedding(source_id, limit=limit_val)
-    raise HTTPException(400, f"Unsupported relation type: {by}")
+        result = find_related_by_author(canonical, limit=limit_val)
+    elif by == "similar":
+        result = find_similar_by_embedding(canonical, limit=limit_val)
+    else:
+        raise HTTPException(400, f"Unsupported relation type: {by}")
+    result["canonical_source_id"] = canonical
+    if canonical != source_id:
+        result["redirected_from"] = source_id
+    return result

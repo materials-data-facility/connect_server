@@ -389,12 +389,12 @@ class TestAclTopLevel:
         _publish(client, source_id)
 
         # Hidden == nonexistent, unchanged from wave 1.
-        for path in (
-            f"/status/{source_id}",
-            f"/versions/{source_id}",
-        ):
-            body = client.get(path, headers=OTHER_HEADERS).json()
-            assert body["success"] is False
+        body = client.get(f"/status/{source_id}", headers=OTHER_HEADERS).json()
+        assert body["success"] is False
+        # /versions answers hidden datasets exactly like missing ones: 404.
+        resp = client.get(f"/versions/{source_id}", headers=OTHER_HEADERS)
+        assert resp.status_code == 404
+        assert "detail" in resp.json()
 
     def test_outsider_never_receives_the_top_level_acl(self, env):
         client = TestClient(app)
@@ -1095,6 +1095,57 @@ class TestDynamoIndexHydration:
         assert [row["source_id"] for row in rows] == ["ds-1"]
         # Answered from the scan, not from a hydration round-trip.
         assert table.batch_gets == 0
+
+    def test_missing_curation_index_falls_back_to_a_scan(self, monkeypatch):
+        """Between the two GSI-swap deploys the index may not exist yet."""
+        from botocore.exceptions import ClientError
+
+        store, table = self._store(monkeypatch)
+
+        def missing_index(**kwargs):
+            raise ClientError(
+                {"Error": {"Code": "ValidationException",
+                           "Message": "The table does not have the specified index"}},
+                "Query",
+            )
+
+        table.query = missing_index
+        rows = store.list_by_status(["pending_curation"], limit=10)
+        assert [row["source_id"] for row in rows] == ["ds-1"]
+
+    def test_other_query_errors_propagate(self, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        store, table = self._store(monkeypatch)
+
+        def throttled(**kwargs):
+            raise ClientError(
+                {"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}},
+                "Query",
+            )
+
+        table.query = throttled
+        with pytest.raises(ClientError):
+            store.list_by_status(["pending_curation"], limit=10)
+
+    def test_partially_indexed_statuses_return_full_records(self, monkeypatch):
+        """Index hits are KEYS_ONLY and must be hydrated even when another
+        status falls back to the scan."""
+        from v2.store import DynamoSubmissionStore
+
+        store, table = self._store(monkeypatch)
+        monkeypatch.setattr(DynamoSubmissionStore, "_curation_index_warned", False)
+        real_query = table.query
+
+        def query(**kwargs):
+            status = kwargs["KeyConditionExpression"].get_expression()["values"][1]
+            if status == "pending_curation":
+                return real_query(**kwargs)
+            return {"Items": []}
+
+        table.query = query
+        rows = store.list_by_status(["pending_curation", "rejected"], limit=10)
+        assert rows and rows[0].get("hydrated") is True
 
     def test_batch_get_retry_is_bounded(self, monkeypatch):
         """A permanently throttled BatchGetItem must not loop forever."""

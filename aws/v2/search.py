@@ -16,6 +16,8 @@ import re
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
+
 from v2.metadata import parse_metadata
 from v2.submission_utils import resolve_record_acl
 from v2.store import get_store
@@ -276,8 +278,8 @@ def search_datasets(
     the ordering comes entirely from ``sort``.
 
     Tries Globus Search faceted_search first. Falls back to local DynamoDB
-    scan if Globus Search is not configured or the query fails. The fallback
-    only returns published datasets and does not support facets.
+    scan if Globus Search is unavailable. The fallback only returns published
+    datasets and does not support facets or filters.
     """
     browsing = not (query or "").strip()
     engine_query = BROWSE_QUERY if browsing else query
@@ -301,13 +303,25 @@ def search_datasets(
                     "facets": result.get("facets", {}),
                 }
         else:
-            logger.warning("Globus Search faceted_search failed: %s", result.get("error"))
+            error = str(result.get("error") or "")
+            # GlobusSearchClient returns a stringified SDK error, rather than
+            # raising it or preserving a structured status code.
+            status_match = re.search(r"(?<!\d)[45]\d{2}(?!\d)", error)
+            if status_match and status_match.group()[0] == "4":
+                raise HTTPException(502, "Globus Search rejected the query")
+            logger.warning("Globus Search failed, falling back to local scan: %s", error)
+    except HTTPException:
+        raise
     except Exception:
         logger.warning("Globus Search unavailable, falling back to local scan", exc_info=True)
 
     # Fallback: local DynamoDB scan (no faceting)
+    if filters:
+        raise HTTPException(503, "Filtered search is unavailable while Globus Search is down")
     store = get_store()
-    all_submissions = store.list_all(limit=max(limit + offset, SEARCH_MAX_DATASET_SCAN))
+    # A fixed ceiling: the router caps offset+limit, and scoring/sorting needs
+    # the whole (bounded) candidate set, not just the first page's worth.
+    all_submissions = store.list_all(limit=SEARCH_MAX_DATASET_SCAN)
 
     results = []
     for record in all_submissions:

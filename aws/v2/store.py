@@ -515,6 +515,26 @@ class DynamoSubmissionStore(SubmissionStore):
                 f"unsupported: {values}"
             )
         index_name = os.environ.get("GSI_CURATION_INDEX", "curation-queue-index")
+        from botocore.exceptions import ClientError
+
+        try:
+            return self._list_by_status_indexed(index_name, statuses, limit)
+        except ClientError as exc:
+            # During the two-deploy GSI swap (see template.yaml INDEX MIGRATION)
+            # new code can run before curation-queue-index exists. Answer from a
+            # filtered scan instead of 500ing the curation queue.
+            if exc.response.get("Error", {}).get("Code") != "ValidationException":
+                raise
+            logger.warning(
+                "%s unavailable (%s); falling back to a filtered scan",
+                index_name,
+                exc.response.get("Error", {}).get("Message", ""),
+            )
+            return self._scan_by_status(list(statuses), limit)
+
+    def _list_by_status_indexed(
+        self, index_name: str, statuses: List[str], limit: int
+    ) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         missing_from_index: List[str] = []
         for status_val in statuses:
@@ -544,14 +564,14 @@ class DynamoSubmissionStore(SubmissionStore):
         # curation queue would read as permanently empty. An empty result for a
         # status is therefore treated as "not indexed yet" and answered from a
         # filtered scan until scripts/backfill_record_shape.py has run.
+        # Index rows are KEYS_ONLY: hydrate them before mixing in scanned records.
+        hydrated = self._hydrate_index_items(items[:limit])
         if missing_from_index:
             self._warn_curation_index_empty(missing_from_index)
-            items.extend(
-                self._scan_by_status(missing_from_index, limit - len(items))
+            hydrated.extend(
+                self._scan_by_status(missing_from_index, limit - len(hydrated))
             )
-            return items[:limit]
-
-        return self._hydrate_index_items(items[:limit])
+        return hydrated[:limit]
 
     _curation_index_warned = False
 

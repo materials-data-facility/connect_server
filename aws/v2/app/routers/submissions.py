@@ -1264,6 +1264,20 @@ async def submit(
     return response
 
 
+def _versions_for_public_id(
+    store: SubmissionStore, source_id: str
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """Resolve a versioned legacy ID to its canonical dataset."""
+    versions = store.list_versions(source_id)
+    if versions:
+        return source_id, versions
+    legacy = store.get_by_legacy_source_id(source_id)
+    if legacy:
+        canonical = legacy["source_id"]
+        return canonical, store.list_versions(canonical)
+    return source_id, []
+
+
 @router.get("/versions/{source_id}")
 async def list_versions(
     source_id: str,
@@ -1273,9 +1287,9 @@ async def list_versions(
     store: SubmissionStore = Depends(get_submission_store),
 ):
     _validate_source_id_path(source_id)
-    versions = store.list_versions(source_id)
+    canonical_source_id, versions = _versions_for_public_id(store, source_id)
     if not versions:
-        return {"success": False, "error": "No versions found for this source_id"}
+        raise HTTPException(404, "Dataset not found")
 
     # If unauthenticated (or not owner/curator), only show published versions
     is_privileged = bool(
@@ -1286,9 +1300,7 @@ async def list_versions(
     if not is_privileged:
         versions = [v for v in versions if can_view_dataset(auth, v)]
         if not versions:
-            # Same body as the no-such-source_id branch above: a hidden
-            # dataset must not be distinguishable from a nonexistent one.
-            return {"success": False, "error": "No versions found for this source_id"}
+            raise HTTPException(404, "Dataset not found")
 
     # Numeric-aware: a plain string sort orders 1.0, 10.0, 2.0 and makes the
     # UI's version picker (and the paginated slice below) wrong past v9.
@@ -1328,13 +1340,17 @@ async def list_versions(
             dataset_doi = ddoi
             break
 
-    return {
+    response = {
         "success": True,
-        "source_id": source_id,
+        "source_id": canonical_source_id,
+        "canonical_source_id": canonical_source_id,
         "versions": result_versions,
         "total_count": total_count,
         "dataset_doi": dataset_doi,
     }
+    if canonical_source_id != source_id:
+        response["redirected_from"] = source_id
+    return response
 
 
 @router.get("/stats/{source_id}")
@@ -1345,7 +1361,7 @@ async def dataset_stats(
 ):
     """Public access/download stats for a published dataset."""
     _validate_source_id_path(source_id)
-    versions = store.list_versions(source_id)
+    canonical_source_id, versions = _versions_for_public_id(store, source_id)
     published = [v for v in versions if can_view_dataset(auth, v)]
     if not published:
         raise HTTPException(404, "No published dataset found")
@@ -1365,15 +1381,19 @@ async def dataset_stats(
         if ua and (last_updated is None or ua > last_updated):
             last_updated = ua
 
-    return {
+    response = {
         "success": True,
-        "source_id": source_id,
+        "source_id": canonical_source_id,
+        "canonical_source_id": canonical_source_id,
         "view_count": total_views,
         "download_count": total_downloads,
         "version_count": len(published),
         "first_published": first_published,
         "last_updated": last_updated,
     }
+    if canonical_source_id != source_id:
+        response["redirected_from"] = source_id
+    return response
 
 
 @router.get("/status/{source_id}")

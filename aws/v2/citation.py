@@ -7,6 +7,7 @@ Generates citations in multiple formats:
 - DataCite XML (for DOI registration)
 """
 
+import json
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -106,6 +107,19 @@ def _format_authors_apa(authors: List[Author]) -> str:
         return ", ".join(formatted[:-1]) + f", & {formatted[-1]}"
 
 
+def _record_doi(record: Dict[str, Any]) -> Optional[str]:
+    """Use the version DOI, then the inherited dataset or metadata DOI."""
+    mdata = record.get("dataset_mdata") or {}
+    if isinstance(mdata, str):
+        try:
+            mdata = json.loads(mdata)
+        except (TypeError, ValueError):
+            mdata = {}
+    if not isinstance(mdata, dict):
+        mdata = {}
+    return record.get("doi") or record.get("dataset_doi") or mdata.get("doi")
+
+
 def generate_bibtex(record: Dict[str, Any]) -> str:
     """Generate BibTeX citation."""
     meta = parse_metadata(record)
@@ -113,7 +127,7 @@ def generate_bibtex(record: Dict[str, Any]) -> str:
     year = str(meta.publication_year or datetime.now().year)
     source_id = record.get("source_id", "unknown")
     version = record.get("version", "1.0")
-    doi = record.get("doi") or ""
+    doi = _record_doi(record)
 
     key = _make_bibtex_key(source_id, year)
     authors = _format_authors_bibtex(meta.authors)
@@ -143,7 +157,7 @@ def generate_ris(record: Dict[str, Any]) -> str:
 
     year = str(meta.publication_year or datetime.now().year)
     source_id = record.get("source_id", "unknown")
-    doi = record.get("doi") or ""
+    doi = _record_doi(record)
 
     lines = [
         "TY  - DATA",
@@ -180,7 +194,7 @@ def generate_apa(record: Dict[str, Any]) -> str:
 
     year = str(meta.publication_year or datetime.now().year)
     version = record.get("version", "1.0")
-    doi = record.get("doi")
+    doi = _record_doi(record)
 
     authors = _format_authors_apa(meta.authors)
 
@@ -195,7 +209,7 @@ def generate_apa(record: Dict[str, Any]) -> str:
 def generate_datacite_xml(record: Dict[str, Any]) -> str:
     """Generate DataCite XML for DOI registration."""
     meta = parse_metadata(record)
-    doi = record.get("doi") or "10.xxxxx/pending"
+    doi = _record_doi(record)
 
     root = ET.Element("resource")
     root.set("xmlns", "http://datacite.org/schema/kernel-4")
@@ -203,9 +217,10 @@ def generate_datacite_xml(record: Dict[str, Any]) -> str:
     root.set("xsi:schemaLocation", "http://datacite.org/schema/kernel-4 http://schema.datacite.org/meta/kernel-4/metadata.xsd")
 
     # Identifier
-    identifier = ET.SubElement(root, "identifier")
-    identifier.set("identifierType", "DOI")
-    identifier.text = doi
+    if doi:
+        identifier = ET.SubElement(root, "identifier")
+        identifier.set("identifierType", "DOI")
+        identifier.text = doi
 
     # Creators
     creators_elem = ET.SubElement(root, "creators")
